@@ -3838,7 +3838,7 @@ def _generate_hitter_ai_report(bdf, batter_name, all_data, season_filter):
 # ──────────────────────────────────────────────
 def page_hitters_lab(data):
     st.markdown('<div class="section-header">Hitters Lab</div>', unsafe_allow_html=True)
-    st.caption("Advanced hitting analytics: batted ball quality, plate discipline, zone coverage, approach optimization, and AI scouting")
+
 
     dav_hitting = filter_davidson(data, role="batter")
     if dav_hitting.empty:
