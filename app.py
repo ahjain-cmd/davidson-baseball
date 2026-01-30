@@ -5330,7 +5330,12 @@ def page_game_planning(data):
             # ── 3-Pitch Sequences ──
             with tab_3p:
                 section_header("3-Pitch Sequence Analysis")
-                st.caption("Pitch 1 → Pitch 2 → Pitch 3: What happens on the 3rd pitch?")
+                st.markdown("""
+                Analyzes every **3-consecutive-pitch window** within each at-bat.
+                For each sequence (e.g. Slider → Fastball → Changeup), the table shows how effective the **3rd pitch** is —
+                whiff rate, called-strike rate, contact quality — and how outcomes change depending on whether the **1st pitch was a strike or ball**.
+                Use this to find which 3-pitch patterns generate the most swings-and-misses or weak contact.
+                """)
 
                 seq3 = sdf2.dropna(subset=["Pitch2", "Pitch3", "Call3"]).copy()
                 if len(seq3) < 20:
