@@ -1967,7 +1967,7 @@ def page_team(data):
     st.markdown("""
     <style>
     .wildcats-hero {
-        background: #111;
+        background: #111 !important;
         border-radius: 12px;
         padding: 28px 32px 22px 32px;
         margin-bottom: 18px;
@@ -1975,15 +1975,15 @@ def page_team(data):
         text-align: center;
     }
     .wildcats-hero .subtitle {
-        font-size: 11px; letter-spacing: 5px; color: #ccc;
+        font-size: 11px; letter-spacing: 5px; color: #ccc !important;
         font-weight: 500; margin-bottom: 2px;
     }
     .wildcats-hero .title {
-        font-size: 38px; font-weight: 900; color: #cc0000;
+        font-size: 38px; font-weight: 900; color: #cc0000 !important;
         letter-spacing: 3px; line-height: 1.15;
     }
     .wildcats-hero .tagline {
-        font-size: 10px; letter-spacing: 3px; color: #999;
+        font-size: 10px; letter-spacing: 3px; color: #999 !important;
         margin-top: 4px;
     }
     .stat-card {
@@ -2013,9 +2013,8 @@ def page_team(data):
     c_logo, c_title, c_photo = st.columns([1, 3, 1.5])
     with c_logo:
         if os.path.exists(_logo_path):
-            st.markdown('<div class="logo-center">', unsafe_allow_html=True)
+            st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
             st.image(_logo_path, width=110)
-            st.markdown('</div>', unsafe_allow_html=True)
     with c_title:
         st.markdown("""
         <div class="wildcats-hero">
@@ -7142,9 +7141,9 @@ def main():
             st.image(_logo_sidebar, use_container_width=True)
     st.sidebar.markdown(
         '<div style="text-align:center;padding:2px 0 5px 0;">'
-        '<div style="font-size:20px;font-weight:800;font-family:Inter,sans-serif;letter-spacing:1px;color:#cc0000 !important;">W.I.L.D.C.A.T.S.</div>'
-        '<div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#999 !important;'
-        'font-family:Inter,sans-serif;">Davidson Baseball Analytics</div>'
+        '<span style="display:block;font-size:20px;font-weight:800;font-family:Inter,sans-serif;letter-spacing:1px;color:#cc0000 !important;">W.I.L.D.C.A.T.S.</span>'
+        '<span style="display:block;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#ccc !important;'
+        'font-family:Inter,sans-serif;">Davidson Baseball Analytics</span>'
         '</div>',
         unsafe_allow_html=True,
     )
