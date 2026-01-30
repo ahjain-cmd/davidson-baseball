@@ -4688,6 +4688,7 @@ def page_game_planning(data):
     if len(pdf) < 30:
         st.warning("Not enough pitches (need 30+).")
         return
+    pdf = filter_minor_pitches(pdf)
 
     jersey = JERSEY.get(pitcher, "")
     pos = POSITION.get(pitcher, "")
