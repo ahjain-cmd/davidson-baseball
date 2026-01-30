@@ -4158,7 +4158,9 @@ def page_hitters_lab(data):
                                             line=dict(width=0.5, color="white")),
                                 hovertemplate="EV: %{marker.color:.1f}<extra></extra>"))
                             add_strike_zone(fig_pt)
-                            fig_pt.update_layout(**CHART_LAYOUT, height=300,
+                            fig_pt.update_layout(plot_bgcolor="white", paper_bgcolor="white",
+                                                  font=dict(size=11, color="#1a1a2e", family="Inter, Arial, sans-serif"),
+                                                  height=300,
                                                   xaxis=dict(range=[-2.5, 2.5], showticklabels=False),
                                                   yaxis=dict(range=[0, 5], showticklabels=False),
                                                   margin=dict(l=5, r=5, t=5, b=5))
