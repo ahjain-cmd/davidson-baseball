@@ -4698,12 +4698,20 @@ def page_game_planning(data):
                   f"{pos} | Throws: {t_str} | Davidson Wildcats",
                   f"{len(pdf):,} pitches | Seasons: {', '.join(str(int(s)) for s in sorted(pdf['Season'].dropna().unique()))}")
 
-    tab_seq, tab_count, tab_effv = st.tabs(["Pitch Sequencing", "Count Leverage", "Effective Velocity"])
+    tab_seq, tab_count, tab_effv = st.tabs(["Sequencing + Tunnels", "Count Leverage", "Effective Velocity"])
 
-    # ─── Tab: Pitch Sequencing Engine ──────────────
+    # ─── Tab: Pitch Sequencing + Tunnel Engine ──────────────
     with tab_seq:
-        section_header("Pitch Sequencing Engine")
-        st.caption("What happens after pitch A → when you throw pitch B?")
+        section_header("Pitch Sequencing + Tunnel Engine")
+        st.caption("Sequence effectiveness combined with physics-based tunnel analysis — the best sequences are ones that tunnel well AND produce whiffs")
+
+        # Compute tunnel scores for this pitcher
+        tunnel_df = _compute_tunnel_score(pdf)
+        tunnel_lookup = {}
+        if not tunnel_df.empty:
+            for _, tr in tunnel_df.iterrows():
+                tunnel_lookup[(tr["Pitch A"], tr["Pitch B"])] = tr
+                tunnel_lookup[(tr["Pitch B"], tr["Pitch A"])] = tr
 
         # Build sequence pairs
         sort_cols = [c for c in ["GameID", "PAofInning", "Inning", "PitchNo"] if c in pdf.columns]
@@ -4715,9 +4723,28 @@ def page_game_planning(data):
             sdf["NextEV"] = sdf.groupby(pa_cols)["ExitSpeed"].shift(-1)
             pairs = sdf.dropna(subset=["NextPitch"])
 
-            # Sequence matrix
-            section_header("Sequence Effectiveness Matrix")
-            st.caption("Rows = current pitch, Columns = next pitch. Cell = Whiff% on the next pitch.")
+            # ── Tunnel Overview Cards ──
+            if not tunnel_df.empty:
+                section_header("Tunnel Grades for Pitch Pairs")
+                st.caption("Physics-based: pitches that look identical at the commit point (~167ms before plate) but diverge at the plate")
+                grade_colors = {"A": "#2ca02c", "B": "#7cb342", "C": "#f7c631", "D": "#fe6100", "F": "#d22d49"}
+                tun_cols = st.columns(min(len(tunnel_df), 5))
+                for idx, (_, tr) in enumerate(tunnel_df.head(5).iterrows()):
+                    gc = grade_colors.get(tr["Grade"], "#aaa")
+                    with tun_cols[idx % len(tun_cols)]:
+                        st.markdown(
+                            f'<div style="text-align:center;padding:10px;background:white;border-radius:8px;'
+                            f'border:2px solid {gc};margin:2px;">'
+                            f'<div style="font-size:28px;font-weight:900;color:{gc} !important;">{tr["Grade"]}</div>'
+                            f'<div style="font-size:12px;font-weight:700;color:#1a1a2e !important;">'
+                            f'{tr["Pitch A"]} ↔ {tr["Pitch B"]}</div>'
+                            f'<div style="font-size:11px;color:#666 !important;">Score: {tr["Tunnel Score"]:.0f} | '
+                            f'Commit: {tr["Commit Sep (in)"]:.1f}″ | Plate: {tr["Plate Sep (in)"]:.1f}″</div>'
+                            f'</div>', unsafe_allow_html=True)
+
+            # ── Combined Matrix: Whiff% with Tunnel Grade overlay ──
+            section_header("Sequence + Tunnel Matrix")
+            st.caption("Cells = Whiff% on next pitch. Border color = tunnel grade for that pair. Best combos have high whiff% AND strong tunnel.")
 
             pitch_types = sorted(pdf["TaggedPitchType"].dropna().unique())
             matrix_data = np.full((len(pitch_types), len(pitch_types)), np.nan)
@@ -4734,7 +4761,9 @@ def page_game_planning(data):
                     if len(sw) > 0:
                         whiff_pct = len(wh) / len(sw) * 100
                         matrix_data[i, j] = whiff_pct
-                        matrix_annot[i][j] = f"{whiff_pct:.0f}%\n({len(pair)})"
+                        tn = tunnel_lookup.get((pt_a, pt_b))
+                        grade_tag = f" [{tn['Grade']}]" if tn is not None else ""
+                        matrix_annot[i][j] = f"{whiff_pct:.0f}%{grade_tag}\n({len(pair)})"
                     matrix_n[i][j] = len(pair)
 
             fig_matrix = go.Figure(data=go.Heatmap(
@@ -4749,7 +4778,7 @@ def page_game_planning(data):
                                       xaxis=dict(side="bottom"))
             st.plotly_chart(fig_matrix, use_container_width=True)
 
-            # Best / worst sequences
+            # ── Build full sequence rows with tunnel data ──
             seq_rows = []
             for i, pt_a in enumerate(pitch_types):
                 for j, pt_b in enumerate(pitch_types):
@@ -4761,57 +4790,208 @@ def page_game_planning(data):
                     ct = pair[pair["NextCall"].isin(CONTACT_CALLS)]
                     bt = pair[pair["NextCall"] == "InPlay"].dropna(subset=["NextEV"])
                     csw = pair[pair["NextCall"].isin(["StrikeSwinging", "StrikeCalled"])]
+                    whiff_pct = len(wh) / max(len(sw), 1) * 100 if len(sw) > 0 else 0
+                    tn = tunnel_lookup.get((pt_a, pt_b))
+                    tunnel_score = tn["Tunnel Score"] if tn is not None else np.nan
+                    tunnel_grade = tn["Grade"] if tn is not None else "-"
+                    # Composite: 50% whiff normalized (0-50% → 0-100) + 30% tunnel score + 20% inverse EV
+                    whiff_norm = min(whiff_pct / 40.0, 1.0) * 100
+                    tunnel_norm = tunnel_score if not pd.isna(tunnel_score) else 50
+                    ev_val = bt["NextEV"].mean() if len(bt) > 0 else np.nan
+                    ev_norm = max(0, min(100, (105 - ev_val) / 25 * 100)) if not pd.isna(ev_val) else 50
+                    combo_score = whiff_norm * 0.50 + tunnel_norm * 0.30 + ev_norm * 0.20
                     seq_rows.append({
                         "Sequence": f"{pt_a} → {pt_b}",
                         "Count": len(pair),
                         "Swing%": len(sw) / len(pair) * 100,
-                        "Whiff%": len(wh) / max(len(sw), 1) * 100 if len(sw) > 0 else 0,
+                        "Whiff%": whiff_pct,
                         "CSW%": len(csw) / len(pair) * 100,
-                        "Avg EV": bt["NextEV"].mean() if len(bt) > 0 else np.nan,
-                        "_whiff": len(wh) / max(len(sw), 1) * 100 if len(sw) > 0 else 0,
+                        "Avg EV": ev_val,
+                        "Tunnel": tunnel_grade,
+                        "Tunnel Score": tunnel_score,
+                        "Combo Score": round(combo_score, 1),
+                        "_whiff": whiff_pct,
+                        "_combo": combo_score,
                     })
 
             if seq_rows:
-                seq_df = pd.DataFrame(seq_rows).sort_values("_whiff", ascending=False)
+                seq_df = pd.DataFrame(seq_rows).sort_values("_combo", ascending=False)
+
+                # ── Top Sequences: Combined Ranking ──
+                section_header("Top Sequences — Tunnel-Adjusted Ranking")
+                st.caption("Combo Score = 50% Whiff Rate + 30% Tunnel Score + 20% Low Contact Quality. Best sequences deceive AND dominate.")
+                top_combos = seq_df.head(5)
+                for _, row in top_combos.iterrows():
+                    gc = grade_colors.get(row["Tunnel"], "#aaa") if not tunnel_df.empty else "#888"
+                    ev_str = f" | EV: {row['Avg EV']:.1f}" if not pd.isna(row["Avg EV"]) else ""
+                    st.markdown(
+                        f'<div style="padding:10px 14px;background:white;border-radius:8px;margin:4px 0;'
+                        f'border-left:5px solid {gc};border:1px solid #eee;">'
+                        f'<span style="font-size:15px;font-weight:800;color:#1a1a2e !important;">{row["Sequence"]}</span>'
+                        f'<span style="display:inline-block;margin-left:8px;padding:2px 8px;border-radius:4px;'
+                        f'background:{gc};color:white !important;font-size:11px;font-weight:700;">'
+                        f'Tunnel: {row["Tunnel"]}</span>'
+                        f'<span style="float:right;font-size:14px;font-weight:900;color:#1a1a2e !important;">'
+                        f'Combo: {row["Combo Score"]:.0f}</span>'
+                        f'<div style="font-size:12px;color:#555 !important;margin-top:2px;">'
+                        f'Whiff: {row["Whiff%"]:.0f}% | CSW: {row["CSW%"]:.0f}%{ev_str} | n={row["Count"]}</div>'
+                        f'</div>', unsafe_allow_html=True)
+
+                st.markdown("")
+
+                # ── Side by side: best whiff vs worst damage ──
                 col_best, col_worst = st.columns(2)
                 with col_best:
-                    section_header("Best Sequences (Highest Whiff%)")
-                    top5 = seq_df.head(5)
+                    section_header("Highest Whiff% Sequences")
+                    top5 = seq_df.sort_values("_whiff", ascending=False).head(5)
                     for _, row in top5.iterrows():
+                        tn_tag = f' <span style="color:{grade_colors.get(row["Tunnel"], "#aaa")} !important;">[{row["Tunnel"]}]</span>' if row["Tunnel"] != "-" else ""
+                        ev_str = f"EV: {row['Avg EV']:.1f} | " if not pd.isna(row["Avg EV"]) else ""
                         st.markdown(
                             f'<div style="padding:8px 12px;background:white;border-radius:6px;margin:4px 0;'
                             f'border-left:4px solid #2ca02c;border:1px solid #eee;">'
-                            f'<span style="font-size:14px;font-weight:700;color:#1a1a2e !important;">{row["Sequence"]}</span>'
+                            f'<span style="font-size:14px;font-weight:700;color:#1a1a2e !important;">{row["Sequence"]}{tn_tag}</span>'
                             f'<span style="float:right;font-size:13px;font-weight:800;color:#2ca02c !important;">'
                             f'Whiff: {row["Whiff%"]:.0f}% | CSW: {row["CSW%"]:.0f}%</span>'
-                            f'<div style="font-size:11px;color:#666 !important;">n={row["Count"]} | '
-                            f'Avg EV: {row["Avg EV"]:.1f}</div></div>' if not pd.isna(row["Avg EV"]) else
-                            f'<div style="padding:8px 12px;background:white;border-radius:6px;margin:4px 0;'
-                            f'border-left:4px solid #2ca02c;border:1px solid #eee;">'
-                            f'<span style="font-size:14px;font-weight:700;color:#1a1a2e !important;">{row["Sequence"]}</span>'
-                            f'<span style="float:right;font-size:13px;font-weight:800;color:#2ca02c !important;">'
-                            f'Whiff: {row["Whiff%"]:.0f}% | CSW: {row["CSW%"]:.0f}%</span>'
-                            f'<div style="font-size:11px;color:#666 !important;">n={row["Count"]}</div></div>',
+                            f'<div style="font-size:11px;color:#666 !important;">{ev_str}n={row["Count"]}</div></div>',
                             unsafe_allow_html=True)
                 with col_worst:
-                    section_header("Worst Sequences (Most Damage)")
+                    section_header("Most Damage Sequences")
                     bot5 = seq_df.dropna(subset=["Avg EV"]).sort_values("Avg EV", ascending=False).head(5)
                     for _, row in bot5.iterrows():
+                        tn_tag = f' <span style="color:{grade_colors.get(row["Tunnel"], "#aaa")} !important;">[{row["Tunnel"]}]</span>' if row["Tunnel"] != "-" else ""
                         st.markdown(
                             f'<div style="padding:8px 12px;background:white;border-radius:6px;margin:4px 0;'
                             f'border-left:4px solid #d22d49;border:1px solid #eee;">'
-                            f'<span style="font-size:14px;font-weight:700;color:#1a1a2e !important;">{row["Sequence"]}</span>'
+                            f'<span style="font-size:14px;font-weight:700;color:#1a1a2e !important;">{row["Sequence"]}{tn_tag}</span>'
                             f'<span style="float:right;font-size:13px;font-weight:800;color:#d22d49 !important;">'
                             f'EV: {row["Avg EV"]:.1f} | Whiff: {row["Whiff%"]:.0f}%</span>'
                             f'<div style="font-size:11px;color:#666 !important;">n={row["Count"]}</div></div>',
                             unsafe_allow_html=True)
 
-                # Full table
-                with st.expander("Full Sequence Table"):
-                    disp_seq = seq_df.drop(columns=["_whiff"]).copy()
+                # ── Tunnel Divergence Visualization for Top Pair ──
+                if not tunnel_df.empty:
+                    section_header("Commit-Point Divergence — Top Tunnel Pair")
+                    best_tn = tunnel_df.iloc[0]
+                    st.caption(f"How {best_tn['Pitch A']} and {best_tn['Pitch B']} separate in flight — "
+                               f"closer at commit = more deception, farther at plate = more movement")
+
+                    # Recompute flight paths for visualization
+                    req_cols = ["TaggedPitchType", "RelHeight", "RelSide", "PlateLocHeight", "PlateLocSide",
+                                "InducedVertBreak", "HorzBreak", "RelSpeed"]
+                    if all(c in pdf.columns for c in req_cols):
+                        agg_cols_viz = {
+                            "rel_h": ("RelHeight", "mean"), "rel_s": ("RelSide", "mean"),
+                            "loc_h": ("PlateLocHeight", "mean"), "loc_s": ("PlateLocSide", "mean"),
+                            "ivb": ("InducedVertBreak", "mean"), "hb": ("HorzBreak", "mean"),
+                            "velo": ("RelSpeed", "mean"),
+                        }
+                        if "Extension" in pdf.columns:
+                            agg_cols_viz["ext"] = ("Extension", "mean")
+                        agg_viz = pdf.groupby("TaggedPitchType").agg(**agg_cols_viz).dropna(subset=["rel_h", "velo"])
+                        if "ext" not in agg_viz.columns:
+                            agg_viz["ext"] = 6.0
+
+                        pt_a_name, pt_b_name = best_tn["Pitch A"], best_tn["Pitch B"]
+                        if pt_a_name in agg_viz.index and pt_b_name in agg_viz.index:
+                            MOUND_DIST = 60.5
+                            def _viz_flight(row, frac):
+                                ext = row.ext if not pd.isna(row.ext) else 6.0
+                                actual_dist = MOUND_DIST - ext
+                                velo_fps = row.velo * 5280 / 3600
+                                t_total = actual_dist / velo_fps
+                                t = frac * t_total
+                                gravity_drop = 0.5 * 32.17 * t**2
+                                ivb_lift = (row.ivb / 12.0) * frac**2
+                                y = row.rel_h + (row.loc_h - row.rel_h) * frac - gravity_drop + ivb_lift
+                                y_at_1 = row.rel_h + (row.loc_h - row.rel_h) - 0.5 * 32.17 * t_total**2 + (row.ivb / 12.0)
+                                y += (row.loc_h - y_at_1) * frac
+                                hb_curve = (row.hb / 12.0) * frac**2
+                                x = row.rel_s + (row.loc_s - row.rel_s) * frac + hb_curve
+                                x_at_1 = row.rel_s + (row.loc_s - row.rel_s) + (row.hb / 12.0)
+                                x += (row.loc_s - x_at_1) * frac
+                                return x, y
+
+                            checkpoints = [0, 0.2, 0.4, 0.6, 0.8, 1.0]
+                            labels = ["Release", "20%", "40%", "Commit (60%)", "80%", "Plate"]
+                            a_row = agg_viz.loc[pt_a_name]
+                            b_row = agg_viz.loc[pt_b_name]
+                            seps = []
+                            a_xs, a_ys, b_xs, b_ys = [], [], [], []
+                            for frac in checkpoints:
+                                ax, ay = _viz_flight(a_row, frac)
+                                bx, by = _viz_flight(b_row, frac)
+                                a_xs.append(ax); a_ys.append(ay)
+                                b_xs.append(bx); b_ys.append(by)
+                                sep_in = np.sqrt((ay - by)**2 + (ax - bx)**2) * 12
+                                seps.append(sep_in)
+
+                            col_div, col_path = st.columns(2)
+                            with col_div:
+                                # Divergence line chart
+                                fig_div = go.Figure()
+                                fig_div.add_trace(go.Scatter(
+                                    x=labels, y=seps, mode="lines+markers+text",
+                                    text=[f"{s:.1f}″" for s in seps],
+                                    textposition="top center",
+                                    line=dict(color="#1a1a2e", width=3),
+                                    marker=dict(size=10, color=[grade_colors.get(best_tn["Grade"], "#aaa")] * len(seps)),
+                                    showlegend=False,
+                                ))
+                                fig_div.add_hline(y=6, line_dash="dash", line_color="#d22d49",
+                                                  annotation_text="6″ — Hard to distinguish", annotation_position="top left")
+                                fig_div.update_layout(**CHART_LAYOUT, height=350,
+                                                      yaxis_title="Separation (inches)",
+                                                      title=f"{pt_a_name} vs {pt_b_name} — Flight Separation")
+                                st.plotly_chart(fig_div, use_container_width=True)
+
+                            with col_path:
+                                # Side view: both trajectories
+                                fig_path = go.Figure()
+                                clr_a = PITCH_COLORS.get(pt_a_name, "#1f77b4")
+                                clr_b = PITCH_COLORS.get(pt_b_name, "#ff7f0e")
+                                dist_pts = [0, 0.2 * (MOUND_DIST - 6), 0.4 * (MOUND_DIST - 6),
+                                            0.6 * (MOUND_DIST - 6), 0.8 * (MOUND_DIST - 6),
+                                            MOUND_DIST - 6]
+                                fig_path.add_trace(go.Scatter(
+                                    x=dist_pts, y=a_ys, mode="lines+markers",
+                                    name=pt_a_name, line=dict(color=clr_a, width=3),
+                                    marker=dict(size=8),
+                                ))
+                                fig_path.add_trace(go.Scatter(
+                                    x=dist_pts, y=b_ys, mode="lines+markers",
+                                    name=pt_b_name, line=dict(color=clr_b, width=3),
+                                    marker=dict(size=8),
+                                ))
+                                # Commit point marker
+                                fig_path.add_vline(x=0.6 * (MOUND_DIST - 6), line_dash="dot", line_color="#888",
+                                                   annotation_text="Commit", annotation_position="top")
+                                fig_path.update_layout(**CHART_LAYOUT, height=350,
+                                                        xaxis_title="Distance from release (ft)",
+                                                        yaxis_title="Height (ft)",
+                                                        title="Side View — Pitch Trajectories",
+                                                        yaxis=dict(range=[0, 7]),
+                                                        legend=dict(x=0.02, y=0.98))
+                                st.plotly_chart(fig_path, use_container_width=True)
+
+                            # Diagnosis from tunnel data
+                            st.markdown(
+                                f'<div style="padding:12px 16px;background:#f0f7ff;border-radius:8px;border:1px solid #cce0ff;">'
+                                f'<span style="font-size:13px;font-weight:700;color:#1a1a2e !important;">Tunnel Analysis:</span> '
+                                f'<span style="font-size:12px;color:#333 !important;">{best_tn["Diagnosis"]}</span>'
+                                f'<br><span style="font-size:12px;font-weight:600;color:#1565c0 !important;">Action: </span>'
+                                f'<span style="font-size:12px;color:#333 !important;">{best_tn["Fix"]}</span></div>',
+                                unsafe_allow_html=True)
+
+                # Full table with tunnel data
+                with st.expander("Full Sequence + Tunnel Table"):
+                    disp_seq = seq_df.drop(columns=["_whiff", "_combo"]).copy()
                     for c in ["Swing%", "Whiff%", "CSW%"]:
                         disp_seq[c] = disp_seq[c].map(lambda x: f"{x:.1f}%")
                     disp_seq["Avg EV"] = disp_seq["Avg EV"].map(lambda x: f"{x:.1f}" if not pd.isna(x) else "-")
+                    disp_seq["Tunnel Score"] = disp_seq["Tunnel Score"].map(lambda x: f"{x:.0f}" if not pd.isna(x) else "-")
+                    disp_seq["Combo Score"] = disp_seq["Combo Score"].map(lambda x: f"{x:.0f}")
+                    disp_seq = disp_seq.sort_values("Combo Score", ascending=False)
                     st.dataframe(disp_seq.set_index("Sequence"), use_container_width=True)
         else:
             st.info("Not enough columns to determine pitch sequences.")
