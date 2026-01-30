@@ -1967,15 +1967,15 @@ def page_team(data):
     st.markdown("""
     <style>
     .wildcats-hero {
-        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #1a1a2e 100%);
+        background: #111;
         border-radius: 12px;
         padding: 28px 32px 22px 32px;
         margin-bottom: 18px;
-        border: 1px solid #333;
+        border: 2px solid #cc0000;
         text-align: center;
     }
     .wildcats-hero .subtitle {
-        font-size: 11px; letter-spacing: 5px; color: #aaa;
+        font-size: 11px; letter-spacing: 5px; color: #ccc;
         font-weight: 500; margin-bottom: 2px;
     }
     .wildcats-hero .title {
@@ -1983,28 +1983,29 @@ def page_team(data):
         letter-spacing: 3px; line-height: 1.15;
     }
     .wildcats-hero .tagline {
-        font-size: 10px; letter-spacing: 3px; color: #777;
+        font-size: 10px; letter-spacing: 3px; color: #999;
         margin-top: 4px;
     }
     .stat-card {
-        background: #16213e; border-radius: 8px; padding: 12px 8px;
-        text-align: center; border: 1px solid #2a2a4a;
+        background: #111; border-radius: 8px; padding: 12px 8px;
+        text-align: center; border: 1px solid #333;
     }
     .stat-card .val { font-size: 22px; font-weight: 800; color: #fff; }
-    .stat-card .lbl { font-size: 10px; color: #999; letter-spacing: 1px; text-transform: uppercase; }
+    .stat-card .lbl { font-size: 10px; color: #bbb; letter-spacing: 1px; text-transform: uppercase; }
     .leader-card {
-        background: #16213e; border-radius: 8px; padding: 12px 16px;
-        margin: 6px 0; border-left: 4px solid #cc0000; border: 1px solid #2a2a4a;
+        background: #111; border-radius: 8px; padding: 12px 16px;
+        margin: 6px 0; border: 1px solid #333;
         border-left: 4px solid #cc0000;
     }
-    .leader-card .cat { font-size: 11px; color: #888; letter-spacing: 1px; text-transform: uppercase; }
+    .leader-card .cat { font-size: 11px; color: #bbb; letter-spacing: 1px; text-transform: uppercase; }
     .leader-card .name { font-size: 17px; font-weight: 700; color: #fff; }
     .leader-card .stat { font-size: 14px; font-weight: 600; color: #cc0000; }
-    .leader-card .note { font-size: 11px; color: #777; }
-    .leader-card-alt { border-left-color: #e8a838 !important; }
-    .leader-card-alt .stat { color: #e8a838 !important; }
-    .leader-card-grn { border-left-color: #3ddc84 !important; }
-    .leader-card-grn .stat { color: #3ddc84 !important; }
+    .leader-card .note { font-size: 11px; color: #999; }
+    .leader-card-alt { border-left-color: #fff !important; }
+    .leader-card-alt .stat { color: #fff !important; }
+    .leader-card-grn { border-left-color: #cc0000 !important; }
+    .leader-card-grn .stat { color: #cc0000 !important; }
+    .logo-center { display: flex; align-items: center; justify-content: center; height: 100%; min-height: 140px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -2012,7 +2013,9 @@ def page_team(data):
     c_logo, c_title, c_photo = st.columns([1, 3, 1.5])
     with c_logo:
         if os.path.exists(_logo_path):
+            st.markdown('<div class="logo-center">', unsafe_allow_html=True)
             st.image(_logo_path, width=110)
+            st.markdown('</div>', unsafe_allow_html=True)
     with c_title:
         st.markdown("""
         <div class="wildcats-hero">
@@ -2023,7 +2026,7 @@ def page_team(data):
         """, unsafe_allow_html=True)
     with c_photo:
         if os.path.exists(_celeb_path):
-            st.image(_celeb_path, use_container_width=True, caption="2025 Regional Champions")
+            st.image(_celeb_path, use_container_width=True)
 
     # ── Data setup ──
     dav_pitching = data[data["PitcherTeam"] == DAVIDSON_TEAM_ID]
