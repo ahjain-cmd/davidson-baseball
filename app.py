@@ -3882,9 +3882,9 @@ def page_hitters_lab(data):
         return
     pr = player_row.iloc[0]
 
-    tab_quality, tab_discipline, tab_coverage, tab_approach, tab_pitch_type, tab_spray, tab_ai = st.tabs([
+    tab_quality, tab_discipline, tab_coverage, tab_approach, tab_pitch_type, tab_spray, tab_swing, tab_ai = st.tabs([
         "Batted Ball Quality", "Plate Discipline", "Zone Coverage",
-        "Approach Analysis", "Pitch Type Performance", "Spray Lab", "AI Report"
+        "Approach Analysis", "Pitch Type Performance", "Spray Lab", "Swing Path", "AI Report"
     ])
 
     # ─── Tab 1: Batted Ball Quality ─────────────────────
@@ -3995,10 +3995,10 @@ def page_hitters_lab(data):
         with col_disc_grid:
             section_header("Swing Rate by Zone")
             grid_swing, annot_swing = _create_zone_grid_data(bdf, metric="swing_rate")
-            h_labels = ["Far Inside", "Inside", "Middle", "Outside", "Far Outside"]
-            v_labels = ["High+", "High", "Mid", "Low", "Low+"]
+            h_labels = ["Far In", "Inside", "Middle", "Outside", "Far Out"]
+            v_labels = ["Low+", "Low", "Mid", "High", "High+"]
             fig_grid = go.Figure(data=go.Heatmap(
-                z=grid_swing[::-1], text=annot_swing[::-1], texttemplate="%{text}",
+                z=grid_swing, text=annot_swing, texttemplate="%{text}",
                 x=h_labels, y=v_labels,
                 colorscale=[[0, "#1f77b4"], [0.5, "#f7f7f7"], [1, "#d22d49"]],
                 zmin=0, zmax=100, showscale=True,
@@ -4014,7 +4014,7 @@ def page_hitters_lab(data):
             section_header("Avg EV by Zone")
             grid_ev, annot_ev = _create_zone_grid_data(bdf, metric="avg_ev")
             fig_ev_grid = go.Figure(data=go.Heatmap(
-                z=grid_ev[::-1], text=annot_ev[::-1], texttemplate="%{text}",
+                z=grid_ev, text=annot_ev, texttemplate="%{text}",
                 x=h_labels, y=v_labels,
                 colorscale=[[0, "#1f77b4"], [0.5, "#f7f7f7"], [1, "#d22d49"]],
                 zmin=60, zmax=100, showscale=True,
@@ -4124,9 +4124,9 @@ def page_hitters_lab(data):
                 section_header("Whiff Zone Map")
                 grid_whiff, annot_whiff = _create_zone_grid_data(bdf, metric="whiff_rate")
                 h_lbl = ["Far In", "Inside", "Middle", "Outside", "Far Out"]
-                v_lbl = ["High+", "High", "Mid", "Low", "Low+"]
+                v_lbl = ["Low+", "Low", "Mid", "High", "High+"]
                 fig_wz = go.Figure(data=go.Heatmap(
-                    z=grid_whiff[::-1], text=annot_whiff[::-1], texttemplate="%{text}",
+                    z=grid_whiff, text=annot_whiff, texttemplate="%{text}",
                     x=h_lbl, y=v_lbl,
                     colorscale=[[0, "#2ca02c"], [0.5, "#f7f7f7"], [1, "#d22d49"]],
                     zmin=0, zmax=60, showscale=True,
@@ -4472,7 +4472,300 @@ def page_hitters_lab(data):
                                           xaxis_title="Ground Ball %", xaxis=dict(range=[0, 100]))
                     st.plotly_chart(fig_gb, use_container_width=True)
 
-    # ─── Tab 7: AI Scouting Report ─────────────────────
+    # ─── Tab 7: Swing Path Analysis ─────────────────────
+    with tab_swing:
+        section_header("Swing Path Analysis")
+        st.caption("Reconstructed swing plane from contact quality, whiff locations, and approach angles — no bat sensor needed")
+
+        swings = bdf[bdf["PitchCall"].isin(SWING_CALLS)].copy()
+        whiffs = bdf[bdf["PitchCall"] == "StrikeSwinging"].copy()
+        contacts = bdf[bdf["PitchCall"].isin(CONTACT_CALLS)].copy()
+        inplay = bdf[(bdf["PitchCall"] == "InPlay")].copy()
+        inplay_ev = inplay.dropna(subset=["ExitSpeed", "PlateLocSide", "PlateLocHeight"])
+
+        if len(swings) < 10:
+            st.info("Not enough swing data (need 10+ swings).")
+        else:
+            # ── Attack Angle Estimation ──
+            section_header("Estimated Attack Angle")
+            st.caption("Attack Angle ≈ Launch Angle − Vertical Approach Angle. Positive = upward bat path (lift). Negative = downward (chop).")
+
+            inplay_aa = inplay.dropna(subset=["Angle", "VertApprAngle"]).copy()
+            if len(inplay_aa) >= 5:
+                inplay_aa["AttackAngle"] = inplay_aa["Angle"] - inplay_aa["VertApprAngle"]
+
+                avg_aa = inplay_aa["AttackAngle"].mean()
+                avg_la = inplay_aa["Angle"].mean()
+                avg_vaa = inplay_aa["VertApprAngle"].mean()
+
+                # Classify swing type
+                if avg_aa > 15:
+                    swing_type = "Steep Uppercut"
+                    swing_color = "#d22d49"
+                    swing_desc = "Extreme loft — high HR potential but vulnerable to high fastballs and off-speed below the zone"
+                elif avg_aa > 8:
+                    swing_type = "Lift-Oriented"
+                    swing_color = "#fe6100"
+                    swing_desc = "Modern swing path — good launch angle generation, solid barrel coverage of the zone"
+                elif avg_aa > 2:
+                    swing_type = "Slight Uppercut"
+                    swing_color = "#f7c631"
+                    swing_desc = "Balanced path with mild lift — matches average pitch plane well"
+                elif avg_aa > -3:
+                    swing_type = "Level"
+                    swing_color = "#2ca02c"
+                    swing_desc = "Flat bat path through the zone — contact-oriented, line drive approach"
+                else:
+                    swing_type = "Downward / Chopper"
+                    swing_color = "#1f77b4"
+                    swing_desc = "Downward swing plane — generates ground balls, limits hard fly ball contact"
+
+                col_aa1, col_aa2, col_aa3 = st.columns(3)
+                with col_aa1:
+                    st.metric("Avg Attack Angle", f"{avg_aa:+.1f}°")
+                with col_aa2:
+                    st.metric("Avg Launch Angle", f"{avg_la:+.1f}°")
+                with col_aa3:
+                    st.metric("Avg Pitch VAA", f"{avg_vaa:.1f}°")
+
+                st.markdown(
+                    f'<div style="padding:12px 16px;background:white;border-radius:8px;border-left:5px solid {swing_color};'
+                    f'border:1px solid #eee;margin:8px 0;">'
+                    f'<span style="font-size:18px;font-weight:900;color:{swing_color} !important;">{swing_type}</span>'
+                    f'<div style="font-size:13px;color:#333 !important;margin-top:4px;">{swing_desc}</div>'
+                    f'</div>', unsafe_allow_html=True)
+
+                # Attack angle by pitch type
+                section_header("Attack Angle by Pitch Type")
+                aa_pt_rows = []
+                for pt in sorted(inplay_aa["TaggedPitchType"].dropna().unique()):
+                    pt_df = inplay_aa[inplay_aa["TaggedPitchType"] == pt]
+                    if len(pt_df) < 3:
+                        continue
+                    aa_pt_rows.append({
+                        "Pitch Type": pt,
+                        "n": len(pt_df),
+                        "Avg Attack Angle": f"{pt_df['AttackAngle'].mean():+.1f}°",
+                        "Avg LA": f"{pt_df['Angle'].mean():+.1f}°",
+                        "Avg VAA": f"{pt_df['VertApprAngle'].mean():.1f}°",
+                        "Avg EV": f"{pt_df['ExitSpeed'].mean():.1f}" if pt_df["ExitSpeed"].notna().any() else "-",
+                    })
+                if aa_pt_rows:
+                    st.dataframe(pd.DataFrame(aa_pt_rows).set_index("Pitch Type"), use_container_width=True)
+
+                # Attack angle distribution
+                col_aa_dist, col_aa_height = st.columns(2)
+                with col_aa_dist:
+                    section_header("Attack Angle Distribution")
+                    fig_aa = go.Figure()
+                    fig_aa.add_trace(go.Histogram(
+                        x=inplay_aa["AttackAngle"], nbinsx=25,
+                        marker_color=swing_color, opacity=0.8, name="Attack Angle",
+                    ))
+                    fig_aa.add_vline(x=0, line_dash="dash", line_color="#888",
+                                     annotation_text="Level swing", annotation_position="top")
+                    fig_aa.add_vline(x=avg_aa, line_dash="solid", line_color="#1a1a2e",
+                                     annotation_text=f"Avg: {avg_aa:+.1f}°", annotation_position="top right")
+                    fig_aa.update_layout(**CHART_LAYOUT, height=300, xaxis_title="Attack Angle (°)",
+                                          yaxis_title="Count", showlegend=False)
+                    st.plotly_chart(fig_aa, use_container_width=True)
+
+                with col_aa_height:
+                    section_header("Attack Angle by Pitch Height")
+                    st.caption("Does the bat path adjust to pitch location?")
+                    fig_aa_h = go.Figure()
+                    fig_aa_h.add_trace(go.Scatter(
+                        x=inplay_aa["PlateLocHeight"], y=inplay_aa["AttackAngle"],
+                        mode="markers",
+                        marker=dict(size=6, color=inplay_aa["ExitSpeed"].fillna(80),
+                                    colorscale=[[0, "#1f77b4"], [0.5, "#f7f7f7"], [1, "#d22d49"]],
+                                    cmin=60, cmax=105, showscale=True,
+                                    colorbar=dict(title="EV", len=0.6),
+                                    line=dict(width=0.3, color="white")),
+                        hovertemplate="Height: %{x:.2f}ft<br>Attack: %{y:.1f}°<br>EV: %{marker.color:.1f}<extra></extra>",
+                    ))
+                    # Trend line
+                    if len(inplay_aa) >= 10:
+                        z = np.polyfit(inplay_aa["PlateLocHeight"].values, inplay_aa["AttackAngle"].values, 1)
+                        x_line = np.linspace(inplay_aa["PlateLocHeight"].min(), inplay_aa["PlateLocHeight"].max(), 50)
+                        fig_aa_h.add_trace(go.Scatter(x=x_line, y=np.polyval(z, x_line), mode="lines",
+                                                       line=dict(color="#1a1a2e", width=2, dash="dash"),
+                                                       name="Trend", showlegend=False))
+                    fig_aa_h.add_hline(y=0, line_dash="dot", line_color="#ccc")
+                    fig_aa_h.update_layout(**CHART_LAYOUT, height=300,
+                                            xaxis_title="Pitch Height (ft)", yaxis_title="Attack Angle (°)",
+                                            showlegend=False)
+                    st.plotly_chart(fig_aa_h, use_container_width=True)
+
+            else:
+                st.info("Not enough InPlay pitches with launch angle + VAA data.")
+
+            # ── Barrel Zone Map ──
+            section_header("Barrel Path — EV Heatmap")
+            st.caption("Where the barrel sweeps through the zone. High EV = barrel center. Low EV = handle/cap contact.")
+            if len(inplay_ev) >= 10:
+                col_barrel, col_whiff_path = st.columns(2)
+                with col_barrel:
+                    # EV heatmap using contour
+                    fig_barrel = go.Figure()
+                    fig_barrel.add_trace(go.Histogram2dContour(
+                        x=inplay_ev["PlateLocSide"], y=inplay_ev["PlateLocHeight"],
+                        z=inplay_ev["ExitSpeed"],
+                        histfunc="avg",
+                        colorscale=[[0, "#1f77b4"], [0.3, "#f7f7f7"], [0.6, "#fe6100"], [1, "#d22d49"]],
+                        contours=dict(showlabels=False),
+                        ncontoursx=12, ncontoursy=12,
+                        showscale=True,
+                        colorbar=dict(title="Avg EV", len=0.8),
+                    ))
+                    # Overlay barrel contacts as stars
+                    barrels = inplay_ev[(inplay_ev["ExitSpeed"] >= 98) & (inplay_ev["Angle"].between(8, 32))] if "Angle" in inplay_ev.columns else pd.DataFrame()
+                    if len(barrels) > 0:
+                        fig_barrel.add_trace(go.Scatter(
+                            x=barrels["PlateLocSide"], y=barrels["PlateLocHeight"],
+                            mode="markers", marker=dict(size=10, color="#d22d49", symbol="star",
+                                                         line=dict(width=1, color="white")),
+                            name="Barrels", showlegend=True,
+                        ))
+                    add_strike_zone(fig_barrel)
+                    fig_barrel.update_layout(**CHART_LAYOUT, height=420,
+                                              xaxis=dict(range=[-2.5, 2.5], title="Horizontal"),
+                                              yaxis=dict(range=[0, 5], title="Vertical"),
+                                              title="Contact Quality (EV) by Location",
+                                              legend=dict(orientation="h", y=1.08, x=0.5, xanchor="center"))
+                    st.plotly_chart(fig_barrel, use_container_width=True)
+
+                with col_whiff_path:
+                    # Whiff density — where the bat ISN'T
+                    section_header("Swing & Miss Zones")
+                    st.caption("Where the bat path has holes — these are the gaps in the swing plane")
+                    wh_loc = whiffs.dropna(subset=["PlateLocSide", "PlateLocHeight"])
+                    if len(wh_loc) >= 5:
+                        fig_whiff = go.Figure()
+                        fig_whiff.add_trace(go.Histogram2dContour(
+                            x=wh_loc["PlateLocSide"], y=wh_loc["PlateLocHeight"],
+                            colorscale=[[0, "rgba(255,255,255,0)"], [0.3, "rgba(210,45,73,0.2)"],
+                                        [0.7, "rgba(210,45,73,0.5)"], [1, "rgba(210,45,73,0.9)"]],
+                            contours=dict(showlabels=False),
+                            ncontoursx=10, ncontoursy=10,
+                            showscale=True,
+                            colorbar=dict(title="Whiff Density", len=0.8),
+                        ))
+                        # Overlay contact locations faintly
+                        con_loc = contacts.dropna(subset=["PlateLocSide", "PlateLocHeight"])
+                        if len(con_loc) > 0:
+                            fig_whiff.add_trace(go.Scatter(
+                                x=con_loc["PlateLocSide"], y=con_loc["PlateLocHeight"],
+                                mode="markers", marker=dict(size=3, color="#2ca02c", opacity=0.3),
+                                name="Contact", showlegend=True,
+                            ))
+                        add_strike_zone(fig_whiff)
+                        fig_whiff.update_layout(**CHART_LAYOUT, height=420,
+                                                  xaxis=dict(range=[-2.5, 2.5], title="Horizontal"),
+                                                  yaxis=dict(range=[0, 5], title="Vertical"),
+                                                  title="Whiff Density vs Contact Points",
+                                                  legend=dict(orientation="h", y=1.08, x=0.5, xanchor="center"))
+                        st.plotly_chart(fig_whiff, use_container_width=True)
+                    else:
+                        st.info("Not enough whiff location data.")
+
+            # ── Swing Decisions Map ──
+            section_header("Swing Decision Map")
+            st.caption("Where this batter swings vs takes — reveals their actual decision zone vs the rule-book strike zone")
+            sw_loc = swings.dropna(subset=["PlateLocSide", "PlateLocHeight"])
+            takes = bdf[bdf["PitchCall"].isin(["BallCalled", "StrikeCalled"])].dropna(
+                subset=["PlateLocSide", "PlateLocHeight"])
+            if len(sw_loc) >= 10 and len(takes) >= 10:
+                col_dec1, col_dec2 = st.columns(2)
+                with col_dec1:
+                    fig_dec = go.Figure()
+                    fig_dec.add_trace(go.Scatter(
+                        x=sw_loc["PlateLocSide"], y=sw_loc["PlateLocHeight"],
+                        mode="markers", marker=dict(size=5, color="#d22d49", opacity=0.5),
+                        name="Swing",
+                    ))
+                    fig_dec.add_trace(go.Scatter(
+                        x=takes["PlateLocSide"], y=takes["PlateLocHeight"],
+                        mode="markers", marker=dict(size=4, color="#2ca02c", opacity=0.3),
+                        name="Take",
+                    ))
+                    add_strike_zone(fig_dec)
+                    fig_dec.update_layout(**CHART_LAYOUT, height=400,
+                                           xaxis=dict(range=[-2.5, 2.5], title="Horizontal"),
+                                           yaxis=dict(range=[0, 5], title="Vertical"),
+                                           title="All Pitches: Swing vs Take",
+                                           legend=dict(orientation="h", y=1.08, x=0.5, xanchor="center"))
+                    st.plotly_chart(fig_dec, use_container_width=True)
+
+                with col_dec2:
+                    # Swing decision contour — probability of swinging at each location
+                    section_header("Swing Probability Contour")
+                    all_with_loc = bdf.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
+                    all_with_loc["is_swing"] = all_with_loc["PitchCall"].isin(SWING_CALLS).astype(int)
+                    fig_prob = go.Figure()
+                    fig_prob.add_trace(go.Histogram2dContour(
+                        x=all_with_loc["PlateLocSide"], y=all_with_loc["PlateLocHeight"],
+                        z=all_with_loc["is_swing"],
+                        histfunc="avg",
+                        colorscale=[[0, "#2ca02c"], [0.5, "#f7f7f7"], [1, "#d22d49"]],
+                        contours=dict(showlabels=True, labelfont=dict(size=10)),
+                        ncontoursx=12, ncontoursy=12,
+                        showscale=True,
+                        colorbar=dict(title="P(Swing)", len=0.8),
+                    ))
+                    add_strike_zone(fig_prob)
+                    fig_prob.update_layout(**CHART_LAYOUT, height=400,
+                                            xaxis=dict(range=[-2.5, 2.5], title="Horizontal"),
+                                            yaxis=dict(range=[0, 5], title="Vertical"),
+                                            title="Swing Probability by Location")
+                    st.plotly_chart(fig_prob, use_container_width=True)
+
+            # ── Swing Path Summary Card ──
+            section_header("Swing Path Profile")
+            swing_n = len(swings)
+            whiff_n = len(whiffs)
+            contact_n = len(contacts)
+            inplay_n = len(inplay_ev)
+
+            # Compute zone-level stats for the profile
+            high_swings = swings[swings["PlateLocHeight"] > 2.83] if "PlateLocHeight" in swings.columns else pd.DataFrame()
+            low_swings = swings[swings["PlateLocHeight"] < 2.17] if "PlateLocHeight" in swings.columns else pd.DataFrame()
+            high_whiff_rate = len(high_swings[high_swings["PitchCall"] == "StrikeSwinging"]) / max(len(high_swings), 1) * 100
+            low_whiff_rate = len(low_swings[low_swings["PitchCall"] == "StrikeSwinging"]) / max(len(low_swings), 1) * 100
+
+            high_ev = inplay_ev[inplay_ev["PlateLocHeight"] > 2.83]["ExitSpeed"].mean() if len(inplay_ev[inplay_ev["PlateLocHeight"] > 2.83]) >= 3 else np.nan
+            low_ev = inplay_ev[inplay_ev["PlateLocHeight"] < 2.17]["ExitSpeed"].mean() if len(inplay_ev[inplay_ev["PlateLocHeight"] < 2.17]) >= 3 else np.nan
+
+            insights = []
+            if not pd.isna(high_ev) and not pd.isna(low_ev):
+                if high_ev > low_ev + 3:
+                    insights.append(f"Barrel is **higher in the zone** — {high_ev:.1f} mph (high) vs {low_ev:.1f} mph (low). Swing plane sits up.")
+                elif low_ev > high_ev + 3:
+                    insights.append(f"Barrel is **lower in the zone** — {low_ev:.1f} mph (low) vs {high_ev:.1f} mph (high). Swing plane sits down.")
+                else:
+                    insights.append(f"Even EV top-to-bottom ({high_ev:.1f} high vs {low_ev:.1f} low) — good vertical barrel coverage.")
+
+            if high_whiff_rate > low_whiff_rate + 10:
+                insights.append(f"More vulnerable **up** ({high_whiff_rate:.0f}% whiff high vs {low_whiff_rate:.0f}% low) — bat path may sit below the high fastball.")
+            elif low_whiff_rate > high_whiff_rate + 10:
+                insights.append(f"More vulnerable **down** ({low_whiff_rate:.0f}% whiff low vs {high_whiff_rate:.0f}% high) — bat path may sweep over breaking balls.")
+
+            # Inside vs outside
+            inside_ev = inplay_ev[inplay_ev["PlateLocSide"] < -0.28]["ExitSpeed"].mean() if batter_side == "Right" else inplay_ev[inplay_ev["PlateLocSide"] > 0.28]["ExitSpeed"].mean()
+            outside_ev = inplay_ev[inplay_ev["PlateLocSide"] > 0.28]["ExitSpeed"].mean() if batter_side == "Right" else inplay_ev[inplay_ev["PlateLocSide"] < -0.28]["ExitSpeed"].mean()
+            if not pd.isna(inside_ev) and not pd.isna(outside_ev):
+                if inside_ev > outside_ev + 3:
+                    insights.append(f"Stronger **inside** ({inside_ev:.1f} mph) than outside ({outside_ev:.1f} mph) — barrel reaches inside pitch well.")
+                elif outside_ev > inside_ev + 3:
+                    insights.append(f"Stronger **outside** ({outside_ev:.1f} mph) than inside ({inside_ev:.1f} mph) — extends barrel well to the outer half.")
+
+            if insights:
+                for insight in insights:
+                    st.markdown(f"- {insight}")
+            else:
+                st.info("Not enough zone-split data to generate swing path insights.")
+
+    # ─── Tab 8: AI Scouting Report ─────────────────────
     with tab_ai:
         section_header("AI Hitting Report")
         report = _generate_hitter_ai_report(bdf, batter, data, season_filter)
