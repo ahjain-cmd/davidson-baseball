@@ -2172,6 +2172,1448 @@ def page_scouting(data):
 
 
 # ──────────────────────────────────────────────
+# PITCH DESIGN LAB
+# ──────────────────────────────────────────────
+
+def _compute_stuff_plus(data):
+    """Compute Stuff+ for every pitch in the database.
+    Model: z-score composite of velo, IVB, HB, extension, VAA, spin rate
+    relative to same pitch type. 100 = average, each 10 = 1 stdev better."""
+    required = ["RelSpeed", "InducedVertBreak", "HorzBreak", "Extension",
+                 "VertApprAngle", "SpinRate", "TaggedPitchType"]
+    df = data.dropna(subset=["RelSpeed", "TaggedPitchType"]).copy()
+    if df.empty:
+        return df
+
+    # Pitch-type-specific weights: what matters most for each archetype
+    weights = {
+        "Fastball":  {"RelSpeed": 2.0, "InducedVertBreak": 2.0, "HorzBreak": 0.5, "Extension": 1.0, "VertApprAngle": 1.5, "SpinRate": 0.8},
+        "Sinker":    {"RelSpeed": 1.5, "InducedVertBreak": -1.0, "HorzBreak": 1.5, "Extension": 1.0, "VertApprAngle": -1.0, "SpinRate": 0.5},
+        "Cutter":    {"RelSpeed": 1.5, "InducedVertBreak": 0.5, "HorzBreak": 1.5, "Extension": 1.0, "VertApprAngle": 1.0, "SpinRate": 0.8},
+        "Slider":    {"RelSpeed": 0.8, "InducedVertBreak": -1.5, "HorzBreak": 2.0, "Extension": 0.8, "VertApprAngle": -1.0, "SpinRate": 1.0},
+        "Curveball": {"RelSpeed": -0.5, "InducedVertBreak": -2.0, "HorzBreak": 1.5, "Extension": 0.5, "VertApprAngle": -1.5, "SpinRate": 1.5},
+        "Changeup":  {"RelSpeed": -1.5, "InducedVertBreak": -1.0, "HorzBreak": 1.5, "Extension": 1.0, "VertApprAngle": -1.0, "SpinRate": -0.5},
+        "Sweeper":   {"RelSpeed": 0.5, "InducedVertBreak": -1.5, "HorzBreak": 2.5, "Extension": 0.8, "VertApprAngle": -1.0, "SpinRate": 1.0},
+        "Splitter":  {"RelSpeed": 1.0, "InducedVertBreak": -2.0, "HorzBreak": 0.5, "Extension": 1.2, "VertApprAngle": -1.5, "SpinRate": 0.3},
+        "Knuckle Curve": {"RelSpeed": -0.5, "InducedVertBreak": -2.0, "HorzBreak": 1.5, "Extension": 0.5, "VertApprAngle": -1.5, "SpinRate": 1.5},
+    }
+    default_w = {"RelSpeed": 1.0, "InducedVertBreak": 1.0, "HorzBreak": 1.0, "Extension": 1.0, "VertApprAngle": 1.0, "SpinRate": 1.0}
+
+    stuff_scores = []
+    for pt, grp in df.groupby("TaggedPitchType"):
+        w = weights.get(pt, default_w)
+        z_total = pd.Series(0.0, index=grp.index)
+        w_total = 0.0
+        for col, weight in w.items():
+            if col not in grp.columns:
+                continue
+            vals = grp[col].astype(float)
+            mu = vals.mean()
+            sigma = vals.std()
+            if sigma == 0 or pd.isna(sigma):
+                continue
+            z = (vals - mu) / sigma
+            z_total += z * weight
+            w_total += abs(weight)
+        if w_total > 0:
+            z_total = z_total / w_total
+        grp = grp.copy()
+        grp["StuffPlus"] = 100 + z_total * 10
+        stuff_scores.append(grp)
+
+    if stuff_scores:
+        return pd.concat(stuff_scores, ignore_index=True)
+    return df
+
+
+def _compute_tunnel_score(pdf):
+    """Compute tunnel scores using physics-based commit-point analysis.
+    True tunneling = pitches are indistinguishable at the hitter's commit point
+    (~167ms before plate) but diverge significantly by the time they arrive.
+    Score uses actual flight path modeling, not just averages."""
+    req = ["TaggedPitchType", "RelHeight", "RelSide", "PlateLocHeight", "PlateLocSide",
+           "InducedVertBreak", "HorzBreak", "RelSpeed"]
+    if not all(c in pdf.columns for c in req):
+        return pd.DataFrame()
+
+    pitch_types = pdf["TaggedPitchType"].unique()
+    if len(pitch_types) < 2:
+        return pd.DataFrame()
+
+    MOUND_DIST = 60.5
+
+    # Compute per-pitch-type averages
+    agg_cols = {
+        "rel_h": ("RelHeight", "mean"), "rel_s": ("RelSide", "mean"),
+        "rel_h_std": ("RelHeight", "std"), "rel_s_std": ("RelSide", "std"),
+        "loc_h": ("PlateLocHeight", "mean"), "loc_s": ("PlateLocSide", "mean"),
+        "ivb": ("InducedVertBreak", "mean"), "hb": ("HorzBreak", "mean"),
+        "velo": ("RelSpeed", "mean"), "count": ("RelSpeed", "count"),
+    }
+    if "Extension" in pdf.columns:
+        agg_cols["ext"] = ("Extension", "mean")
+    agg = pdf.groupby("TaggedPitchType").agg(**agg_cols).dropna(subset=["rel_h", "velo"])
+    if "ext" not in agg.columns:
+        agg["ext"] = 6.0
+
+    def _flight_pos_at_frac(row, frac):
+        """Get (x, y) position at a fraction of flight path (0=release, 1=plate)."""
+        ext = row.ext if not pd.isna(row.ext) else 6.0
+        actual_dist = MOUND_DIST - ext
+        velo_fps = row.velo * 5280 / 3600
+        t_total = actual_dist / velo_fps
+        t = frac * t_total
+        gravity_drop = 0.5 * 32.17 * t**2
+        ivb_lift = (row.ivb / 12.0) * frac**2
+        y = row.rel_h + (row.loc_h - row.rel_h) * frac - gravity_drop + ivb_lift
+        y_correction = row.loc_h - (row.rel_h + (row.loc_h - row.rel_h) - 0.5 * 32.17 * t_total**2 + (row.ivb / 12.0))
+        y = row.rel_h + (row.loc_h - row.rel_h) * frac - gravity_drop + ivb_lift
+        # Apply endpoint correction
+        y_at_1 = row.rel_h + (row.loc_h - row.rel_h) - 0.5 * 32.17 * t_total**2 + (row.ivb / 12.0)
+        y += (row.loc_h - y_at_1) * frac
+
+        hb_curve = (row.hb / 12.0) * frac**2
+        x = row.rel_s + (row.loc_s - row.rel_s) * frac + hb_curve
+        x_at_1 = row.rel_s + (row.loc_s - row.rel_s) + (row.hb / 12.0)
+        x += (row.loc_s - x_at_1) * frac
+        return x, y
+
+    rows = []
+    types = list(agg.index)
+    for i in range(len(types)):
+        for j in range(i + 1, len(types)):
+            a, b = agg.loc[types[i]], agg.loc[types[j]]
+
+            # Release point separation (inches)
+            rel_sep = np.sqrt((a.rel_h - b.rel_h)**2 + (a.rel_s - b.rel_s)**2) * 12
+
+            # Commit point separation (at 60% of flight ≈ hitter's decision point)
+            ax, ay = _flight_pos_at_frac(a, 0.6)
+            bx, by = _flight_pos_at_frac(b, 0.6)
+            commit_sep = np.sqrt((ay - by)**2 + (ax - bx)**2) * 12  # inches
+
+            # Plate separation
+            plate_sep = np.sqrt((a.loc_h - b.loc_h)**2 + (a.loc_s - b.loc_s)**2) * 12
+
+            # Movement divergence
+            move_div = np.sqrt((a.ivb - b.ivb)**2 + (a.hb - b.hb)**2)
+            velo_gap = abs(a.velo - b.velo)
+
+            # TUNNEL SCORE: low commit-point separation + high plate separation = good
+            # Penalize: high release separation, high commit separation
+            # Reward: high plate separation, high movement divergence
+            if commit_sep < 0.1:
+                commit_sep = 0.1  # avoid division by zero
+            divergence_ratio = plate_sep / commit_sep  # higher = better tunnel
+
+            # Release consistency penalty (inconsistent release = hitter can read it early)
+            rel_penalty = max(0, 1 - rel_sep / 6.0)  # >6 inches apart at release = 0
+
+            # Commit-point deception (under 2" = elite, over 6" = bad)
+            commit_deception = max(0, 1 - commit_sep / 8.0)
+
+            # Plate divergence reward (more is better, but cap at reasonable range)
+            plate_reward = min(plate_sep / 12.0, 1.5)  # normalize: 12" = 1.0, cap at 1.5
+
+            # Combined tunnel score (0-100 scale with real differentiation)
+            raw = (commit_deception * 0.45 + rel_penalty * 0.20 +
+                   min(divergence_ratio / 3.0, 1.0) * 0.20 +
+                   min(plate_reward, 1.0) * 0.15) * 100
+            tunnel = round(min(raw, 100), 1)
+
+            # Letter grade with strict thresholds
+            if tunnel >= 75:
+                grade = "A"
+            elif tunnel >= 60:
+                grade = "B"
+            elif tunnel >= 45:
+                grade = "C"
+            elif tunnel >= 30:
+                grade = "D"
+            else:
+                grade = "F"
+
+            # Actionable diagnosis
+            issues = []
+            fixes = []
+            if rel_sep > 4:
+                issues.append(f"release points {rel_sep:.0f}\" apart")
+                fixes.append("Work on consistent arm slot across both pitches")
+            if commit_sep > 5:
+                issues.append(f"{commit_sep:.0f}\" apart at commit point")
+                if velo_gap > 8:
+                    fixes.append(f"Reduce {velo_gap:.0f} mph velo gap — pitches separate too early")
+                else:
+                    fixes.append("Pitch trajectories diverge too early — hitter can read them")
+            if plate_sep < 6:
+                issues.append(f"only {plate_sep:.0f}\" apart at plate")
+                fixes.append("Pitches end up too close together — need more movement contrast")
+            if move_div < 5:
+                issues.append(f"only {move_div:.0f}\" movement difference")
+                fixes.append("Increase break differential — pitches move too similarly")
+            if not issues:
+                if tunnel >= 60:
+                    diagnosis = "Strong tunnel — pitches look identical until it's too late"
+                else:
+                    diagnosis = "Decent pairing but room to tighten"
+            else:
+                diagnosis = "; ".join(issues)
+
+            rows.append({
+                "Pitch A": types[i], "Pitch B": types[j],
+                "Grade": grade, "Tunnel Score": tunnel,
+                "Release Sep (in)": round(rel_sep, 1),
+                "Commit Sep (in)": round(commit_sep, 1),
+                "Plate Sep (in)": round(plate_sep, 1),
+                "Velo Gap (mph)": round(velo_gap, 1),
+                "Move Diff (in)": round(move_div, 1),
+                "Diagnosis": diagnosis,
+                "Fix": "; ".join(fixes) if fixes else "No changes needed",
+            })
+    return pd.DataFrame(rows).sort_values("Tunnel Score", ascending=False).reset_index(drop=True)
+
+
+def _compute_pitch_pair_results(pdf, data):
+    """Compute effectiveness when pitch B follows pitch A in an at-bat."""
+    if pdf.empty:
+        return pd.DataFrame()
+
+    # Sort by game, at-bat, pitch number
+    sort_cols = [c for c in ["GameID", "Batter", "Inning", "PAofInning", "PitchNo"] if c in pdf.columns]
+    if len(sort_cols) < 2:
+        return pd.DataFrame()
+
+    pdf_s = pdf.sort_values(sort_cols).copy()
+    pdf_s["PrevPitch"] = pdf_s.groupby(["GameID", "Batter", "PAofInning"])["TaggedPitchType"].shift(1)
+    pdf_s = pdf_s.dropna(subset=["PrevPitch"])
+
+    is_whiff = pdf_s["PitchCall"] == "StrikeSwinging"
+    is_swing = pdf_s["PitchCall"].isin(SWING_CALLS)
+    is_csw = pdf_s["PitchCall"].isin(["StrikeCalled", "StrikeSwinging"])
+
+    rows = []
+    for (prev, curr), grp in pdf_s.groupby(["PrevPitch", "TaggedPitchType"]):
+        n = len(grp)
+        if n < 5:
+            continue
+        swings = grp[is_swing.reindex(grp.index, fill_value=False)]
+        whiffs = grp[is_whiff.reindex(grp.index, fill_value=False)]
+        csws = grp[is_csw.reindex(grp.index, fill_value=False)]
+        batted = grp[(grp["PitchCall"] == "InPlay") & grp["ExitSpeed"].notna()]
+        rows.append({
+            "Setup Pitch": prev, "Follow Pitch": curr, "Count": n,
+            "Whiff%": round(len(whiffs) / max(len(swings), 1) * 100, 1),
+            "CSW%": round(len(csws) / n * 100, 1),
+            "Avg EV": round(batted["ExitSpeed"].mean(), 1) if len(batted) > 0 else np.nan,
+            "Chase%": round(
+                len(grp[(~((grp["PlateLocSide"].abs() <= 0.83) & grp["PlateLocHeight"].between(1.5, 3.5))) &
+                         grp["PitchCall"].isin(SWING_CALLS)]) /
+                max(len(grp[~((grp["PlateLocSide"].abs() <= 0.83) & grp["PlateLocHeight"].between(1.5, 3.5))]), 1) * 100, 1),
+        })
+    return pd.DataFrame(rows).sort_values("Whiff%", ascending=False).reset_index(drop=True)
+
+
+def _generate_ai_report(pdf, pitcher_name, stuff_df, tunnel_df, pair_df, all_data):
+    """Generate comprehensive AI scouting report with actionable recommendations."""
+    lines = []
+    lines.append(f"## AI Pitch Design Report: {display_name(pitcher_name)}")
+    lines.append("")
+
+    if stuff_df.empty:
+        lines.append("*Insufficient data to generate report.*")
+        return "\n".join(lines)
+
+    # ── Arsenal Overview ──
+    arsenal = stuff_df.groupby("TaggedPitchType").agg(
+        count=("StuffPlus", "count"),
+        stuff_avg=("StuffPlus", "mean"),
+        stuff_std=("StuffPlus", "std"),
+        velo=("RelSpeed", "mean"),
+        ivb=("InducedVertBreak", "mean"),
+        hb=("HorzBreak", "mean"),
+        spin=("SpinRate", "mean"),
+        vaa=("VertApprAngle", "mean"),
+        ext=("Extension", "mean"),
+    ).sort_values("count", ascending=False)
+
+    best_pitch = arsenal["stuff_avg"].idxmax()
+    best_stuff = arsenal.loc[best_pitch, "stuff_avg"]
+    worst_pitch = arsenal["stuff_avg"].idxmin()
+    worst_stuff = arsenal.loc[worst_pitch, "stuff_avg"]
+
+    lines.append("### Arsenal Grades")
+    lines.append("")
+    for pt in arsenal.index:
+        s = arsenal.loc[pt, "stuff_avg"]
+        grade = "Elite" if s >= 120 else "Plus" if s >= 110 else "Above Avg" if s >= 105 else "Average" if s >= 95 else "Below Avg" if s >= 90 else "Poor"
+        emoji = "A+" if s >= 120 else "A" if s >= 110 else "B+" if s >= 105 else "B" if s >= 95 else "C" if s >= 90 else "D"
+        count = int(arsenal.loc[pt, "count"])
+        velo = arsenal.loc[pt, "velo"]
+        lines.append(f"- **{pt}** ({emoji}): Stuff+ {s:.0f} | {velo:.1f} mph | {count} pitches | *{grade}*")
+    lines.append("")
+
+    # ── Strengths ──
+    lines.append("### Key Strengths")
+    lines.append("")
+    if best_stuff >= 105:
+        lines.append(f"- **{best_pitch}** is the clear weapon pitch (Stuff+ {best_stuff:.0f})")
+        bv = arsenal.loc[best_pitch, "velo"]
+        bi = arsenal.loc[best_pitch, "ivb"]
+        bh = arsenal.loc[best_pitch, "hb"]
+        if best_pitch in ("Fastball", "Sinker", "Cutter"):
+            if bi > 15:
+                lines.append(f"  - Elite vertical carry ({bi:.1f} in IVB) — hitters swing under this pitch")
+            if bv >= 90:
+                lines.append(f"  - Plus velocity ({bv:.1f} mph) creates swing-and-miss at the top of the zone")
+        else:
+            if abs(bh) > 10:
+                lines.append(f"  - Elite horizontal movement ({bh:.1f} in) generates chase swings")
+            if bi < -5:
+                lines.append(f"  - Strong vertical drop ({bi:.1f} in IVB) plays well below the zone")
+
+    # Release consistency
+    rel_std_h = pdf.groupby("TaggedPitchType")["RelHeight"].std().mean()
+    rel_std_s = pdf.groupby("TaggedPitchType")["RelSide"].std().mean()
+    avg_rel_std = (rel_std_h + rel_std_s) / 2 if not pd.isna(rel_std_h) else 1.0
+    if avg_rel_std < 0.15:
+        lines.append("- **Excellent release point consistency** — all pitches look the same out of the hand")
+    elif avg_rel_std < 0.25:
+        lines.append("- **Good release point consistency** — pitches tunnel well at the release point")
+
+    # Velo spread
+    fb_types = [t for t in arsenal.index if t in ("Fastball", "Sinker", "Cutter")]
+    off_types = [t for t in arsenal.index if t in ("Changeup", "Splitter")]
+    if fb_types and off_types:
+        fb_velo = arsenal.loc[fb_types, "velo"].max()
+        off_velo = arsenal.loc[off_types, "velo"].min()
+        velo_diff = fb_velo - off_velo
+        if velo_diff >= 10:
+            lines.append(f"- **Strong velocity differential** ({velo_diff:.0f} mph gap) — effective speed change disrupts timing")
+
+    lines.append("")
+
+    # ── Areas for Improvement ──
+    lines.append("### Areas for Improvement")
+    lines.append("")
+    if worst_stuff < 95:
+        lines.append(f"- **{worst_pitch}** needs work (Stuff+ {worst_stuff:.0f})")
+        wv = arsenal.loc[worst_pitch, "velo"]
+        wi = arsenal.loc[worst_pitch, "ivb"]
+        wh = arsenal.loc[worst_pitch, "hb"]
+        if worst_pitch in ("Slider", "Sweeper", "Curveball", "Knuckle Curve") and abs(wh) < 5:
+            lines.append(f"  - *Recommendation*: Increase horizontal break — currently only {wh:.1f} in, aim for 8+ in")
+        if worst_pitch == "Changeup" and fb_types:
+            fb_v = arsenal.loc[fb_types[0], "velo"]
+            diff = fb_v - wv
+            if diff < 8:
+                lines.append(f"  - *Recommendation*: Increase velo separation — only {diff:.1f} mph gap (want 8-12 mph)")
+        if worst_pitch in ("Fastball", "Sinker") and wi < 12:
+            lines.append(f"  - *Recommendation*: Increase vertical carry — {wi:.1f} in IVB is below average (target 14+)")
+
+    if avg_rel_std >= 0.25:
+        lines.append(f"- **Release point inconsistency** (avg deviation: {avg_rel_std:.2f} ft) — work on repeating delivery")
+
+    # Check for missing pitch types
+    has_fb = any(t in arsenal.index for t in ("Fastball", "Sinker"))
+    has_breaking = any(t in arsenal.index for t in ("Slider", "Curveball", "Sweeper", "Knuckle Curve"))
+    has_offspeed = any(t in arsenal.index for t in ("Changeup", "Splitter"))
+    if has_fb and not has_offspeed:
+        lines.append("- **No offspeed pitch in arsenal** — adding a changeup would give hitters a different look and speed change")
+    if has_fb and not has_breaking:
+        lines.append("- **No breaking ball in arsenal** — adding a slider or curve would attack a different plane of movement")
+
+    lines.append("")
+
+    # ── Tunnel Recommendations ──
+    if not tunnel_df.empty:
+        lines.append("### Pitch Tunnel Analysis")
+        lines.append("")
+        for _, r in tunnel_df.iterrows():
+            grade = r.get("Grade", "?")
+            score = r.get("Tunnel Score", 0)
+            diag = r.get("Diagnosis", "")
+            fix = r.get("Fix", "")
+            lines.append(f"- **{r['Pitch A']} + {r['Pitch B']}** — Grade: **{grade}** (Score: {score})")
+            lines.append(f"  - Release: {r['Release Sep (in)']}\" | Commit: {r['Commit Sep (in)']}\" | Plate: {r['Plate Sep (in)']}\"")
+            lines.append(f"  - *{diag}*")
+            if fix and fix != "No changes needed":
+                lines.append(f"  - **Action:** {fix}")
+        lines.append("")
+
+    # ── Sequencing Recommendations ──
+    if not pair_df.empty:
+        lines.append("### Optimal Pitch Sequences")
+        lines.append("")
+        top_seq = pair_df[pair_df["Count"] >= 8].head(5)
+        for _, r in top_seq.iterrows():
+            ev_str = f" | EV Against: {r['Avg EV']:.1f}" if not pd.isna(r.get("Avg EV")) else ""
+            lines.append(f"- **{r['Setup Pitch']} --> {r['Follow Pitch']}**: {r['Whiff%']:.0f}% Whiff, {r['CSW%']:.0f}% CSW{ev_str}")
+        if len(top_seq) > 0:
+            best_seq = top_seq.iloc[0]
+            lines.append(f"\n  *Top combo*: Use **{best_seq['Setup Pitch']}** to set up **{best_seq['Follow Pitch']}** for swing-and-miss")
+        lines.append("")
+
+    # ── Location Strategy ──
+    lines.append("### Location Strategy Insights")
+    lines.append("")
+    for pt in arsenal.index:
+        pt_data = stuff_df[stuff_df["TaggedPitchType"] == pt]
+        whiff_data = pt_data[pt_data["PitchCall"] == "StrikeSwinging"]
+        if len(whiff_data) > 5:
+            avg_h = whiff_data["PlateLocHeight"].mean()
+            avg_s = whiff_data["PlateLocSide"].mean()
+            zone_desc = []
+            if avg_h > 3.0:
+                zone_desc.append("elevated")
+            elif avg_h < 2.0:
+                zone_desc.append("low")
+            if avg_s > 0.3:
+                zone_desc.append("arm-side")
+            elif avg_s < -0.3:
+                zone_desc.append("glove-side")
+            if zone_desc:
+                loc_str = " and ".join(zone_desc)
+                lines.append(f"- **{pt}** gets most whiffs when located **{loc_str}** (avg whiff loc: {avg_h:.1f}H, {avg_s:.1f}S)")
+    lines.append("")
+
+    # ── Overall Game Plan ──
+    lines.append("### Recommended Game Plan")
+    lines.append("")
+    primary = best_pitch
+    # Find best secondary
+    secondary = None
+    if not tunnel_df.empty:
+        top_t = tunnel_df.iloc[0]
+        secondary = top_t["Pitch B"] if top_t["Pitch A"] == primary else top_t["Pitch A"]
+    elif len(arsenal) > 1:
+        secondary = arsenal.index[1] if arsenal.index[0] == primary else arsenal.index[0]
+
+    lines.append(f"1. **Establish {primary}** early in counts to set the tone")
+    if secondary:
+        lines.append(f"2. **Tunnel {primary} into {secondary}** — these two pitches pair well together")
+        if not pair_df.empty:
+            best_2strike = pair_df[(pair_df["Whiff%"] >= 25) & (pair_df["Count"] >= 5)]
+            if len(best_2strike) > 0:
+                bs = best_2strike.iloc[0]
+                lines.append(f"3. **Putaway combo**: {bs['Setup Pitch']} --> {bs['Follow Pitch']} ({bs['Whiff%']:.0f}% whiff rate)")
+    if has_offspeed:
+        lines.append(f"4. **Use offspeed** to disrupt timing — especially effective after back-to-back fastballs")
+    lines.append("")
+
+    # ── Comparison to Database ──
+    lines.append("### Database Percentile Rankings")
+    lines.append("")
+    # Compare this pitcher's stuff+ to all pitchers
+    all_pitchers = all_data[all_data["PitcherTeam"] == DAVIDSON_TEAM_ID].copy()
+    if "StuffPlus" not in all_pitchers.columns:
+        all_pitchers_stuff = _compute_stuff_plus(all_pitchers)
+    else:
+        all_pitchers_stuff = all_pitchers
+    if not all_pitchers_stuff.empty:
+        for pt in arsenal.index:
+            my_stuff = arsenal.loc[pt, "stuff_avg"]
+            all_pt = all_pitchers_stuff[all_pitchers_stuff["TaggedPitchType"] == pt]["StuffPlus"]
+            if len(all_pt) > 10:
+                pctl = percentileofscore(all_pt.dropna(), my_stuff, kind="rank")
+                lines.append(f"- **{pt}**: {pctl:.0f}th percentile Stuff+ among all Davidson pitchers")
+
+    return "\n".join(lines)
+
+
+def page_pitch_design_lab(data):
+    st.markdown('<div class="section-header">Pitch Design Lab</div>', unsafe_allow_html=True)
+    st.caption("AI-powered pitch analysis: Stuff+ grades, tunnel scores, sequencing optimization, and actionable recommendations")
+
+    dav_pitching = filter_davidson(data, role="pitcher")
+    if dav_pitching.empty:
+        st.warning("No Davidson pitching data found.")
+        return
+
+    pitchers = sorted(dav_pitching["Pitcher"].unique())
+    col_sel1, col_sel2 = st.columns([2, 1])
+    with col_sel1:
+        pitcher = st.selectbox("Select Pitcher", pitchers,
+                               format_func=display_name, key="pdl_pitcher")
+    with col_sel2:
+        seasons = sorted(dav_pitching["Season"].dropna().unique())
+        season_filter = st.multiselect("Season", seasons, default=seasons, key="pdl_season")
+
+    pdf = dav_pitching[dav_pitching["Pitcher"] == pitcher].copy()
+    if season_filter:
+        pdf = pdf[pdf["Season"].isin(season_filter)]
+    pdf = filter_minor_pitches(pdf)
+
+    if len(pdf) < 20:
+        st.warning("Not enough pitches (need 20+) to analyze.")
+        return
+
+    jersey = JERSEY.get(pitcher, "")
+    pos = POSITION.get(pitcher, "P")
+    player_header(pitcher, jersey, pos,
+                  f"{len(pdf)} pitches analyzed | Seasons: {', '.join(str(s) for s in sorted(pdf['Season'].dropna().unique()))}",
+                  "Pitch Design Lab")
+
+    # Compute Stuff+
+    stuff_df = _compute_stuff_plus(pdf)
+    if "StuffPlus" not in stuff_df.columns:
+        st.error("Could not compute Stuff+ scores.")
+        return
+
+    # ─── TAB LAYOUT ───
+    tab_stuff, tab_tunnel, tab_seq, tab_loc, tab_sim, tab_cmd, tab_ai = st.tabs([
+        "Stuff+ Grades", "Pitch Tunnels", "Sequencing", "Location Lab",
+        "Hitter's Eye", "Command+", "AI Report"
+    ])
+
+    # ═══════════════════════════════════════════
+    # TAB 1: STUFF+ GRADES
+    # ═══════════════════════════════════════════
+    with tab_stuff:
+        section_header("Stuff+ Overview")
+        st.caption("Stuff+ measures pitch quality based on velocity, movement, extension, and approach angle. "
+                   "100 = league average, 110+ = plus pitch, 120+ = elite.")
+
+        # Summary table
+        arsenal_summary = stuff_df.groupby("TaggedPitchType").agg(
+            Pitches=("StuffPlus", "count"),
+            StuffPlus=("StuffPlus", "mean"),
+            Velo=("RelSpeed", "mean"),
+            MaxVelo=("RelSpeed", "max"),
+            SpinRate=("SpinRate", "mean"),
+            IVB=("InducedVertBreak", "mean"),
+            HB=("HorzBreak", "mean"),
+            Extension=("Extension", "mean"),
+            VAA=("VertApprAngle", "mean"),
+        ).sort_values("StuffPlus", ascending=False)
+        arsenal_summary.columns = ["Pitches", "Stuff+", "Avg Velo", "Max Velo", "Spin Rate",
+                                    "IVB (in)", "HB (in)", "Ext (ft)", "VAA"]
+
+        # Color the Stuff+ values
+        def style_stuff(val):
+            if val >= 120:
+                return "background-color: #be0000; color: white; font-weight: bold"
+            elif val >= 110:
+                return "background-color: #d22d49; color: white; font-weight: bold"
+            elif val >= 105:
+                return "background-color: #ee7e1e; color: white; font-weight: bold"
+            elif val >= 95:
+                return "background-color: #9e9e9e; color: white"
+            elif val >= 90:
+                return "background-color: #3d7dab; color: white"
+            else:
+                return "background-color: #14365d; color: white"
+
+        formatted = arsenal_summary.copy()
+        for c in ["Stuff+", "Avg Velo", "Max Velo", "Spin Rate", "IVB (in)", "HB (in)", "Ext (ft)", "VAA"]:
+            if c in formatted.columns:
+                formatted[c] = formatted[c].apply(lambda x: f"{x:.1f}" if not pd.isna(x) else "-")
+        formatted["Pitches"] = formatted["Pitches"].astype(int)
+        st.dataframe(formatted, use_container_width=True)
+
+        # Savant-style percentile bars for Stuff+
+        all_pitcher_data = data[data["PitcherTeam"] == DAVIDSON_TEAM_ID].copy()
+        all_stuff = _compute_stuff_plus(all_pitcher_data)
+        if "StuffPlus" in all_stuff.columns:
+            section_header("Stuff+ Percentile Rankings (vs All Davidson Pitchers)")
+            metrics = []
+            for pt in arsenal_summary.index:
+                my_val = stuff_df[stuff_df["TaggedPitchType"] == pt]["StuffPlus"].mean()
+                all_pt_vals = all_stuff[all_stuff["TaggedPitchType"] == pt]["StuffPlus"]
+                if len(all_pt_vals) > 5:
+                    pctl = percentileofscore(all_pt_vals.dropna(), my_val, kind="rank")
+                    metrics.append((pt, my_val, pctl, ".0f", True))
+            if metrics:
+                render_savant_percentile_section(metrics)
+
+        # Stuff+ distribution violin plot
+        section_header("Stuff+ Distribution by Pitch")
+        fig_dist = go.Figure()
+        for pt in sorted(stuff_df["TaggedPitchType"].unique()):
+            pt_vals = stuff_df[stuff_df["TaggedPitchType"] == pt]["StuffPlus"]
+            color = PITCH_COLORS.get(pt, "#888")
+            fig_dist.add_trace(go.Violin(
+                y=pt_vals, name=pt, box_visible=True, meanline_visible=True,
+                fillcolor=color, line_color=color, opacity=0.7,
+            ))
+        fig_dist.add_hline(y=100, line_dash="dash", line_color="#888",
+                          annotation_text="League Avg (100)", annotation_position="top left")
+        fig_dist.update_layout(
+            showlegend=False, height=400,
+            yaxis_title="Stuff+",
+            **CHART_LAYOUT,
+        )
+        st.plotly_chart(fig_dist, use_container_width=True)
+
+        # Stuff+ over time (rolling)
+        section_header("Stuff+ Trend Over Time")
+        stuff_time = stuff_df.dropna(subset=["Date"]).sort_values("Date")
+        if len(stuff_time) > 20:
+            window = st.slider("Rolling window", 10, 50, 25, key="pdl_stuff_window")
+            fig_trend = go.Figure()
+            for pt in sorted(stuff_time["TaggedPitchType"].unique()):
+                pt_data = stuff_time[stuff_time["TaggedPitchType"] == pt].copy()
+                pt_data["StuffRolling"] = pt_data["StuffPlus"].rolling(window, min_periods=5).mean()
+                color = PITCH_COLORS.get(pt, "#888")
+                fig_trend.add_trace(go.Scatter(
+                    x=pt_data["Date"], y=pt_data["StuffRolling"],
+                    mode="lines", name=pt, line=dict(color=color, width=2),
+                ))
+            fig_trend.add_hline(y=100, line_dash="dash", line_color="#888")
+            fig_trend.update_layout(
+                height=380, xaxis_title="Date", yaxis_title="Stuff+ (rolling avg)",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02), **CHART_LAYOUT,
+            )
+            st.plotly_chart(fig_trend, use_container_width=True)
+
+    # ═══════════════════════════════════════════
+    # TAB 2: PITCH TUNNELS
+    # ═══════════════════════════════════════════
+    with tab_tunnel:
+        section_header("Pitch Tunnel Analysis")
+        st.caption("Tunnel Score measures how well two pitches look identical at the hitter's commit point but diverge at the plate. "
+                   "Grades: A (elite deception) → F (hitter can read pitches early). Based on physics-modeled flight paths.")
+
+        tunnel_df = _compute_tunnel_score(pdf)
+        if tunnel_df.empty:
+            st.info("Need 2+ pitch types to compute tunnels.")
+        else:
+            # Grade color badges
+            grade_colors = {"A": "#22c55e", "B": "#3b82f6", "C": "#f59e0b", "D": "#f97316", "F": "#ef4444"}
+
+            # Summary grade cards at top
+            st.markdown("#### Tunnel Pair Grades")
+            grade_cols = st.columns(min(len(tunnel_df), 5))
+            for idx, (_, row) in enumerate(tunnel_df.head(5).iterrows()):
+                with grade_cols[idx]:
+                    gc = grade_colors.get(row["Grade"], "#888")
+                    st.markdown(
+                        f'<div style="text-align:center;padding:10px;border-radius:8px;border:2px solid {gc};'
+                        f'background:{gc}15;margin:2px;">'
+                        f'<span style="font-size:28px;font-weight:bold;color:{gc};">{row["Grade"]}</span><br>'
+                        f'<span style="font-size:13px;">{row["Pitch A"]} + {row["Pitch B"]}</span><br>'
+                        f'<span style="font-size:12px;color:#666;">Score: {row["Tunnel Score"]}</span>'
+                        f'</div>', unsafe_allow_html=True)
+
+            st.markdown("")
+
+            # Detailed table (show key columns)
+            display_cols = ["Pitch A", "Pitch B", "Grade", "Tunnel Score",
+                            "Release Sep (in)", "Commit Sep (in)", "Plate Sep (in)",
+                            "Velo Gap (mph)", "Move Diff (in)"]
+            st.dataframe(tunnel_df[display_cols], use_container_width=True, hide_index=True)
+
+            # Diagnosis & Fix cards for each pair
+            section_header("Diagnosis & Recommendations")
+            for _, row in tunnel_df.iterrows():
+                gc = grade_colors.get(row["Grade"], "#888")
+                border_color = gc
+                st.markdown(
+                    f'<div style="border-left:5px solid {border_color};padding:12px 16px;'
+                    f'border-radius:4px;margin:8px 0;background:{gc}10;">'
+                    f'<span style="font-size:18px;font-weight:bold;color:{gc};">{row["Grade"]}</span> '
+                    f'<b>{row["Pitch A"]} + {row["Pitch B"]}</b> '
+                    f'<span style="color:#666;">(Score: {row["Tunnel Score"]})</span><br>'
+                    f'<span style="font-size:13px;"><b>Analysis:</b> {row["Diagnosis"]}</span><br>'
+                    f'<span style="color:{gc};font-size:13px;"><b>Action:</b> {row["Fix"]}</span>'
+                    f'</div>', unsafe_allow_html=True)
+
+            # Tunnel visualization — release point overlay + plate location
+            section_header("Release Point Overlay")
+            st.caption("Pitches that release from the same spot but end up in different locations = great tunnel")
+            fig_rel = go.Figure()
+            for pt in sorted(pdf["TaggedPitchType"].unique()):
+                pt_data = pdf[pdf["TaggedPitchType"] == pt].dropna(subset=["RelSide", "RelHeight"])
+                color = PITCH_COLORS.get(pt, "#888")
+                fig_rel.add_trace(go.Scatter(
+                    x=pt_data["RelSide"], y=pt_data["RelHeight"],
+                    mode="markers", name=pt,
+                    marker=dict(color=color, size=6, opacity=0.4),
+                ))
+                # Add mean crosshair
+                fig_rel.add_trace(go.Scatter(
+                    x=[pt_data["RelSide"].mean()], y=[pt_data["RelHeight"].mean()],
+                    mode="markers", name=f"{pt} avg", showlegend=False,
+                    marker=dict(color=color, size=16, symbol="x-thin", line=dict(width=3, color=color)),
+                ))
+            fig_rel.update_layout(
+                xaxis_title="Release Side (ft)", yaxis_title="Release Height (ft)",
+                height=420, legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                **CHART_LAYOUT,
+            )
+            fig_rel.update_xaxes(scaleanchor="y", scaleratio=1)
+            st.plotly_chart(fig_rel, use_container_width=True)
+
+            # Side-by-side: tunnel pair visualization
+            if len(tunnel_df) > 0:
+                section_header("Best Tunnel Pair Visualization")
+                best_pair = tunnel_df.iloc[0]
+                pair_a, pair_b = best_pair["Pitch A"], best_pair["Pitch B"]
+                st.markdown(f"**{pair_a}** + **{pair_b}** — Grade: **{best_pair['Grade']}** | Score: **{best_pair['Tunnel Score']}**")
+
+                c1, c2 = st.columns(2)
+                with c1:
+                    # Movement profile of the pair
+                    pair_data = pdf[pdf["TaggedPitchType"].isin([pair_a, pair_b])].dropna(
+                        subset=["HorzBreak", "InducedVertBreak"])
+                    fig_move = go.Figure()
+                    for pt in [pair_a, pair_b]:
+                        d = pair_data[pair_data["TaggedPitchType"] == pt]
+                        color = PITCH_COLORS.get(pt, "#888")
+                        fig_move.add_trace(go.Scatter(
+                            x=d["HorzBreak"], y=d["InducedVertBreak"],
+                            mode="markers", name=pt,
+                            marker=dict(color=color, size=7, opacity=0.5),
+                        ))
+                    fig_move.update_layout(
+                        title="Movement Profile", xaxis_title="Horizontal Break (in)",
+                        yaxis_title="Induced Vert Break (in)", height=350, **CHART_LAYOUT,
+                    )
+                    fig_move.add_hline(y=0, line_color="#ccc")
+                    fig_move.add_vline(x=0, line_color="#ccc")
+                    st.plotly_chart(fig_move, use_container_width=True)
+
+                with c2:
+                    # Plate location of the pair
+                    fig_loc = go.Figure()
+                    for pt in [pair_a, pair_b]:
+                        d = pdf[(pdf["TaggedPitchType"] == pt)].dropna(subset=["PlateLocSide", "PlateLocHeight"])
+                        color = PITCH_COLORS.get(pt, "#888")
+                        fig_loc.add_trace(go.Scatter(
+                            x=d["PlateLocSide"], y=d["PlateLocHeight"],
+                            mode="markers", name=pt,
+                            marker=dict(color=color, size=7, opacity=0.5),
+                        ))
+                    add_strike_zone(fig_loc)
+                    fig_loc.update_layout(
+                        title="Plate Locations", xaxis_title="Plate Side (ft)",
+                        yaxis_title="Plate Height (ft)", height=350,
+                        xaxis=dict(range=[-2.5, 2.5]), yaxis=dict(range=[0, 5]),
+                        **CHART_LAYOUT,
+                    )
+                    st.plotly_chart(fig_loc, use_container_width=True)
+
+    # ═══════════════════════════════════════════
+    # TAB 3: SEQUENCING
+    # ═══════════════════════════════════════════
+    with tab_seq:
+        section_header("Pitch Sequencing Analysis")
+        st.caption("Shows what happens when Pitch B follows Pitch A in the same at-bat. "
+                   "Use this to find your most effective pitch combinations.")
+
+        pair_df = _compute_pitch_pair_results(pdf, data)
+        if pair_df.empty:
+            st.info("Not enough sequential pitch data.")
+        else:
+            # Sequencing effectiveness table
+            st.dataframe(pair_df, use_container_width=True, hide_index=True)
+
+            # Transition matrix heatmap
+            section_header("Pitch Transition Matrix")
+            st.caption("How often does each pitch follow another? Heat = frequency")
+            sort_cols = [c for c in ["GameID", "Batter", "PAofInning", "PitchNo"] if c in pdf.columns]
+            if len(sort_cols) >= 2:
+                pdf_s = pdf.sort_values(sort_cols).copy()
+                pdf_s["NextPitch"] = pdf_s.groupby(["GameID", "Batter", "PAofInning"])["TaggedPitchType"].shift(-1)
+                trans = pdf_s.dropna(subset=["NextPitch"])
+                if not trans.empty:
+                    matrix = pd.crosstab(trans["TaggedPitchType"], trans["NextPitch"], normalize="index") * 100
+                    fig_matrix = px.imshow(
+                        matrix.round(1), text_auto=".0f", color_continuous_scale="RdBu_r",
+                        labels=dict(x="Next Pitch", y="Current Pitch", color="Frequency %"),
+                        aspect="auto",
+                    )
+                    fig_matrix.update_layout(height=380, **CHART_LAYOUT)
+                    st.plotly_chart(fig_matrix, use_container_width=True)
+
+            # Whiff% heatmap by sequence
+            section_header("Whiff% by Pitch Sequence")
+            if not pair_df.empty:
+                whiff_pivot = pair_df.pivot_table(index="Setup Pitch", columns="Follow Pitch",
+                                                  values="Whiff%", aggfunc="first")
+                if not whiff_pivot.empty:
+                    fig_whiff = px.imshow(
+                        whiff_pivot.fillna(0).round(1), text_auto=".0f",
+                        color_continuous_scale="YlOrRd",
+                        labels=dict(x="Follow-Up Pitch", y="Setup Pitch", color="Whiff%"),
+                        aspect="auto",
+                    )
+                    fig_whiff.update_layout(height=380, **CHART_LAYOUT)
+                    st.plotly_chart(fig_whiff, use_container_width=True)
+
+            # First-pitch tendencies
+            section_header("Count-State Pitch Selection")
+            counts_of_interest = [("0", "0"), ("0", "2"), ("1", "2"), ("2", "0"), ("3", "1"), ("3", "2")]
+            count_rows = []
+            for b, s in counts_of_interest:
+                count_data = pdf[(pdf["Balls"].astype(str) == b) & (pdf["Strikes"].astype(str) == s)]
+                if len(count_data) >= 3:
+                    usage = count_data["TaggedPitchType"].value_counts(normalize=True) * 100
+                    for pt, pct in usage.items():
+                        count_rows.append({"Count": f"{b}-{s}", "Pitch": pt, "Usage%": round(pct, 1)})
+            if count_rows:
+                count_df = pd.DataFrame(count_rows)
+                fig_count = px.bar(
+                    count_df, x="Count", y="Usage%", color="Pitch",
+                    color_discrete_map=PITCH_COLORS, barmode="stack",
+                )
+                fig_count.update_layout(
+                    height=380, yaxis_title="Usage %", xaxis_title="Count",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                    **CHART_LAYOUT,
+                )
+                st.plotly_chart(fig_count, use_container_width=True)
+
+    # ═══════════════════════════════════════════
+    # TAB 4: LOCATION LAB
+    # ═══════════════════════════════════════════
+    with tab_loc:
+        section_header("Location Optimization Lab")
+        st.caption("Find the exact locations where each pitch generates the most whiffs, weakest contact, and highest called strike rates.")
+
+        pitch_type_sel = st.selectbox("Select Pitch", sorted(pdf["TaggedPitchType"].unique()), key="pdl_loc_pitch")
+        pt_data = pdf[pdf["TaggedPitchType"] == pitch_type_sel].copy()
+
+        if len(pt_data) < 10:
+            st.info("Not enough pitches of this type to analyze locations.")
+        else:
+            c1, c2, c3 = st.columns(3)
+
+            # Whiff heatmap
+            with c1:
+                whiff_data = pt_data[pt_data["PitchCall"] == "StrikeSwinging"]
+                section_header("Whiff Locations")
+                if len(whiff_data) >= 3:
+                    fig = go.Figure(go.Histogram2d(
+                        x=whiff_data["PlateLocSide"], y=whiff_data["PlateLocHeight"],
+                        nbinsx=10, nbinsy=10,
+                        colorscale="YlOrRd", showscale=False,
+                    ))
+                    add_strike_zone(fig)
+                    fig.update_layout(
+                        xaxis=dict(range=[-2.5, 2.5], title=""),
+                        yaxis=dict(range=[0, 5], title=""),
+                        height=320, **CHART_LAYOUT,
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                    st.caption(f"{len(whiff_data)} whiffs")
+                else:
+                    st.info("Not enough whiffs")
+
+            # Called strike heatmap
+            with c2:
+                cs_data = pt_data[pt_data["PitchCall"] == "StrikeCalled"]
+                section_header("Called Strike Locations")
+                if len(cs_data) >= 3:
+                    fig = go.Figure(go.Histogram2d(
+                        x=cs_data["PlateLocSide"], y=cs_data["PlateLocHeight"],
+                        nbinsx=10, nbinsy=10,
+                        colorscale="Blues", showscale=False,
+                    ))
+                    add_strike_zone(fig)
+                    fig.update_layout(
+                        xaxis=dict(range=[-2.5, 2.5], title=""),
+                        yaxis=dict(range=[0, 5], title=""),
+                        height=320, **CHART_LAYOUT,
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                    st.caption(f"{len(cs_data)} called strikes")
+                else:
+                    st.info("Not enough called strikes")
+
+            # Weak contact heatmap (EV < 85 on balls in play)
+            with c3:
+                ip_data = pt_data[(pt_data["PitchCall"] == "InPlay") & pt_data["ExitSpeed"].notna()]
+                weak = ip_data[ip_data["ExitSpeed"] < 85]
+                section_header("Weak Contact Locations")
+                if len(weak) >= 3:
+                    fig = go.Figure(go.Histogram2d(
+                        x=weak["PlateLocSide"], y=weak["PlateLocHeight"],
+                        nbinsx=10, nbinsy=10,
+                        colorscale="Greens", showscale=False,
+                    ))
+                    add_strike_zone(fig)
+                    fig.update_layout(
+                        xaxis=dict(range=[-2.5, 2.5], title=""),
+                        yaxis=dict(range=[0, 5], title=""),
+                        height=320, **CHART_LAYOUT,
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                    st.caption(f"{len(weak)} weak contacts (EV < 85)")
+                else:
+                    st.info("Not enough weak contact")
+
+            # Zone-quadrant breakdown
+            section_header("Zone Quadrant Performance")
+            st.caption("Strike zone split into 9 regions — showing effectiveness in each")
+            loc_data = pt_data.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
+            if len(loc_data) >= 20:
+                # Define 9 zones (3x3 grid within strike zone)
+                h_edges = [-0.83, -0.28, 0.28, 0.83]
+                v_edges = [1.5, 2.17, 2.83, 3.5]
+                zone_labels = [
+                    ["Down-In", "Down-Mid", "Down-Away"],
+                    ["Mid-In", "Heart", "Mid-Away"],
+                    ["Up-In", "Up-Mid", "Up-Away"],
+                ]
+                zone_rows = []
+                for vi in range(3):
+                    for hi in range(3):
+                        mask = (
+                            (loc_data["PlateLocSide"] >= h_edges[hi]) &
+                            (loc_data["PlateLocSide"] < h_edges[hi + 1]) &
+                            (loc_data["PlateLocHeight"] >= v_edges[vi]) &
+                            (loc_data["PlateLocHeight"] < v_edges[vi + 1])
+                        )
+                        zone = loc_data[mask]
+                        if len(zone) < 3:
+                            continue
+                        swings = zone[zone["PitchCall"].isin(SWING_CALLS)]
+                        whiffs_z = zone[zone["PitchCall"] == "StrikeSwinging"]
+                        ip_z = zone[(zone["PitchCall"] == "InPlay") & zone["ExitSpeed"].notna()]
+                        zone_rows.append({
+                            "Zone": zone_labels[vi][hi],
+                            "Pitches": len(zone),
+                            "Whiff%": round(len(whiffs_z) / max(len(swings), 1) * 100, 1),
+                            "Avg EV": round(ip_z["ExitSpeed"].mean(), 1) if len(ip_z) > 0 else np.nan,
+                            "Usage%": round(len(zone) / len(loc_data) * 100, 1),
+                        })
+                if zone_rows:
+                    zone_df = pd.DataFrame(zone_rows)
+                    st.dataframe(zone_df, use_container_width=True, hide_index=True)
+
+                    # AI insight for location
+                    if not zone_df.empty:
+                        best_zone = zone_df.loc[zone_df["Whiff%"].idxmax()]
+                        worst_zone = zone_df.dropna(subset=["Avg EV"])
+                        if not worst_zone.empty:
+                            worst_zone = worst_zone.loc[worst_zone["Avg EV"].idxmax()]
+                            st.markdown(
+                                f'<div style="background:#f0f7ff;border-left:4px solid #2d7fc1;padding:12px 16px;'
+                                f'border-radius:4px;margin:8px 0;">'
+                                f'<b style="color:#1a1a2e;">AI Insight:</b><br>'
+                                f'<span style="color:#333;">Best location for whiffs: <b>{best_zone["Zone"]}</b> '
+                                f'({best_zone["Whiff%"]:.0f}% whiff rate). '
+                                f'Avoid <b>{worst_zone["Zone"]}</b> — hitters average '
+                                f'{worst_zone["Avg EV"]:.0f} mph exit velo there.</span></div>',
+                                unsafe_allow_html=True,
+                            )
+
+    # ═══════════════════════════════════════════
+    # TAB 5: HITTER'S EYE — PITCH FLIGHT SIMULATOR
+    # ═══════════════════════════════════════════
+    with tab_sim:
+        section_header("Hitter's Eye — Pitch Simulator")
+        st.caption("See pitches from the batter's perspective. The 3D flight path shows how each pitch "
+                   "travels from the release point to the plate, and the overlay view reveals why certain "
+                   "pitch pairs are so hard to distinguish.")
+
+        sim_pitches = sorted(pdf["TaggedPitchType"].unique())
+        sim_selected = st.multiselect(
+            "Select pitches to overlay (pick 2+ to see tunnel effect)",
+            sim_pitches, default=sim_pitches[:min(3, len(sim_pitches))],
+            key="pdl_sim_pitches",
+        )
+        if not sim_selected:
+            st.info("Select at least one pitch type above.")
+        else:
+            # Compute average flight path for each pitch type using physics model
+            # Release point → plate (60.5 ft) with break applied as quadratic curve
+            MOUND_DIST = 60.5  # ft from rubber to plate
+
+            flight_data = {}
+            for pt in sim_selected:
+                ptd = pdf[pdf["TaggedPitchType"] == pt].dropna(subset=["RelSpeed"])
+                if ptd.empty:
+                    continue
+                velo = ptd["RelSpeed"].mean()  # mph
+                rel_h = ptd["RelHeight"].mean() if "RelHeight" in ptd.columns and ptd["RelHeight"].notna().any() else 5.5
+                rel_s = ptd["RelSide"].mean() if "RelSide" in ptd.columns and ptd["RelSide"].notna().any() else 0.0
+                ext = ptd["Extension"].mean() if "Extension" in ptd.columns and ptd["Extension"].notna().any() else 6.0
+                loc_h = ptd["PlateLocHeight"].mean() if "PlateLocHeight" in ptd.columns and ptd["PlateLocHeight"].notna().any() else 2.5
+                loc_s = ptd["PlateLocSide"].mean() if "PlateLocSide" in ptd.columns and ptd["PlateLocSide"].notna().any() else 0.0
+                ivb = ptd["InducedVertBreak"].mean() if "InducedVertBreak" in ptd.columns and ptd["InducedVertBreak"].notna().any() else 0.0
+                hb = ptd["HorzBreak"].mean() if "HorzBreak" in ptd.columns and ptd["HorzBreak"].notna().any() else 0.0
+
+                # Flight path: 30 points from release to plate
+                n_pts = 30
+                actual_dist = MOUND_DIST - ext
+                t_total = actual_dist / (velo * 5280 / 3600)  # seconds of flight
+
+                # Parametric path: t goes 0→1
+                ts = np.linspace(0, 1, n_pts)
+                # Distance from pitcher: linear
+                z_pts = ext + ts * actual_dist  # feet from rubber
+
+                # Height: linear interpolation + quadratic gravity + IVB
+                gravity_drop = 0.5 * 32.17 * (ts * t_total)**2  # feet of gravity drop
+                ivb_lift = (ivb / 12.0) * ts**2  # IVB counteracts gravity (inches→feet)
+                y_pts = rel_h + (loc_h - rel_h) * ts - gravity_drop + ivb_lift
+                # Ensure endpoint matches plate location
+                y_correction = loc_h - y_pts[-1]
+                y_pts = y_pts + y_correction * ts
+
+                # Horizontal: linear + break curve
+                hb_curve = (hb / 12.0) * ts**2  # horizontal break applied quadratically
+                x_pts = rel_s + (loc_s - rel_s) * ts + hb_curve
+                x_correction = loc_s - x_pts[-1]
+                x_pts = x_pts + x_correction * ts
+
+                flight_data[pt] = {
+                    "x": x_pts, "y": y_pts, "z": z_pts,
+                    "velo": velo, "rel_h": rel_h, "rel_s": rel_s,
+                    "loc_h": loc_h, "loc_s": loc_s,
+                    "ivb": ivb, "hb": hb, "ext": ext,
+                    "time_ms": t_total * 1000,
+                }
+
+            if flight_data:
+                col_3d, col_front = st.columns(2)
+
+                # ── 3D Flight Path (side/overhead view) ──
+                with col_3d:
+                    section_header("3D Pitch Flight Path")
+                    fig_3d = go.Figure()
+                    for pt, fd in flight_data.items():
+                        color = PITCH_COLORS.get(pt, "#888")
+                        # Flight path line
+                        fig_3d.add_trace(go.Scatter3d(
+                            x=fd["z"], y=fd["x"], z=fd["y"],
+                            mode="lines+markers",
+                            name=f'{pt} ({fd["velo"]:.0f} mph)',
+                            line=dict(color=color, width=6),
+                            marker=dict(size=2, color=color),
+                        ))
+                        # Release point marker
+                        fig_3d.add_trace(go.Scatter3d(
+                            x=[fd["z"][0]], y=[fd["x"][0]], z=[fd["y"][0]],
+                            mode="markers", showlegend=False,
+                            marker=dict(size=8, color=color, symbol="diamond"),
+                        ))
+                        # Plate arrival marker
+                        fig_3d.add_trace(go.Scatter3d(
+                            x=[fd["z"][-1]], y=[fd["x"][-1]], z=[fd["y"][-1]],
+                            mode="markers", showlegend=False,
+                            marker=dict(size=10, color=color, symbol="circle",
+                                        line=dict(width=2, color="white")),
+                        ))
+
+                    # Draw strike zone at plate (z = 60.5)
+                    sz_x = [-0.83, 0.83, 0.83, -0.83, -0.83]
+                    sz_y = [1.5, 1.5, 3.5, 3.5, 1.5]
+                    sz_z = [MOUND_DIST] * 5
+                    fig_3d.add_trace(go.Scatter3d(
+                        x=sz_z, y=sz_x, z=sz_y,
+                        mode="lines", showlegend=False,
+                        line=dict(color="#333", width=4),
+                    ))
+                    fig_3d.update_layout(
+                        height=500,
+                        scene=dict(
+                            xaxis=dict(title="Distance (ft)", range=[0, 65]),
+                            yaxis=dict(title="Horizontal (ft)", range=[-3, 3]),
+                            zaxis=dict(title="Height (ft)", range=[0, 8]),
+                            camera=dict(eye=dict(x=1.5, y=1.2, z=0.5)),
+                            aspectmode="manual",
+                            aspectratio=dict(x=3, y=1, z=1),
+                        ),
+                        margin=dict(l=0, r=0, t=30, b=0),
+                        paper_bgcolor="white",
+                        font=dict(size=10, color="#1a1a2e", family="Inter, Arial, sans-serif"),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02,
+                                    font=dict(color="#1a1a2e")),
+                    )
+                    st.plotly_chart(fig_3d, use_container_width=True)
+
+                # ── Batter's POV (front view at plate) ──
+                with col_front:
+                    section_header("Batter's View (at the plate)")
+                    fig_front = go.Figure()
+
+                    # Show pitch trajectories as the batter sees them
+                    for pt, fd in flight_data.items():
+                        color = PITCH_COLORS.get(pt, "#888")
+                        # Show the last 60% of trajectory (what hitter can react to)
+                        start_idx = int(len(fd["x"]) * 0.3)
+
+                        # Increasing marker size = pitch getting closer
+                        sizes = np.linspace(3, 18, len(fd["x"][start_idx:]))
+                        opacities = np.linspace(0.15, 0.9, len(fd["x"][start_idx:]))
+
+                        # Trail path
+                        fig_front.add_trace(go.Scatter(
+                            x=fd["x"][start_idx:], y=fd["y"][start_idx:],
+                            mode="markers+lines",
+                            name=f'{pt} ({fd["velo"]:.0f})',
+                            marker=dict(size=sizes, color=color, opacity=0.5),
+                            line=dict(color=color, width=2, dash="dot"),
+                        ))
+                        # Final plate location (big marker)
+                        fig_front.add_trace(go.Scatter(
+                            x=[fd["loc_s"]], y=[fd["loc_h"]],
+                            mode="markers+text",
+                            showlegend=False,
+                            text=[f'{fd["velo"]:.0f}'],
+                            textposition="top center",
+                            textfont=dict(size=10, color=color),
+                            marker=dict(size=22, color=color, opacity=0.85,
+                                        line=dict(width=2, color="white")),
+                        ))
+
+                    # Strike zone
+                    fig_front.add_shape(
+                        type="rect", x0=-0.83, x1=0.83, y0=1.5, y1=3.5,
+                        line=dict(color="#333", width=2.5),
+                        fillcolor="rgba(0,0,0,0.03)",
+                    )
+                    # Home plate
+                    fig_front.add_shape(
+                        type="path",
+                        path="M -0.71 0.3 L 0.71 0.3 L 0.83 0.15 L 0 0 L -0.83 0.15 Z",
+                        line=dict(color="#666", width=1.5),
+                        fillcolor="rgba(200,200,200,0.3)",
+                    )
+                    fig_front.update_layout(
+                        height=500,
+                        xaxis=dict(range=[-2.5, 2.5], title="Horizontal (ft)",
+                                   zeroline=False, showgrid=True, gridcolor="#eee"),
+                        yaxis=dict(range=[-0.5, 5.5], title="Height (ft)",
+                                   zeroline=False, showgrid=True, gridcolor="#eee"),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                        **CHART_LAYOUT,
+                    )
+                    st.plotly_chart(fig_front, use_container_width=True)
+
+                # ── Decision Point Analysis ──
+                section_header("Pitch Decision Timeline")
+                st.caption("How much time does the hitter have to decide? At what point do pitches diverge?")
+
+                timeline_rows = []
+                for pt, fd in flight_data.items():
+                    t_ms = fd["time_ms"]
+                    # Decision point: ~167ms before plate (average human reaction time)
+                    react_ms = 167
+                    decision_dist = (react_ms / t_ms) * (MOUND_DIST - fd["ext"])
+                    commit_dist = MOUND_DIST - decision_dist  # distance from rubber where hitter must commit
+
+                    # At the decision point, where is the pitch?
+                    frac = 1 - (react_ms / t_ms)
+                    idx = min(int(frac * len(fd["x"])), len(fd["x"]) - 1)
+                    dec_h = fd["y"][idx]
+                    dec_s = fd["x"][idx]
+
+                    timeline_rows.append({
+                        "Pitch": pt,
+                        "Velocity": f'{fd["velo"]:.0f} mph',
+                        "Flight Time": f'{t_ms:.0f} ms',
+                        "Decision Point": f'{commit_dist:.1f} ft from plate',
+                        "Height at Decision": f'{dec_h:.2f} ft',
+                        "Side at Decision": f'{dec_s:.2f} ft',
+                        "React Window": f'{t_ms - react_ms:.0f} ms',
+                    })
+                timeline_df = pd.DataFrame(timeline_rows)
+                st.dataframe(timeline_df, use_container_width=True, hide_index=True)
+
+                # Tunnel divergence analysis
+                if len(sim_selected) >= 2:
+                    section_header("Tunnel Divergence Analysis")
+                    st.caption("At the commit point (~167ms before plate), how far apart are the pitches? "
+                               "Less separation = better deception.")
+
+                    pts_list = list(flight_data.keys())
+                    div_rows = []
+                    for i in range(len(pts_list)):
+                        for j in range(i + 1, len(pts_list)):
+                            a, b = flight_data[pts_list[i]], flight_data[pts_list[j]]
+                            # Compare at multiple checkpoints
+                            for check_name, frac in [("Release", 0.0), ("1/3 Way", 0.33),
+                                                      ("Commit Point", 0.6), ("2/3 Way", 0.67), ("Plate", 1.0)]:
+                                idx_a = min(int(frac * (len(a["x"]) - 1)), len(a["x"]) - 1)
+                                idx_b = min(int(frac * (len(b["x"]) - 1)), len(b["x"]) - 1)
+                                h_sep = abs(a["y"][idx_a] - b["y"][idx_b]) * 12  # inches
+                                s_sep = abs(a["x"][idx_a] - b["x"][idx_b]) * 12  # inches
+                                total_sep = np.sqrt(h_sep**2 + s_sep**2)
+                                div_rows.append({
+                                    "Pair": f'{pts_list[i]} vs {pts_list[j]}',
+                                    "Checkpoint": check_name,
+                                    "Vertical Sep (in)": round(h_sep, 1),
+                                    "Horizontal Sep (in)": round(s_sep, 1),
+                                    "Total Sep (in)": round(total_sep, 1),
+                                })
+
+                    div_df = pd.DataFrame(div_rows)
+                    # Show as line chart — separation over distance
+                    fig_div = go.Figure()
+                    for pair in div_df["Pair"].unique():
+                        pair_data = div_df[div_df["Pair"] == pair]
+                        checkpoints = ["Release", "1/3 Way", "Commit Point", "2/3 Way", "Plate"]
+                        pair_ordered = pair_data.set_index("Checkpoint").reindex(checkpoints)
+                        fig_div.add_trace(go.Scatter(
+                            x=checkpoints,
+                            y=pair_ordered["Total Sep (in)"].values,
+                            mode="lines+markers",
+                            name=pair,
+                            line=dict(width=3),
+                            marker=dict(size=8),
+                        ))
+                    fig_div.add_hline(y=6, line_dash="dash", line_color="#cc0000",
+                                     annotation_text="6 in (hard to distinguish)",
+                                     annotation_position="top left",
+                                     annotation_font=dict(color="#cc0000"))
+                    fig_div.update_layout(
+                        height=380,
+                        yaxis_title="Separation (inches)",
+                        xaxis_title="Pitch Flight Checkpoint",
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                        **CHART_LAYOUT,
+                    )
+                    st.plotly_chart(fig_div, use_container_width=True)
+
+                    # AI insight
+                    for pair in div_df["Pair"].unique():
+                        commit = div_df[(div_df["Pair"] == pair) & (div_df["Checkpoint"] == "Commit Point")]
+                        plate = div_df[(div_df["Pair"] == pair) & (div_df["Checkpoint"] == "Plate")]
+                        if not commit.empty and not plate.empty:
+                            c_sep = commit.iloc[0]["Total Sep (in)"]
+                            p_sep = plate.iloc[0]["Total Sep (in)"]
+                            if c_sep < 2:
+                                quality, qcolor = "Elite", "#22c55e"
+                            elif c_sep < 3.5:
+                                quality, qcolor = "Good", "#3b82f6"
+                            elif c_sep < 5:
+                                quality, qcolor = "Average", "#f59e0b"
+                            elif c_sep < 7:
+                                quality, qcolor = "Below Avg", "#f97316"
+                            else:
+                                quality, qcolor = "Poor", "#ef4444"
+                            insight = ""
+                            if c_sep < 3.5:
+                                insight = " — hitter cannot distinguish these pitches at the decision point"
+                            elif c_sep < 5:
+                                insight = " — some deception but advanced hitters can read the difference"
+                            else:
+                                insight = " — hitter can identify pitch type before committing"
+                            st.markdown(
+                                f'<div style="border-left:4px solid {qcolor};padding:12px 16px;'
+                                f'border-radius:4px;margin:8px 0;font-size:16px;line-height:1.5;'
+                                f'background:{qcolor}10;">'
+                                f'<b style="font-size:17px;">{pair}:</b> '
+                                f'<span style="font-size:16px;">{c_sep:.1f}" apart at commit, '
+                                f'{p_sep:.1f}" apart at plate. '
+                                f'Tunnel quality: <b style="color:{qcolor};font-size:17px;">{quality}</b>'
+                                f'{insight}'
+                                f'</span></div>',
+                                unsafe_allow_html=True,
+                            )
+
+    # ═══════════════════════════════════════════
+    # TAB 6: COMMAND+ SCORING
+    # ═══════════════════════════════════════════
+    with tab_cmd:
+        section_header("Command+ Analysis")
+        st.caption("Command+ measures how well a pitcher locates each pitch relative to optimal zones. "
+                   "100 = average command, higher = more precise location control.")
+
+        # Compute Command+ for each pitch type
+        cmd_rows = []
+        for pt in sorted(pdf["TaggedPitchType"].unique()):
+            ptd = pdf[pdf["TaggedPitchType"] == pt].dropna(subset=["PlateLocSide", "PlateLocHeight"])
+            if len(ptd) < 10:
+                continue
+
+            # Location consistency (lower std = better command)
+            loc_std_h = ptd["PlateLocHeight"].std()
+            loc_std_s = ptd["PlateLocSide"].std()
+            loc_spread = np.sqrt(loc_std_h**2 + loc_std_s**2)
+
+            # Zone rate
+            in_zone = ((ptd["PlateLocSide"].abs() <= 0.83) &
+                       ptd["PlateLocHeight"].between(1.5, 3.5))
+            zone_pct = in_zone.mean() * 100
+
+            # Edge rate (borderline pitches — the best location)
+            edge = (
+                ((ptd["PlateLocSide"].abs().between(0.5, 1.1)) |
+                 (ptd["PlateLocHeight"].between(1.2, 1.8)) |
+                 (ptd["PlateLocHeight"].between(3.2, 3.8))) &
+                (ptd["PlateLocSide"].abs() <= 1.5) &
+                ptd["PlateLocHeight"].between(0.5, 4.5)
+            )
+            edge_pct = edge.mean() * 100
+
+            # Called strike + whiff rate (CSW) — outcome measure of command
+            csw = ptd["PitchCall"].isin(["StrikeCalled", "StrikeSwinging"]).mean() * 100
+
+            # Chase rate (ability to locate out of zone and get swings)
+            out_zone = ~in_zone
+            chase_swings = ptd[out_zone & ptd["PitchCall"].isin(SWING_CALLS)]
+            chase_pct = len(chase_swings) / max(out_zone.sum(), 1) * 100
+
+            # Command+ composite: normalized vs same pitch type across all Davidson pitchers
+            cmd_rows.append({
+                "Pitch": pt,
+                "Pitches": len(ptd),
+                "Loc Spread (ft)": round(loc_spread, 2),
+                "Zone%": round(zone_pct, 1),
+                "Edge%": round(edge_pct, 1),
+                "CSW%": round(csw, 1),
+                "Chase%": round(chase_pct, 1),
+            })
+
+        if not cmd_rows:
+            st.info("Not enough location data to compute Command+.")
+        else:
+            cmd_df = pd.DataFrame(cmd_rows)
+
+            # Compute Command+ score
+            # Compare to all Davidson pitchers for the same pitch type
+            all_dav = filter_davidson(data, role="pitcher")
+            all_dav = normalize_pitch_types(all_dav)
+            cmd_scores = []
+            for _, row in cmd_df.iterrows():
+                pt = row["Pitch"]
+                all_pt = all_dav[all_dav["TaggedPitchType"] == pt].dropna(
+                    subset=["PlateLocSide", "PlateLocHeight"])
+                if len(all_pt) < 20:
+                    cmd_scores.append(100.0)
+                    continue
+                # Per-pitcher spread for this pitch type
+                pitcher_spreads = []
+                for p, pg in all_pt.groupby("Pitcher"):
+                    if len(pg) < 10:
+                        continue
+                    sp = np.sqrt(pg["PlateLocHeight"].std()**2 + pg["PlateLocSide"].std()**2)
+                    pitcher_spreads.append(sp)
+                if len(pitcher_spreads) < 3:
+                    cmd_scores.append(100.0)
+                    continue
+                # Lower spread = better = higher Command+
+                pctl = 100 - percentileofscore(pitcher_spreads, row["Loc Spread (ft)"], kind="rank")
+                cmd_scores.append(round(100 + (pctl - 50) * 0.4, 0))
+
+            cmd_df["Command+"] = cmd_scores
+            cmd_df = cmd_df.sort_values("Command+", ascending=False)
+
+            # Display table
+            st.dataframe(cmd_df, use_container_width=True, hide_index=True)
+
+            # Command+ percentile bars
+            section_header("Command+ Percentile Rankings")
+            metrics = []
+            for _, row in cmd_df.iterrows():
+                cmd_val = row["Command+"]
+                # Map Command+ to percentile-like scale for the bar
+                pctl_mapped = min(max((cmd_val - 80) * 2.5, 0), 100)
+                metrics.append((row["Pitch"], cmd_val, pctl_mapped, ".0f", True))
+            if metrics:
+                render_savant_percentile_section(metrics)
+
+            # Location scatter per pitch type with density ellipse
+            section_header("Location Precision Map")
+            st.caption("Each dot is a pitch. Tight clusters = good command. The crosshair shows the average location.")
+            loc_pitch_sel = st.selectbox("Select Pitch", cmd_df["Pitch"].tolist(), key="pdl_cmd_pitch")
+            loc_ptd = pdf[(pdf["TaggedPitchType"] == loc_pitch_sel)].dropna(
+                subset=["PlateLocSide", "PlateLocHeight"])
+
+            if len(loc_ptd) >= 5:
+                # Color by outcome
+                outcome_colors = {
+                    "StrikeSwinging": "#be0000",
+                    "StrikeCalled": "#2d7fc1",
+                    "BallCalled": "#9e9e9e",
+                    "FoulBall": "#ee7e1e",
+                    "InPlay": "#1dbe3a",
+                    "FoulBallNotFieldable": "#ee7e1e",
+                    "FoulBallFieldable": "#ee7e1e",
+                    "HitByPitch": "#333",
+                    "BallIntentional": "#9e9e9e",
+                    "BallinDirt": "#666",
+                }
+                loc_ptd = loc_ptd.copy()
+                loc_ptd["Outcome"] = loc_ptd["PitchCall"].map(
+                    lambda x: "Whiff" if x == "StrikeSwinging" else
+                              "Called Strike" if x == "StrikeCalled" else
+                              "Ball" if "Ball" in str(x) else
+                              "Foul" if "Foul" in str(x) else
+                              "In Play" if x == "InPlay" else "Other"
+                )
+                outcome_color_map = {
+                    "Whiff": "#be0000", "Called Strike": "#2d7fc1",
+                    "Ball": "#9e9e9e", "Foul": "#ee7e1e",
+                    "In Play": "#1dbe3a", "Other": "#666",
+                }
+                fig_loc = px.scatter(
+                    loc_ptd, x="PlateLocSide", y="PlateLocHeight",
+                    color="Outcome", color_discrete_map=outcome_color_map,
+                    opacity=0.6,
+                )
+                # Mean crosshair
+                mean_s = loc_ptd["PlateLocSide"].mean()
+                mean_h = loc_ptd["PlateLocHeight"].mean()
+                fig_loc.add_trace(go.Scatter(
+                    x=[mean_s], y=[mean_h], mode="markers", showlegend=False,
+                    marker=dict(size=20, color=PITCH_COLORS.get(loc_pitch_sel, "#333"),
+                                symbol="x-thin", line=dict(width=4)),
+                ))
+                # 1-sigma ellipse
+                std_s = loc_ptd["PlateLocSide"].std()
+                std_h = loc_ptd["PlateLocHeight"].std()
+                theta = np.linspace(0, 2 * np.pi, 50)
+                fig_loc.add_trace(go.Scatter(
+                    x=mean_s + std_s * np.cos(theta),
+                    y=mean_h + std_h * np.sin(theta),
+                    mode="lines", showlegend=False,
+                    line=dict(color=PITCH_COLORS.get(loc_pitch_sel, "#333"),
+                              width=2, dash="dash"),
+                ))
+                add_strike_zone(fig_loc)
+                fig_loc.update_layout(
+                    height=480,
+                    xaxis=dict(range=[-2.5, 2.5], title="Plate Side (ft)"),
+                    yaxis=dict(range=[0, 5.5], title="Plate Height (ft)"),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                    **CHART_LAYOUT,
+                )
+                st.plotly_chart(fig_loc, use_container_width=True)
+
+                # AI insight for command
+                spread = np.sqrt(std_s**2 + std_h**2)
+                grade = "Elite" if spread < 0.35 else "Plus" if spread < 0.45 else "Average" if spread < 0.6 else "Below Avg"
+                csw_val = loc_ptd["PitchCall"].isin(["StrikeCalled", "StrikeSwinging"]).mean() * 100
+                st.markdown(
+                    f'<div style="background:#f0f7ff;border-left:4px solid #2d7fc1;padding:12px 16px;'
+                    f'border-radius:4px;margin:8px 0;">'
+                    f'<b style="color:#1a1a2e;">Command Assessment — {loc_pitch_sel}:</b><br>'
+                    f'<span style="color:#333;">Location spread: <b>{spread:.2f} ft ({grade})</b> | '
+                    f'CSW%: <b>{csw_val:.1f}%</b> | '
+                    f'Avg location: ({mean_s:.2f}S, {mean_h:.2f}H)<br>'
+                    f'{"This pitch is located with precision — trust it in any count." if grade in ("Elite", "Plus") else "Work on tightening location consistency — wider spread means more mistakes over the plate."}'
+                    f'</span></div>',
+                    unsafe_allow_html=True,
+                )
+
+    # ═══════════════════════════════════════════
+    # TAB 7: AI REPORT
+    # ═══════════════════════════════════════════
+    with tab_ai:
+        section_header("AI Scouting Report")
+        st.caption("Comprehensive AI-generated analysis with actionable recommendations")
+
+        tunnel_df_report = _compute_tunnel_score(pdf)
+        pair_df_report = _compute_pitch_pair_results(pdf, data)
+        report = _generate_ai_report(pdf, pitcher, stuff_df, tunnel_df_report, pair_df_report, data)
+        st.markdown(report)
+
+        # Downloadable report
+        st.download_button(
+            "Download Report as Text",
+            report,
+            file_name=f"pitch_design_report_{pitcher.replace(', ', '_')}.md",
+            mime="text/markdown",
+            key="pdl_download",
+        )
+
+
+# ──────────────────────────────────────────────
 # MAIN
 # ──────────────────────────────────────────────
 def main():
@@ -2192,6 +3634,7 @@ def main():
         "Catcher Analytics",
         "Team Overview",
         "Player Development",
+        "Pitch Design Lab",
         "Game Log",
         "Opponent Scouting",
     ], label_visibility="collapsed")
@@ -2219,6 +3662,8 @@ def main():
         page_team(data)
     elif page == "Player Development":
         page_development(data)
+    elif page == "Pitch Design Lab":
+        page_pitch_design_lab(data)
     elif page == "Game Log":
         page_game_log(data)
     elif page == "Opponent Scouting":
