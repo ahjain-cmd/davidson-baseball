@@ -3591,6 +3591,896 @@ def page_pitch_design_lab(data):
 
 
 # ──────────────────────────────────────────────
+# HITTERS LAB HELPERS
+# ──────────────────────────────────────────────
+
+def _create_zone_grid_data(df, metric="swing_rate"):
+    """Create 5x5 zone grid data for heatmaps."""
+    h_edges = [-2, -0.83, -0.28, 0.28, 0.83, 2]
+    v_edges = [0.5, 1.5, 2.17, 2.83, 3.5, 4.5]
+    grid = np.full((5, 5), np.nan)
+    annot = [['' for _ in range(5)] for _ in range(5)]
+    for i in range(5):
+        for j in range(5):
+            zone_df = df[
+                (df["PlateLocSide"].between(h_edges[i], h_edges[i + 1])) &
+                (df["PlateLocHeight"].between(v_edges[j], v_edges[j + 1]))
+            ]
+            if len(zone_df) < 3:
+                continue
+            swings = zone_df[zone_df["PitchCall"].isin(SWING_CALLS)]
+            whiffs = zone_df[zone_df["PitchCall"] == "StrikeSwinging"]
+            contacts = zone_df[zone_df["PitchCall"].isin(CONTACT_CALLS)]
+            batted = zone_df[zone_df["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
+            val = np.nan
+            if metric == "swing_rate":
+                val = len(swings) / len(zone_df) * 100
+                annot[j][i] = f"{val:.0f}%"
+            elif metric == "whiff_rate":
+                if len(swings) > 0:
+                    val = len(whiffs) / len(swings) * 100
+                    annot[j][i] = f"{val:.0f}%"
+            elif metric == "contact_rate":
+                if len(swings) > 0:
+                    val = len(contacts) / len(swings) * 100
+                    annot[j][i] = f"{val:.0f}%"
+            elif metric == "avg_ev":
+                if len(batted) > 0:
+                    val = batted["ExitSpeed"].mean()
+                    annot[j][i] = f"{val:.0f}"
+            grid[j, i] = val
+    return grid, annot
+
+
+def _compute_expected_outcomes(batted_df):
+    """Compute expected outcomes based on EV/LA buckets."""
+    if batted_df.empty:
+        return {}
+    outcomes = []
+    for _, row in batted_df.iterrows():
+        ev, la = row.get("ExitSpeed", 0), row.get("Angle", 0)
+        if pd.isna(ev) or pd.isna(la):
+            continue
+        if ev >= 98 and 8 <= la <= 32:
+            outcomes.append({"xOut": 0.25, "x1B": 0.10, "x2B": 0.20, "x3B": 0.05, "xHR": 0.40})
+        elif ev >= 95 and 25 <= la <= 45:
+            outcomes.append({"xOut": 0.40, "x1B": 0.05, "x2B": 0.15, "x3B": 0.05, "xHR": 0.35})
+        elif 10 <= la <= 25 and ev >= 85:
+            outcomes.append({"xOut": 0.30, "x1B": 0.45, "x2B": 0.20, "x3B": 0.03, "xHR": 0.02})
+        elif la < 10:
+            outcomes.append({"xOut": 0.75, "x1B": 0.23, "x2B": 0.02, "x3B": 0.00, "xHR": 0.00})
+        elif la > 45:
+            outcomes.append({"xOut": 0.95, "x1B": 0.03, "x2B": 0.01, "x3B": 0.00, "xHR": 0.01})
+        elif ev < 70:
+            outcomes.append({"xOut": 0.90, "x1B": 0.08, "x2B": 0.02, "x3B": 0.00, "xHR": 0.00})
+        else:
+            outcomes.append({"xOut": 0.70, "x1B": 0.20, "x2B": 0.08, "x3B": 0.01, "xHR": 0.01})
+    if not outcomes:
+        return {}
+    odf = pd.DataFrame(outcomes)
+    odf["xwOBA"] = 0.9 * odf["x1B"] + 1.25 * odf["x2B"] + 1.6 * odf["x3B"] + 2.0 * odf["xHR"]
+    return odf.mean().to_dict()
+
+
+def _generate_hitter_ai_report(bdf, batter_name, all_data, season_filter):
+    """Generate a template-based AI scouting report for a hitter."""
+    lines = []
+    dn = display_name(batter_name)
+    lines.append(f"# AI Hitting Report: {dn}")
+    lines.append("")
+
+    all_stats = compute_batter_stats(all_data, season_filter=season_filter)
+    pr = all_stats[all_stats["Batter"] == batter_name]
+    if pr.empty:
+        lines.append("Insufficient data to generate report.")
+        return "\n".join(lines)
+    pr = pr.iloc[0]
+
+    batted = bdf[bdf["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
+    n_batted = len(batted)
+    avg_ev = pr.get("AvgEV", np.nan)
+    max_ev = pr.get("MaxEV", np.nan)
+    barrel_pct = pr.get("BarrelPct", np.nan)
+    hh_pct = pr.get("HardHitPct", np.nan)
+    ss_pct = pr.get("SweetSpotPct", np.nan)
+    k_pct = pr.get("KPct", np.nan)
+    bb_pct = pr.get("BBPct", np.nan)
+    whiff_pct = pr.get("WhiffPct", np.nan)
+    chase_pct = pr.get("ChasePct", np.nan)
+    gb_pct = pr.get("GBPct", np.nan)
+    fb_pct = pr.get("FBPct", np.nan)
+    ld_pct = pr.get("LDPct", np.nan)
+    pull_pct = pr.get("PullPct", np.nan)
+    oppo_pct = pr.get("OppoPct", np.nan)
+
+    if not pd.isna(avg_ev) and avg_ev >= 89 and not pd.isna(barrel_pct) and barrel_pct >= 8:
+        profile = "Power Hitter"
+    elif not pd.isna(k_pct) and k_pct < 15 and not pd.isna(whiff_pct) and whiff_pct < 20:
+        profile = "Contact-First Hitter"
+    elif not pd.isna(bb_pct) and bb_pct >= 12 and not pd.isna(chase_pct) and chase_pct < 25:
+        profile = "Disciplined Hitter"
+    else:
+        profile = "All-Around Hitter"
+
+    side = bdf["BatterSide"].mode().iloc[0] if bdf["BatterSide"].notna().any() else "Unknown"
+    bats = {"Right": "R", "Left": "L", "Switch": "S"}.get(side, side)
+
+    lines.append(f"## Offensive Profile: {profile}")
+    lines.append(f"- **Bats**: {bats}")
+    lines.append(f"- **Pitches Seen**: {len(bdf)} | **Batted Balls**: {n_batted}")
+    lines.append(f"- **PA**: {int(pr.get('PA', 0))}")
+    lines.append("")
+
+    lines.append("## Batted Ball Quality")
+    ev_grade = "Elite" if not pd.isna(avg_ev) and avg_ev >= 91 else "Plus" if not pd.isna(avg_ev) and avg_ev >= 88 else "Average" if not pd.isna(avg_ev) and avg_ev >= 85 else "Below Average"
+    lines.append(f"- **Avg Exit Velo**: {avg_ev:.1f} mph ({ev_grade})" if not pd.isna(avg_ev) else "- **Avg Exit Velo**: N/A")
+    lines.append(f"- **Max Exit Velo**: {max_ev:.1f} mph" if not pd.isna(max_ev) else "- **Max Exit Velo**: N/A")
+    lines.append(f"- **Barrel%**: {barrel_pct:.1f}%" if not pd.isna(barrel_pct) else "- **Barrel%**: N/A")
+    lines.append(f"- **Hard-Hit%**: {hh_pct:.1f}%" if not pd.isna(hh_pct) else "- **Hard-Hit%**: N/A")
+    lines.append(f"- **Sweet Spot%**: {ss_pct:.1f}%" if not pd.isna(ss_pct) else "- **Sweet Spot%**: N/A")
+    lines.append("")
+
+    lines.append("## Batted Ball Profile")
+    if not any(pd.isna(x) for x in [gb_pct, ld_pct, fb_pct]):
+        lines.append(f"- **GB%**: {gb_pct:.1f}% | **LD%**: {ld_pct:.1f}% | **FB%**: {fb_pct:.1f}%")
+    else:
+        lines.append("- Insufficient batted ball data")
+    if not any(pd.isna(x) for x in [pull_pct, oppo_pct]):
+        lines.append(f"- **Pull%**: {pull_pct:.1f}% | **Oppo%**: {oppo_pct:.1f}%")
+    lines.append("")
+
+    lines.append("## Plate Discipline")
+    if not any(pd.isna(x) for x in [k_pct, bb_pct]):
+        lines.append(f"- **K%**: {k_pct:.1f}% | **BB%**: {bb_pct:.1f}%")
+    if not pd.isna(whiff_pct):
+        lines.append(f"- **Whiff%**: {whiff_pct:.1f}%")
+    if not pd.isna(chase_pct):
+        lines.append(f"- **Chase%**: {chase_pct:.1f}%")
+        if chase_pct > 35:
+            lines.append("  - *High chase rate — susceptible to pitches out of the zone*")
+        elif chase_pct < 22:
+            lines.append("  - *Excellent discipline — rarely chases out of zone*")
+    lines.append("")
+
+    # Best / worst pitch types
+    pt_evs = {}
+    for pt in bdf["TaggedPitchType"].dropna().unique():
+        pt_batted = bdf[(bdf["TaggedPitchType"] == pt) & (bdf["PitchCall"] == "InPlay")].dropna(subset=["ExitSpeed"])
+        if len(pt_batted) >= 3:
+            pt_evs[pt] = pt_batted["ExitSpeed"].mean()
+
+    lines.append("## Strengths")
+    strengths = []
+    if not pd.isna(avg_ev) and avg_ev >= 88:
+        strengths.append(f"Premium exit velocity ({avg_ev:.1f} mph avg)")
+    if not pd.isna(barrel_pct) and barrel_pct >= 8:
+        strengths.append(f"High barrel rate ({barrel_pct:.1f}%)")
+    if not pd.isna(chase_pct) and chase_pct < 25:
+        strengths.append(f"Elite plate discipline ({chase_pct:.1f}% chase)")
+    if not pd.isna(bb_pct) and bb_pct >= 12:
+        strengths.append(f"Strong walk rate ({bb_pct:.1f}%)")
+    if not pd.isna(ld_pct) and ld_pct >= 25:
+        strengths.append(f"Line drive machine ({ld_pct:.1f}% LD)")
+    if not pd.isna(hh_pct) and hh_pct >= 40:
+        strengths.append(f"Hard-hit rate ({hh_pct:.1f}%)")
+    if pt_evs:
+        best_pt = max(pt_evs, key=pt_evs.get)
+        strengths.append(f"Best vs **{best_pt}** ({pt_evs[best_pt]:.1f} mph avg EV)")
+    if not strengths:
+        strengths.append("Developing hitter — building strengths across the board")
+    for s in strengths:
+        lines.append(f"- {s}")
+    lines.append("")
+
+    lines.append("## Areas for Improvement")
+    weaknesses = []
+    if not pd.isna(k_pct) and k_pct > 25:
+        weaknesses.append(f"High strikeout rate ({k_pct:.1f}%)")
+    if not pd.isna(chase_pct) and chase_pct > 32:
+        weaknesses.append(f"Elevated chase rate ({chase_pct:.1f}%)")
+    if not pd.isna(whiff_pct) and whiff_pct > 30:
+        weaknesses.append(f"High whiff rate ({whiff_pct:.1f}%)")
+    if not pd.isna(gb_pct) and gb_pct > 55:
+        weaknesses.append(f"Ground ball heavy ({gb_pct:.1f}%) — needs to elevate")
+    if not pd.isna(avg_ev) and avg_ev < 83:
+        weaknesses.append(f"Below-average exit velocity ({avg_ev:.1f} mph)")
+    if pt_evs:
+        worst_pt = min(pt_evs, key=pt_evs.get)
+        if pt_evs[worst_pt] < 85:
+            weaknesses.append(f"Struggles vs **{worst_pt}** ({pt_evs[worst_pt]:.1f} mph avg EV)")
+    if not weaknesses:
+        weaknesses.append("No major weaknesses identified")
+    for w in weaknesses:
+        lines.append(f"- {w}")
+    lines.append("")
+
+    lines.append("## Scouting Report (Pitcher's Perspective)")
+    game_plan = []
+    if not pd.isna(chase_pct) and chase_pct > 30:
+        game_plan.append("Expand the zone early — hitter chases frequently")
+    if not pd.isna(whiff_pct) and whiff_pct > 28:
+        game_plan.append("Use swing-and-miss pitches to get strikeouts")
+    if pt_evs:
+        worst_pt = min(pt_evs, key=pt_evs.get)
+        game_plan.append(f"Attack with **{worst_pt}** — lowest damage pitch ({pt_evs[worst_pt]:.1f} mph avg EV)")
+    if not pd.isna(pull_pct) and pull_pct > 50:
+        game_plan.append(f"Heavy pull tendency ({pull_pct:.1f}%) — pitch away and shift")
+    if not pd.isna(gb_pct) and gb_pct > 50:
+        game_plan.append(f"Ground ball tendency ({gb_pct:.1f}%) — keep the ball down")
+    if not game_plan:
+        game_plan.append("Well-rounded hitter — mix pitches and locations")
+    for g in game_plan:
+        lines.append(f"- {g}")
+    lines.append("")
+
+    lines.append("## Development Recommendations")
+    recs = []
+    if not pd.isna(gb_pct) and gb_pct > 50:
+        recs.append("Focus on launch angle — tee work emphasizing driving the ball in the air")
+    if not pd.isna(chase_pct) and chase_pct > 30:
+        recs.append("Pitch recognition drills — improve ability to lay off out-of-zone pitches")
+    if not pd.isna(whiff_pct) and whiff_pct > 28:
+        recs.append("Contact drills — focus on barrel accuracy and timing")
+    if not pd.isna(avg_ev) and avg_ev < 85:
+        recs.append("Bat speed training — increase exit velocity through strength and mechanics")
+    if not pd.isna(oppo_pct) and oppo_pct < 15:
+        recs.append("Opposite field approach — practice staying through the ball")
+    if not recs:
+        recs.append("Continue refining current approach — maintain strengths while looking for marginal gains")
+    for r in recs:
+        lines.append(f"- {r}")
+    return "\n".join(lines)
+
+
+# ──────────────────────────────────────────────
+# PAGE: HITTERS LAB
+# ──────────────────────────────────────────────
+def page_hitters_lab(data):
+    st.markdown('<div class="section-header">Hitters Lab</div>', unsafe_allow_html=True)
+    st.caption("Advanced hitting analytics: batted ball quality, plate discipline, zone coverage, approach optimization, and AI scouting")
+
+    dav_hitting = filter_davidson(data, role="batter")
+    if dav_hitting.empty:
+        st.warning("No Davidson hitting data found.")
+        return
+
+    batters = sorted(dav_hitting["Batter"].unique())
+    col_sel1, col_sel2 = st.columns([2, 1])
+    with col_sel1:
+        batter = st.selectbox("Select Hitter", batters, format_func=display_name, key="hl_batter")
+    with col_sel2:
+        seasons = sorted(dav_hitting["Season"].dropna().unique())
+        season_filter = st.multiselect("Season", seasons, default=seasons, key="hl_season")
+
+    bdf = dav_hitting[dav_hitting["Batter"] == batter].copy()
+    if season_filter:
+        bdf = bdf[bdf["Season"].isin(season_filter)]
+
+    if len(bdf) < 20:
+        st.warning("Not enough pitches (need 20+) to analyze.")
+        return
+
+    jersey = JERSEY.get(batter, "")
+    pos = POSITION.get(batter, "")
+    side = bdf["BatterSide"].mode().iloc[0] if bdf["BatterSide"].notna().any() else ""
+    bats_str = {"Right": "R", "Left": "L", "Switch": "S"}.get(side, side)
+
+    player_header(batter, jersey, pos,
+                  f"{pos} | Bats: {bats_str} | Davidson Wildcats",
+                  f"{len(bdf):,} pitches faced | Seasons: {', '.join(str(int(s)) for s in sorted(bdf['Season'].dropna().unique()))}")
+
+    # Pre-compute common data
+    batted = bdf[bdf["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
+    in_zone_mask = (bdf["PlateLocSide"].abs() <= 0.83) & (bdf["PlateLocHeight"].between(1.5, 3.5))
+    out_zone_mask = ~in_zone_mask & bdf["PlateLocSide"].notna() & bdf["PlateLocHeight"].notna()
+
+    all_batter_stats = compute_batter_stats(data, season_filter=season_filter)
+    player_row = all_batter_stats[all_batter_stats["Batter"] == batter]
+    if player_row.empty:
+        st.warning("Insufficient PA to compute stats.")
+        return
+    pr = player_row.iloc[0]
+
+    tab_quality, tab_discipline, tab_coverage, tab_approach, tab_pitch_type, tab_spray, tab_ai = st.tabs([
+        "Batted Ball Quality", "Plate Discipline", "Zone Coverage",
+        "Approach Analysis", "Pitch Type Performance", "Spray Lab", "AI Report"
+    ])
+
+    # ─── Tab 1: Batted Ball Quality ─────────────────────
+    with tab_quality:
+        section_header("Batted Ball Quality Grades")
+        if len(batted) < 3:
+            st.info("Not enough batted ball data (need 3+ BBE).")
+        else:
+            col_pct, col_scatter = st.columns([1, 2])
+            with col_pct:
+                metrics_data = []
+                for label, col_name, fmt, hib in [
+                    ("Avg EV", "AvgEV", ".1f", True), ("Max EV", "MaxEV", ".1f", True),
+                    ("Barrel%", "BarrelPct", ".1f", True), ("Hard-Hit%", "HardHitPct", ".1f", True),
+                    ("Sweet Spot%", "SweetSpotPct", ".1f", True), ("Avg LA", "AvgLA", ".1f", True),
+                    ("K%", "KPct", ".1f", False), ("BB%", "BBPct", ".1f", True),
+                ]:
+                    val = pr.get(col_name, np.nan)
+                    pct = get_percentile(val, all_batter_stats[col_name].dropna()) if not pd.isna(val) else np.nan
+                    metrics_data.append((label, val, pct, fmt, hib))
+                render_savant_percentile_section(metrics_data, title="Percentile Rankings vs All Hitters")
+
+            with col_scatter:
+                section_header("Exit Velocity vs Launch Angle")
+                bp = batted.copy()
+                conditions = [
+                    (bp["ExitSpeed"] >= 98) & (bp["Angle"].between(8, 32)),
+                    bp["ExitSpeed"] >= 95,
+                    bp["ExitSpeed"].between(80, 95),
+                ]
+                bp["Quality"] = np.select(conditions, ["Barrel", "Hard-Hit", "Medium"], default="Weak")
+                q_colors = {"Barrel": "#d22d49", "Hard-Hit": "#fe6100", "Medium": "#f7c631", "Weak": "#aaaaaa"}
+                fig_ev = px.scatter(bp, x="Angle", y="ExitSpeed", color="Quality",
+                                    color_discrete_map=q_colors,
+                                    labels={"Angle": "Launch Angle", "ExitSpeed": "Exit Velocity (mph)"})
+                fig_ev.add_shape(type="rect", x0=8, x1=32, y0=98, y1=batted["ExitSpeed"].max() + 5,
+                                 fillcolor="rgba(210,45,73,0.08)", line=dict(color="rgba(210,45,73,0.3)", width=1, dash="dash"))
+                fig_ev.add_annotation(x=20, y=batted["ExitSpeed"].max() + 3, text="Barrel Zone",
+                                       font=dict(size=9, color="#d22d49"), showarrow=False)
+                fig_ev.update_layout(**CHART_LAYOUT, height=400,
+                                      legend=dict(orientation="h", y=1.08, x=0.5, xanchor="center", font=dict(size=10)))
+                st.plotly_chart(fig_ev, use_container_width=True)
+
+            col_ev_dist, col_la_dist = st.columns(2)
+            with col_ev_dist:
+                section_header("Exit Velocity Distribution")
+                all_batted = data[data["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
+                fig_violin = go.Figure()
+                fig_violin.add_trace(go.Violin(y=all_batted["ExitSpeed"], name="All Hitters",
+                                                box_visible=True, meanline_visible=True,
+                                                fillcolor="rgba(158,158,158,0.3)", line_color="#9e9e9e", opacity=0.6))
+                fig_violin.add_trace(go.Violin(y=batted["ExitSpeed"], name=display_name(batter),
+                                                box_visible=True, meanline_visible=True,
+                                                fillcolor="rgba(210,45,73,0.4)", line_color="#d22d49", opacity=0.8))
+                fig_violin.update_layout(**CHART_LAYOUT, height=320, showlegend=True,
+                                          yaxis_title="Exit Velocity (mph)",
+                                          legend=dict(orientation="h", y=1.08, x=0.5, xanchor="center", font=dict(size=10)))
+                st.plotly_chart(fig_violin, use_container_width=True)
+
+            with col_la_dist:
+                section_header("Launch Angle Distribution")
+                la_bins = [(-90, -10, "Topped", "#d62728"), (-10, 8, "Ground Ball", "#ff7f0e"),
+                           (8, 32, "Sweet Spot", "#2ca02c"), (32, 50, "Fly Ball", "#1f77b4"), (50, 90, "Popup", "#9467bd")]
+                fig_la = go.Figure()
+                for lo, hi, lbl, clr in la_bins:
+                    subset = batted[batted["Angle"].between(lo, hi)]
+                    fig_la.add_trace(go.Bar(x=[lbl], y=[len(subset)], name=lbl, marker_color=clr,
+                                            text=[f"{len(subset)/len(batted)*100:.0f}%"], textposition="outside"))
+                fig_la.update_layout(**CHART_LAYOUT, height=320, showlegend=False,
+                                      yaxis_title="Count", xaxis_title="Launch Angle Zone", bargap=0.15)
+                st.plotly_chart(fig_la, use_container_width=True)
+
+            section_header("Expected Outcomes (EV/LA Model)")
+            xo = _compute_expected_outcomes(batted)
+            if xo:
+                xo_cols = st.columns(6)
+                for i, (k, lbl, clr) in enumerate([
+                    ("xOut", "xOut%", "#9e9e9e"), ("x1B", "x1B%", "#2ca02c"), ("x2B", "x2B%", "#1f77b4"),
+                    ("x3B", "x3B%", "#ff7f0e"), ("xHR", "xHR%", "#d22d49"), ("xwOBA", "xwOBA", "#6a0dad"),
+                ]):
+                    with xo_cols[i]:
+                        val = xo.get(k, 0)
+                        fmt_val = f"{val*100:.1f}%" if k != "xwOBA" else f"{val:.3f}"
+                        st.markdown(
+                            f'<div style="text-align:center;padding:12px;background:white;border-radius:8px;'
+                            f'border:1px solid #eee;">'
+                            f'<div style="font-size:24px;font-weight:800;color:{clr} !important;">{fmt_val}</div>'
+                            f'<div style="font-size:11px;font-weight:600;color:#666 !important;text-transform:uppercase;">'
+                            f'{lbl}</div></div>', unsafe_allow_html=True)
+
+    # ─── Tab 2: Plate Discipline ────────────────────────
+    with tab_discipline:
+        section_header("Plate Discipline Overview")
+        disc_metrics = []
+        for label, col_name, fmt, hib in [
+            ("Chase%", "ChasePct", ".1f", False), ("Whiff%", "WhiffPct", ".1f", False),
+            ("K%", "KPct", ".1f", False), ("BB%", "BBPct", ".1f", True),
+            ("Swing%", "SwingPct", ".1f", True), ("Z-Swing%", "ZoneSwingPct", ".1f", True),
+            ("Z-Contact%", "ZoneContactPct", ".1f", True),
+        ]:
+            val = pr.get(col_name, np.nan)
+            pct = get_percentile(val, all_batter_stats[col_name].dropna()) if not pd.isna(val) else np.nan
+            disc_metrics.append((label, val, pct, fmt, hib))
+
+        col_disc_pct, col_disc_grid = st.columns([1, 2])
+        with col_disc_pct:
+            render_savant_percentile_section(disc_metrics, title="Discipline Percentiles")
+        with col_disc_grid:
+            section_header("Swing Rate by Zone")
+            grid_swing, annot_swing = _create_zone_grid_data(bdf, metric="swing_rate")
+            h_labels = ["Far Inside", "Inside", "Middle", "Outside", "Far Outside"]
+            v_labels = ["High+", "High", "Mid", "Low", "Low+"]
+            fig_grid = go.Figure(data=go.Heatmap(
+                z=grid_swing[::-1], text=annot_swing[::-1], texttemplate="%{text}",
+                x=h_labels, y=v_labels,
+                colorscale=[[0, "#1f77b4"], [0.5, "#f7f7f7"], [1, "#d22d49"]],
+                zmin=0, zmax=100, showscale=True,
+                colorbar=dict(title="Swing%", titleside="right", len=0.8),
+            ))
+            fig_grid.add_shape(type="rect", x0=0.5, x1=3.5, y0=0.5, y1=3.5,
+                                line=dict(color="#333", width=3), fillcolor="rgba(0,0,0,0)")
+            fig_grid.update_layout(**CHART_LAYOUT, height=380, xaxis=dict(side="bottom"))
+            st.plotly_chart(fig_grid, use_container_width=True)
+
+        col_ev_grid, col_chase = st.columns(2)
+        with col_ev_grid:
+            section_header("Avg EV by Zone")
+            grid_ev, annot_ev = _create_zone_grid_data(bdf, metric="avg_ev")
+            fig_ev_grid = go.Figure(data=go.Heatmap(
+                z=grid_ev[::-1], text=annot_ev[::-1], texttemplate="%{text}",
+                x=h_labels, y=v_labels,
+                colorscale=[[0, "#1f77b4"], [0.5, "#f7f7f7"], [1, "#d22d49"]],
+                zmin=60, zmax=100, showscale=True,
+                colorbar=dict(title="EV", titleside="right", len=0.8),
+            ))
+            fig_ev_grid.add_shape(type="rect", x0=0.5, x1=3.5, y0=0.5, y1=3.5,
+                                   line=dict(color="#333", width=3), fillcolor="rgba(0,0,0,0)")
+            fig_ev_grid.update_layout(**CHART_LAYOUT, height=380, xaxis=dict(side="bottom"))
+            st.plotly_chart(fig_ev_grid, use_container_width=True)
+
+        with col_chase:
+            section_header("Chase Locations")
+            chase_df = bdf[out_zone_mask].copy()
+            if not chase_df.empty:
+                chase_df["Outcome"] = "Taken"
+                chase_df.loc[chase_df["PitchCall"] == "StrikeSwinging", "Outcome"] = "Swing & Miss"
+                chase_df.loc[chase_df["PitchCall"].isin(["FoulBall", "FoulBallNotFieldable", "FoulBallFieldable"]), "Outcome"] = "Foul"
+                chase_df.loc[chase_df["PitchCall"] == "InPlay", "Outcome"] = "In Play"
+                chase_colors = {"Taken": "#aaaaaa", "Swing & Miss": "#d22d49", "Foul": "#f7c631", "In Play": "#2ca02c"}
+                fig_chase = px.scatter(chase_df.dropna(subset=["PlateLocSide", "PlateLocHeight"]),
+                                        x="PlateLocSide", y="PlateLocHeight", color="Outcome",
+                                        color_discrete_map=chase_colors, opacity=0.6,
+                                        labels={"PlateLocSide": "Horizontal", "PlateLocHeight": "Vertical"})
+                add_strike_zone(fig_chase)
+                fig_chase.update_layout(**CHART_LAYOUT, height=380,
+                                         xaxis=dict(range=[-2.5, 2.5]), yaxis=dict(range=[0, 5]),
+                                         legend=dict(orientation="h", y=1.08, x=0.5, xanchor="center", font=dict(size=10)))
+                st.plotly_chart(fig_chase, use_container_width=True)
+            else:
+                st.info("No out-of-zone data available.")
+
+        section_header("Pitch Recognition by Type")
+        pt_disc_rows = []
+        for pt in sorted(bdf["TaggedPitchType"].dropna().unique()):
+            pt_df = bdf[bdf["TaggedPitchType"] == pt]
+            if len(pt_df) < 5:
+                continue
+            pt_sw = pt_df[pt_df["PitchCall"].isin(SWING_CALLS)]
+            pt_wh = pt_df[pt_df["PitchCall"] == "StrikeSwinging"]
+            pt_ct = pt_df[pt_df["PitchCall"].isin(CONTACT_CALLS)]
+            pt_oz = pt_df[~((pt_df["PlateLocSide"].abs() <= 0.83) & (pt_df["PlateLocHeight"].between(1.5, 3.5))) & pt_df["PlateLocSide"].notna()]
+            pt_ch = pt_oz[pt_oz["PitchCall"].isin(SWING_CALLS)]
+            pt_disc_rows.append({
+                "Pitch Type": pt, "Seen": len(pt_df),
+                "Swing%": f"{len(pt_sw)/len(pt_df)*100:.1f}",
+                "Whiff%": f"{len(pt_wh)/max(len(pt_sw),1)*100:.1f}" if len(pt_sw) > 0 else "-",
+                "Contact%": f"{len(pt_ct)/max(len(pt_sw),1)*100:.1f}" if len(pt_sw) > 0 else "-",
+                "Chase%": f"{len(pt_ch)/max(len(pt_oz),1)*100:.1f}" if len(pt_oz) > 0 else "-",
+            })
+        if pt_disc_rows:
+            st.dataframe(pd.DataFrame(pt_disc_rows).set_index("Pitch Type"), use_container_width=True)
+
+    # ─── Tab 3: Zone Coverage ───────────────────────────
+    with tab_coverage:
+        section_header("Zone Coverage Analysis")
+        if len(batted) < 5:
+            st.info("Not enough batted ball data for zone coverage analysis.")
+        else:
+            col_contact_hz, col_damage_hz = st.columns(2)
+            with col_contact_hz:
+                section_header("Contact Rate Heatmap")
+                contact_loc = bdf[bdf["PitchCall"].isin(CONTACT_CALLS)].dropna(subset=["PlateLocSide", "PlateLocHeight"])
+                if not contact_loc.empty:
+                    fig_contact = go.Figure()
+                    fig_contact.add_trace(go.Histogram2dContour(
+                        x=contact_loc["PlateLocSide"], y=contact_loc["PlateLocHeight"],
+                        colorscale=[[0, "rgba(255,255,255,0)"], [0.3, "#a8d5e2"], [0.6, "#f7c631"], [1, "#d22d49"]],
+                        contours=dict(showlines=False), ncontours=15, showscale=False))
+                    fig_contact.add_trace(go.Scatter(
+                        x=contact_loc["PlateLocSide"], y=contact_loc["PlateLocHeight"],
+                        mode="markers", marker=dict(size=4, color="#2ca02c", opacity=0.3),
+                        showlegend=False, hoverinfo="skip"))
+                    add_strike_zone(fig_contact)
+                    fig_contact.update_layout(**CHART_LAYOUT, height=400,
+                                               xaxis=dict(range=[-2.5, 2.5], title="Horizontal"),
+                                               yaxis=dict(range=[0, 5], title="Vertical"))
+                    st.plotly_chart(fig_contact, use_container_width=True)
+
+            with col_damage_hz:
+                section_header("Damage Heatmap (Avg EV)")
+                batted_loc = batted.dropna(subset=["PlateLocSide", "PlateLocHeight"])
+                if not batted_loc.empty:
+                    fig_damage = go.Figure()
+                    fig_damage.add_trace(go.Histogram2dContour(
+                        x=batted_loc["PlateLocSide"], y=batted_loc["PlateLocHeight"],
+                        z=batted_loc["ExitSpeed"], histfunc="avg",
+                        colorscale=[[0, "#1f77b4"], [0.5, "#f7f7f7"], [1, "#d22d49"]],
+                        contours=dict(showlines=False), ncontours=12, showscale=True,
+                        colorbar=dict(title="Avg EV", len=0.8)))
+                    barrel_loc = batted_loc[(batted_loc["ExitSpeed"] >= 98) & (batted_loc["Angle"].between(8, 32))]
+                    if not barrel_loc.empty:
+                        fig_damage.add_trace(go.Scatter(
+                            x=barrel_loc["PlateLocSide"], y=barrel_loc["PlateLocHeight"],
+                            mode="markers", marker=dict(size=12, color="#d22d49", symbol="star",
+                                                         line=dict(width=1, color="white")),
+                            name="Barrels", hovertemplate="EV: %{customdata[0]:.1f}<extra></extra>",
+                            customdata=barrel_loc[["ExitSpeed"]].values))
+                    add_strike_zone(fig_damage)
+                    fig_damage.update_layout(**CHART_LAYOUT, height=400,
+                                              xaxis=dict(range=[-2.5, 2.5], title="Horizontal"),
+                                              yaxis=dict(range=[0, 5], title="Vertical"),
+                                              legend=dict(orientation="h", y=1.08, x=0.5, xanchor="center", font=dict(size=10)))
+                    st.plotly_chart(fig_damage, use_container_width=True)
+
+            col_whiff_hz, _ = st.columns(2)
+            with col_whiff_hz:
+                section_header("Whiff Zone Map")
+                grid_whiff, annot_whiff = _create_zone_grid_data(bdf, metric="whiff_rate")
+                h_lbl = ["Far In", "Inside", "Middle", "Outside", "Far Out"]
+                v_lbl = ["High+", "High", "Mid", "Low", "Low+"]
+                fig_wz = go.Figure(data=go.Heatmap(
+                    z=grid_whiff[::-1], text=annot_whiff[::-1], texttemplate="%{text}",
+                    x=h_lbl, y=v_lbl,
+                    colorscale=[[0, "#2ca02c"], [0.5, "#f7f7f7"], [1, "#d22d49"]],
+                    zmin=0, zmax=60, showscale=True,
+                    colorbar=dict(title="Whiff%", titleside="right", len=0.8)))
+                fig_wz.add_shape(type="rect", x0=0.5, x1=3.5, y0=0.5, y1=3.5,
+                                  line=dict(color="#333", width=3), fillcolor="rgba(0,0,0,0)")
+                fig_wz.update_layout(**CHART_LAYOUT, height=380)
+                st.plotly_chart(fig_wz, use_container_width=True)
+
+            section_header("Damage by Pitch Type & Location")
+            top_pts = [pt for pt in sorted(bdf["TaggedPitchType"].dropna().unique())
+                       if len(bdf[bdf["TaggedPitchType"] == pt]) >= 10][:4]
+            if top_pts:
+                pt_cols = st.columns(len(top_pts))
+                for idx, pt in enumerate(top_pts):
+                    with pt_cols[idx]:
+                        pt_b = bdf[(bdf["TaggedPitchType"] == pt) & (bdf["PitchCall"] == "InPlay")].dropna(
+                            subset=["ExitSpeed", "PlateLocSide", "PlateLocHeight"])
+                        st.markdown(f'<div style="text-align:center;font-weight:700;font-size:13px;color:#1a1a2e !important;'
+                                    f'margin-bottom:4px;">{pt} ({len(pt_b)} BBE)</div>', unsafe_allow_html=True)
+                        if len(pt_b) >= 3:
+                            fig_pt = go.Figure()
+                            fig_pt.add_trace(go.Scatter(
+                                x=pt_b["PlateLocSide"], y=pt_b["PlateLocHeight"], mode="markers",
+                                marker=dict(size=8, color=pt_b["ExitSpeed"],
+                                            colorscale=[[0, "#1f77b4"], [0.5, "#f7f7f7"], [1, "#d22d49"]],
+                                            cmin=60, cmax=100,
+                                            showscale=(idx == len(top_pts) - 1),
+                                            colorbar=dict(title="EV", len=0.8) if idx == len(top_pts) - 1 else None,
+                                            line=dict(width=0.5, color="white")),
+                                hovertemplate="EV: %{marker.color:.1f}<extra></extra>"))
+                            add_strike_zone(fig_pt)
+                            fig_pt.update_layout(**CHART_LAYOUT, height=300,
+                                                  xaxis=dict(range=[-2.5, 2.5], showticklabels=False),
+                                                  yaxis=dict(range=[0, 5], showticklabels=False),
+                                                  margin=dict(l=5, r=5, t=5, b=5))
+                            st.plotly_chart(fig_pt, use_container_width=True)
+                        else:
+                            st.caption("Not enough data")
+
+    # ─── Tab 4: Approach Analysis ───────────────────────
+    with tab_approach:
+        section_header("Count-Based Approach")
+        bdf_c = bdf.dropna(subset=["Balls", "Strikes"]).copy()
+        bdf_c["Balls"] = bdf_c["Balls"].astype(int)
+        bdf_c["Strikes"] = bdf_c["Strikes"].astype(int)
+
+        count_grid_ev = np.full((4, 3), np.nan)
+        count_grid_sw = np.full((4, 3), np.nan)
+        annot_ev = [['' for _ in range(3)] for _ in range(4)]
+        annot_sw = [['' for _ in range(3)] for _ in range(4)]
+        for b in range(4):
+            for s in range(3):
+                cd = bdf_c[(bdf_c["Balls"] == b) & (bdf_c["Strikes"] == s)]
+                if len(cd) < 3:
+                    continue
+                cb = cd[cd["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
+                cs = cd[cd["PitchCall"].isin(SWING_CALLS)]
+                if len(cb) > 0:
+                    ev_v = cb["ExitSpeed"].mean()
+                    count_grid_ev[b, s] = ev_v
+                    annot_ev[b][s] = f"{ev_v:.0f}"
+                sw_v = len(cs) / len(cd) * 100
+                count_grid_sw[b, s] = sw_v
+                annot_sw[b][s] = f"{sw_v:.0f}%"
+
+        col_evc, col_swc = st.columns(2)
+        with col_evc:
+            section_header("Avg EV by Count")
+            fig_evc = go.Figure(data=go.Heatmap(
+                z=count_grid_ev, text=annot_ev, texttemplate="%{text}",
+                x=["0 Strikes", "1 Strike", "2 Strikes"], y=["0 Balls", "1 Ball", "2 Balls", "3 Balls"],
+                colorscale=[[0, "#1f77b4"], [0.5, "#f7f7f7"], [1, "#d22d49"]],
+                zmin=70, zmax=100, showscale=True, colorbar=dict(title="EV", len=0.8)))
+            fig_evc.update_layout(**CHART_LAYOUT, height=320)
+            st.plotly_chart(fig_evc, use_container_width=True)
+        with col_swc:
+            section_header("Swing% by Count")
+            fig_swc = go.Figure(data=go.Heatmap(
+                z=count_grid_sw, text=annot_sw, texttemplate="%{text}",
+                x=["0 Strikes", "1 Strike", "2 Strikes"], y=["0 Balls", "1 Ball", "2 Balls", "3 Balls"],
+                colorscale=[[0, "#1f77b4"], [0.5, "#f7f7f7"], [1, "#d22d49"]],
+                zmin=0, zmax=100, showscale=True, colorbar=dict(title="Swing%", len=0.8)))
+            fig_swc.update_layout(**CHART_LAYOUT, height=320)
+            st.plotly_chart(fig_swc, use_container_width=True)
+
+        col_fp, col_2k = st.columns(2)
+        with col_fp:
+            section_header("First Pitch Performance")
+            fp = bdf[bdf["PitchofPA"] == 1] if "PitchofPA" in bdf.columns else pd.DataFrame()
+            if not fp.empty and len(fp) >= 5:
+                fp_sw = fp[fp["PitchCall"].isin(SWING_CALLS)]
+                fp_wh = fp[fp["PitchCall"] == "StrikeSwinging"]
+                fp_bt = fp[fp["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
+                for lbl, val in [("1st Pitch Swing%", len(fp_sw)/len(fp)*100),
+                                  ("1st Pitch Whiff%", len(fp_wh)/max(len(fp_sw),1)*100 if len(fp_sw) > 0 else 0),
+                                  ("1st Pitch Avg EV", fp_bt["ExitSpeed"].mean() if len(fp_bt) > 0 else np.nan),
+                                  ("1st Pitch BBE", float(len(fp_bt)))]:
+                    fv = f"{val:.1f}" if not pd.isna(val) else "-"
+                    st.markdown(
+                        f'<div style="display:flex;justify-content:space-between;padding:8px 12px;'
+                        f'background:white;border-radius:6px;margin:4px 0;border:1px solid #eee;">'
+                        f'<span style="font-size:12px;font-weight:600;color:#1a1a2e !important;">{lbl}</span>'
+                        f'<span style="font-size:14px;font-weight:800;color:#d22d49 !important;">{fv}</span></div>',
+                        unsafe_allow_html=True)
+            else:
+                st.info("Not enough first-pitch data.")
+
+        with col_2k:
+            section_header("2-Strike Adjustments")
+            early = bdf_c[bdf_c["Strikes"] < 2]
+            two_k = bdf_c[bdf_c["Strikes"] == 2]
+            if len(early) >= 10 and len(two_k) >= 10:
+                rows_2k = []
+                for lbl, fn in [
+                    ("Swing%", lambda d: len(d[d["PitchCall"].isin(SWING_CALLS)])/max(len(d),1)*100),
+                    ("Whiff%", lambda d: len(d[d["PitchCall"]=="StrikeSwinging"])/max(len(d[d["PitchCall"].isin(SWING_CALLS)]),1)*100 if len(d[d["PitchCall"].isin(SWING_CALLS)])>0 else 0),
+                ]:
+                    ev = fn(early)
+                    tv = fn(two_k)
+                    rows_2k.append({"Metric": lbl, "<2 Strikes": f"{ev:.1f}%", "2 Strikes": f"{tv:.1f}%", "Change": f"{tv-ev:+.1f}%"})
+                st.dataframe(pd.DataFrame(rows_2k).set_index("Metric"), use_container_width=True)
+            else:
+                st.info("Not enough data for 2-strike analysis.")
+
+        section_header("At-Bat Length Outcomes")
+        if "PitchofPA" in bdf.columns:
+            pa_id_cols = [c for c in ["GameID", "PAofInning", "Inning", "Batter"] if c in bdf.columns]
+            if len(pa_id_cols) >= 2:
+                pa_lens = bdf.groupby(pa_id_cols)["PitchofPA"].max()
+                length_rows = []
+                for lo, hi, lbl in [(1, 3, "1-3 pitches"), (4, 6, "4-6 pitches"), (7, 20, "7+ pitches")]:
+                    pa_ids = pa_lens[(pa_lens >= lo) & (pa_lens <= hi)]
+                    n_pa = len(pa_ids)
+                    if n_pa == 0:
+                        continue
+                    pa_sub = bdf.set_index(pa_id_cols).loc[pa_ids.index].reset_index()
+                    ks = pa_sub[pa_sub["KorBB"] == "Strikeout"].drop_duplicates(subset=pa_id_cols) if "KorBB" in pa_sub.columns else pd.DataFrame()
+                    bbs = pa_sub[pa_sub["KorBB"] == "Walk"].drop_duplicates(subset=pa_id_cols) if "KorBB" in pa_sub.columns else pd.DataFrame()
+                    bbe = pa_sub[pa_sub["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
+                    length_rows.append({
+                        "PA Length": lbl, "PA": n_pa,
+                        "K%": f"{len(ks)/n_pa*100:.1f}%",
+                        "BB%": f"{len(bbs)/n_pa*100:.1f}%",
+                        "Avg EV": f"{bbe['ExitSpeed'].mean():.1f}" if len(bbe) > 0 else "-",
+                    })
+                if length_rows:
+                    st.dataframe(pd.DataFrame(length_rows).set_index("PA Length"), use_container_width=True)
+
+    # ─── Tab 5: Pitch Type Performance ──────────────────
+    with tab_pitch_type:
+        section_header("Performance by Pitch Type")
+        pt_rows = []
+        for pt in sorted(bdf["TaggedPitchType"].dropna().unique()):
+            ptd = bdf[bdf["TaggedPitchType"] == pt]
+            if len(ptd) < 5:
+                continue
+            pt_sw = ptd[ptd["PitchCall"].isin(SWING_CALLS)]
+            pt_wh = ptd[ptd["PitchCall"] == "StrikeSwinging"]
+            pt_ct = ptd[ptd["PitchCall"].isin(CONTACT_CALLS)]
+            pt_bt = ptd[ptd["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
+            pt_br = pt_bt[(pt_bt["ExitSpeed"] >= 98) & (pt_bt["Angle"].between(8, 32))] if len(pt_bt) > 0 else pd.DataFrame()
+            pt_rows.append({
+                "Pitch Type": pt, "Seen": len(ptd),
+                "Seen%": len(ptd)/len(bdf)*100,
+                "Swing%": len(pt_sw)/len(ptd)*100,
+                "Whiff%": len(pt_wh)/max(len(pt_sw),1)*100 if len(pt_sw) > 0 else 0,
+                "Contact%": len(pt_ct)/max(len(pt_sw),1)*100 if len(pt_sw) > 0 else 0,
+                "BBE": len(pt_bt),
+                "Avg EV": pt_bt["ExitSpeed"].mean() if len(pt_bt) > 0 else np.nan,
+                "Max EV": pt_bt["ExitSpeed"].max() if len(pt_bt) > 0 else np.nan,
+                "Barrel%": len(pt_br)/max(len(pt_bt),1)*100 if len(pt_bt) > 0 else 0,
+            })
+
+        if pt_rows:
+            pt_df = pd.DataFrame(pt_rows)
+            disp = pt_df.copy()
+            for c in ["Seen%", "Swing%", "Whiff%", "Contact%", "Barrel%"]:
+                disp[c] = disp[c].map(lambda x: f"{x:.1f}%")
+            for c in ["Avg EV", "Max EV"]:
+                disp[c] = disp[c].map(lambda x: f"{x:.1f}" if not pd.isna(x) else "-")
+            st.dataframe(disp.set_index("Pitch Type"), use_container_width=True)
+
+            col_evb, col_whb = st.columns(2)
+            with col_evb:
+                section_header("Avg EV by Pitch Type")
+                ch = pt_df.dropna(subset=["Avg EV"]).sort_values("Avg EV", ascending=True)
+                if not ch.empty:
+                    colors = [PITCH_COLORS.get(p, "#aaa") for p in ch["Pitch Type"]]
+                    fig_pe = go.Figure(go.Bar(
+                        y=ch["Pitch Type"], x=ch["Avg EV"], orientation="h", marker_color=colors,
+                        text=ch["Avg EV"].map(lambda x: f"{x:.1f}"), textposition="outside"))
+                    fig_pe.update_layout(**CHART_LAYOUT, height=max(200, len(ch)*40+60),
+                                          xaxis_title="Avg Exit Velocity (mph)",
+                                          xaxis=dict(range=[60, ch["Avg EV"].max()+8]))
+                    st.plotly_chart(fig_pe, use_container_width=True)
+            with col_whb:
+                section_header("Whiff% by Pitch Type")
+                ch2 = pt_df.sort_values("Whiff%", ascending=True)
+                colors = [PITCH_COLORS.get(p, "#aaa") for p in ch2["Pitch Type"]]
+                fig_pw = go.Figure(go.Bar(
+                    y=ch2["Pitch Type"], x=ch2["Whiff%"], orientation="h", marker_color=colors,
+                    text=ch2["Whiff%"].map(lambda x: f"{x:.1f}%"), textposition="outside"))
+                fig_pw.update_layout(**CHART_LAYOUT, height=max(200, len(ch2)*40+60),
+                                      xaxis_title="Whiff%", xaxis=dict(range=[0, max(ch2["Whiff%"].max()+10, 40)]))
+                st.plotly_chart(fig_pw, use_container_width=True)
+
+            section_header("Pitch Movement vs Damage")
+            bwm = bdf[(bdf["PitchCall"] == "InPlay")].dropna(subset=["ExitSpeed", "HorzBreak", "InducedVertBreak"])
+            if len(bwm) >= 5:
+                fig_mv = px.scatter(bwm, x="HorzBreak", y="InducedVertBreak", color="ExitSpeed",
+                                     size="ExitSpeed",
+                                     color_continuous_scale=[[0, "#1f77b4"], [0.5, "#f7f7f7"], [1, "#d22d49"]],
+                                     hover_data={"TaggedPitchType": True, "ExitSpeed": ":.1f"},
+                                     labels={"HorzBreak": "Horizontal Break (in)", "InducedVertBreak": "Induced Vert Break (in)", "ExitSpeed": "EV"})
+                fig_mv.update_layout(**CHART_LAYOUT, height=400)
+                st.plotly_chart(fig_mv, use_container_width=True)
+        else:
+            st.info("Not enough pitch type data.")
+
+    # ─── Tab 6: Spray Lab ──────────────────────────────
+    with tab_spray:
+        section_header("Spray Chart Analysis")
+        in_play = bdf[bdf["PitchCall"] == "InPlay"].copy()
+        if len(in_play) < 5:
+            st.info("Not enough in-play data for spray analysis.")
+        else:
+            col_spray, col_table = st.columns([2, 1])
+            with col_spray:
+                spray_data = in_play.dropna(subset=["Direction", "Distance"]).copy()
+                if not spray_data.empty:
+                    angle_rad = np.radians(spray_data["Direction"])
+                    spray_data["x"] = spray_data["Distance"] * np.sin(angle_rad)
+                    spray_data["y"] = spray_data["Distance"] * np.cos(angle_rad)
+                    fig_sp = go.Figure()
+                    theta_g = np.linspace(-np.pi/4, np.pi/4, 80)
+                    gr = 400
+                    fig_sp.add_trace(go.Scatter(x=[0]+list(gr*np.sin(theta_g))+[0],
+                                                y=[0]+list(gr*np.cos(theta_g))+[0], mode="lines",
+                                                fill="toself", fillcolor="rgba(76,160,60,0.06)",
+                                                line=dict(color="rgba(76,160,60,0.15)", width=1),
+                                                showlegend=False, hoverinfo="skip"))
+                    fig_sp.add_trace(go.Scatter(x=[0,63.6,0,-63.6,0], y=[0,63.6,127.3,63.6,0], mode="lines",
+                                                line=dict(color="rgba(160,120,60,0.25)", width=1),
+                                                fill="toself", fillcolor="rgba(160,120,60,0.06)",
+                                                showlegend=False, hoverinfo="skip"))
+                    fl = 350
+                    for sx in [-1, 1]:
+                        fig_sp.add_trace(go.Scatter(x=[0, sx*fl*np.sin(np.pi/4)], y=[0, fl*np.cos(np.pi/4)],
+                                                    mode="lines", line=dict(color="rgba(0,0,0,0.12)", width=1),
+                                                    showlegend=False, hoverinfo="skip"))
+                    ev_vals = spray_data["ExitSpeed"].fillna(0)
+                    fig_sp.add_trace(go.Scatter(
+                        x=spray_data["x"], y=spray_data["y"], mode="markers",
+                        marker=dict(size=8, color=ev_vals,
+                                    colorscale=[[0, "#1f77b4"], [0.5, "#f7f7f7"], [1, "#d22d49"]],
+                                    cmin=60, cmax=100, showscale=True, colorbar=dict(title="EV", len=0.6),
+                                    line=dict(width=0.5, color="white")),
+                        hovertemplate="EV: %{marker.color:.1f} mph<br>Dist: %{customdata[0]:.0f}ft<extra></extra>",
+                        customdata=spray_data[["Distance"]].values, showlegend=False))
+                    fig_sp.update_layout(
+                        xaxis=dict(range=[-300, 300], showgrid=False, zeroline=False, showticklabels=False, fixedrange=True),
+                        yaxis=dict(range=[-15, 400], showgrid=False, zeroline=False, showticklabels=False,
+                                   scaleanchor="x", fixedrange=True),
+                        height=450, margin=dict(l=0, r=0, t=5, b=0),
+                        plot_bgcolor="white", paper_bgcolor="white")
+                    st.plotly_chart(fig_sp, use_container_width=True)
+
+            with col_table:
+                section_header("Pull / Center / Oppo")
+                bd = in_play.dropna(subset=["Direction", "ExitSpeed"]).copy()
+                if not bd.empty:
+                    bs = bdf["BatterSide"].mode().iloc[0] if bdf["BatterSide"].notna().any() else "Right"
+                    if bs == "Left":
+                        pull_m = bd["Direction"] > 15
+                        oppo_m = bd["Direction"] < -15
+                    else:
+                        pull_m = bd["Direction"] < -15
+                        oppo_m = bd["Direction"] > 15
+                    center_m = ~pull_m & ~oppo_m
+                    dir_rows = []
+                    for lbl, mask in [("Pull", pull_m), ("Center", center_m), ("Oppo", oppo_m)]:
+                        sub = bd[mask]
+                        ns = len(sub)
+                        if ns == 0:
+                            dir_rows.append({"Dir": lbl, "BBE": 0, "%": "-", "Avg EV": "-", "Max EV": "-"})
+                            continue
+                        gb_n = len(sub[sub["TaggedHitType"] == "GroundBall"])
+                        ld_n = len(sub[sub["TaggedHitType"] == "LineDrive"])
+                        fb_n = len(sub[sub["TaggedHitType"] == "FlyBall"])
+                        brr = len(sub[(sub["ExitSpeed"] >= 98) & (sub["Angle"].between(8, 32))]) if sub["Angle"].notna().any() else 0
+                        dir_rows.append({
+                            "Dir": lbl, "BBE": ns,
+                            "%": f"{ns/len(bd)*100:.0f}%",
+                            "Avg EV": f"{sub['ExitSpeed'].mean():.1f}",
+                            "Max EV": f"{sub['ExitSpeed'].max():.1f}",
+                            "GB%": f"{gb_n/ns*100:.0f}%",
+                            "LD%": f"{ld_n/ns*100:.0f}%",
+                            "FB%": f"{fb_n/ns*100:.0f}%",
+                            "Barrel": brr,
+                        })
+                    st.dataframe(pd.DataFrame(dir_rows).set_index("Dir"), use_container_width=True)
+
+            col_la_dir, col_gb = st.columns(2)
+            with col_la_dir:
+                section_header("Launch Angle by Direction")
+                bla = in_play.dropna(subset=["Direction", "Angle"]).copy()
+                if not bla.empty:
+                    bs = bdf["BatterSide"].mode().iloc[0] if bdf["BatterSide"].notna().any() else "Right"
+                    if bs == "Left":
+                        bla["Field"] = np.where(bla["Direction"] > 15, "Pull",
+                                                 np.where(bla["Direction"] < -15, "Oppo", "Center"))
+                    else:
+                        bla["Field"] = np.where(bla["Direction"] < -15, "Pull",
+                                                 np.where(bla["Direction"] > 15, "Oppo", "Center"))
+                    fig_ld = px.box(bla, x="Field", y="Angle",
+                                     category_orders={"Field": ["Pull", "Center", "Oppo"]},
+                                     color="Field", color_discrete_map={"Pull": "#d22d49", "Center": "#9e9e9e", "Oppo": "#1f77b4"},
+                                     labels={"Angle": "Launch Angle", "Field": ""})
+                    fig_ld.add_shape(type="rect", x0=-0.5, x1=2.5, y0=8, y1=32,
+                                      fillcolor="rgba(29,190,58,0.08)", line=dict(width=0))
+                    fig_ld.add_annotation(x=2.3, y=20, text="Sweet Spot", font=dict(size=9, color="#2ca02c"), showarrow=False)
+                    fig_ld.update_layout(**CHART_LAYOUT, height=350, showlegend=False)
+                    st.plotly_chart(fig_ld, use_container_width=True)
+            with col_gb:
+                section_header("GB% by Pitch Type")
+                gb_rows = []
+                for pt in sorted(bdf["TaggedPitchType"].dropna().unique()):
+                    pt_ip = in_play[in_play["TaggedPitchType"] == pt]
+                    if len(pt_ip) < 3:
+                        continue
+                    gb_n = len(pt_ip[pt_ip["TaggedHitType"] == "GroundBall"])
+                    gb_rows.append({"Pitch Type": pt, "GB%": gb_n/len(pt_ip)*100, "BBE": len(pt_ip)})
+                if gb_rows:
+                    gdf = pd.DataFrame(gb_rows).sort_values("GB%", ascending=True)
+                    colors = [PITCH_COLORS.get(p, "#aaa") for p in gdf["Pitch Type"]]
+                    fig_gb = go.Figure(go.Bar(
+                        y=gdf["Pitch Type"], x=gdf["GB%"], orientation="h", marker_color=colors,
+                        text=gdf["GB%"].map(lambda x: f"{x:.0f}%"), textposition="outside"))
+                    fig_gb.update_layout(**CHART_LAYOUT, height=max(200, len(gdf)*40+60),
+                                          xaxis_title="Ground Ball %", xaxis=dict(range=[0, 100]))
+                    st.plotly_chart(fig_gb, use_container_width=True)
+
+    # ─── Tab 7: AI Scouting Report ─────────────────────
+    with tab_ai:
+        section_header("AI Hitting Report")
+        report = _generate_hitter_ai_report(bdf, batter, data, season_filter)
+        st.markdown(report)
+        st.download_button(
+            "Download Report as Text", report,
+            file_name=f"hitting_report_{batter.replace(', ', '_')}.md",
+            mime="text/markdown", key="hl_download")
+
+
+# ──────────────────────────────────────────────
 # MAIN
 # ──────────────────────────────────────────────
 def main():
@@ -3612,6 +4502,7 @@ def main():
         "Team Overview",
         "Player Development",
         "Pitch Design Lab",
+        "Hitters Lab",
         "Game Log",
         "Opponent Scouting",
     ], label_visibility="collapsed")
@@ -3641,6 +4532,8 @@ def main():
         page_development(data)
     elif page == "Pitch Design Lab":
         page_pitch_design_lab(data)
+    elif page == "Hitters Lab":
+        page_hitters_lab(data)
     elif page == "Game Log":
         page_game_log(data)
     elif page == "Opponent Scouting":
