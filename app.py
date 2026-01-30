@@ -4614,7 +4614,7 @@ def page_hitters_lab(data):
                         histfunc="avg",
                         colorscale=[[0, "#1f77b4"], [0.3, "#f7f7f7"], [0.6, "#fe6100"], [1, "#d22d49"]],
                         contours=dict(showlabels=False),
-                        ncontoursx=12, ncontoursy=12,
+                        nbinsx=12, nbinsy=12,
                         showscale=True,
                         colorbar=dict(title="Avg EV", len=0.8),
                     ))
@@ -4647,7 +4647,7 @@ def page_hitters_lab(data):
                             colorscale=[[0, "rgba(255,255,255,0)"], [0.3, "rgba(210,45,73,0.2)"],
                                         [0.7, "rgba(210,45,73,0.5)"], [1, "rgba(210,45,73,0.9)"]],
                             contours=dict(showlabels=False),
-                            ncontoursx=10, ncontoursy=10,
+                            nbinsx=10, nbinsy=10,
                             showscale=True,
                             colorbar=dict(title="Whiff Density", len=0.8),
                         ))
@@ -4709,7 +4709,7 @@ def page_hitters_lab(data):
                         histfunc="avg",
                         colorscale=[[0, "#2ca02c"], [0.5, "#f7f7f7"], [1, "#d22d49"]],
                         contours=dict(showlabels=True, labelfont=dict(size=10)),
-                        ncontoursx=12, ncontoursy=12,
+                        nbinsx=12, nbinsy=12,
                         showscale=True,
                         colorbar=dict(title="P(Swing)", len=0.8),
                     ))
