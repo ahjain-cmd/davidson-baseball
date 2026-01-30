@@ -4475,7 +4475,7 @@ def page_hitters_lab(data):
     # ─── Tab 7: Swing Path Analysis ─────────────────────
     with tab_swing:
         section_header("Swing Path Analysis")
-        st.caption("Reconstructed swing plane from contact quality, whiff locations, and approach angles — no bat sensor needed")
+        st.caption("Bat path estimated from hard-hit ball launch angles, pitch-height regression, and contact quality maps — no bat sensor needed")
 
         swings = bdf[bdf["PitchCall"].isin(SWING_CALLS)].copy()
         whiffs = bdf[bdf["PitchCall"] == "StrikeSwinging"].copy()
@@ -4486,47 +4486,66 @@ def page_hitters_lab(data):
         if len(swings) < 10:
             st.info("Not enough swing data (need 10+ swings).")
         else:
-            # ── Attack Angle Estimation ──
+            # ── Attack Angle Estimation (Hard-Hit Ball Method) ──
             section_header("Estimated Attack Angle")
-            st.caption("Attack Angle ≈ Launch Angle − Vertical Approach Angle. Positive = upward bat path (lift). Negative = downward (chop).")
+            st.caption("Attack angle estimated from **median launch angle on hard-hit balls** (EV ≥ 75th percentile). "
+                        "On squared-up contact the ball leaves roughly in the bat's path direction, filtering out mishits that distort the measurement.")
 
-            inplay_aa = inplay.dropna(subset=["Angle", "VertApprAngle"]).copy()
-            if len(inplay_aa) >= 5:
-                inplay_aa["AttackAngle"] = inplay_aa["Angle"] - inplay_aa["VertApprAngle"]
+            inplay_aa = inplay.dropna(subset=["Angle", "ExitSpeed", "PlateLocHeight"]).copy()
+            if len(inplay_aa) >= 10:
+                # Hard-hit threshold = hitter's 75th percentile EV
+                ev_75 = inplay_aa["ExitSpeed"].quantile(0.75)
+                hard_hit = inplay_aa[inplay_aa["ExitSpeed"] >= ev_75].copy()
+                all_hit = inplay_aa.copy()
 
-                avg_aa = inplay_aa["AttackAngle"].mean()
-                avg_la = inplay_aa["Angle"].mean()
-                avg_vaa = inplay_aa["VertApprAngle"].mean()
+                # Primary metric: median LA on hard-hit balls = best attack angle proxy
+                attack_angle = hard_hit["Angle"].median()
+                avg_la_all = all_hit["Angle"].median()
+                hard_hit_ev = hard_hit["ExitSpeed"].mean()
 
-                # Classify swing type
-                if avg_aa > 15:
+                # Regression: LA vs pitch height on hard-hit balls
+                # Slope = how much hitter adjusts path per foot of pitch height
+                # Intercept at mid-zone (2.5 ft) = baseline attack angle
+                from scipy import stats as sp_stats
+                slope, intercept, r_val, _, _ = sp_stats.linregress(hard_hit["PlateLocHeight"].values, hard_hit["Angle"].values)
+                mid_zone_aa = intercept + slope * 2.5  # baseline at mid-zone height
+                path_adjust = slope  # degrees per foot of pitch height
+
+                # Classify swing type using hard-hit median
+                if attack_angle > 20:
                     swing_type = "Steep Uppercut"
                     swing_color = "#d22d49"
-                    swing_desc = "Extreme loft — high HR potential but vulnerable to high fastballs and off-speed below the zone"
-                elif avg_aa > 8:
+                    swing_desc = "Extreme loft — high HR upside but vulnerable to high fastballs and off-speed below zone"
+                elif attack_angle > 12:
                     swing_type = "Lift-Oriented"
                     swing_color = "#fe6100"
-                    swing_desc = "Modern swing path — good launch angle generation, solid barrel coverage of the zone"
-                elif avg_aa > 2:
+                    swing_desc = "Modern power swing — generates carry and hard fly balls consistently"
+                elif attack_angle > 5:
                     swing_type = "Slight Uppercut"
                     swing_color = "#f7c631"
-                    swing_desc = "Balanced path with mild lift — matches average pitch plane well"
-                elif avg_aa > -3:
+                    swing_desc = "Balanced loft — matches most pitch planes well, produces line drives and fly balls"
+                elif attack_angle > -2:
                     swing_type = "Level"
                     swing_color = "#2ca02c"
-                    swing_desc = "Flat bat path through the zone — contact-oriented, line drive approach"
+                    swing_desc = "Flat bat path — contact-oriented, line drive approach with gap-to-gap power"
                 else:
                     swing_type = "Downward / Chopper"
                     swing_color = "#1f77b4"
-                    swing_desc = "Downward swing plane — generates ground balls, limits hard fly ball contact"
+                    swing_desc = "Downward swing plane — ground ball heavy, limits hard fly ball contact"
 
-                col_aa1, col_aa2, col_aa3 = st.columns(3)
+                col_aa1, col_aa2, col_aa3, col_aa4 = st.columns(4)
                 with col_aa1:
-                    st.metric("Avg Attack Angle", f"{avg_aa:+.1f}°")
+                    st.metric("Attack Angle (Hard-Hit)", f"{attack_angle:+.1f}°",
+                              help="Median LA on balls hit ≥ 75th pctile EV")
                 with col_aa2:
-                    st.metric("Avg Launch Angle", f"{avg_la:+.1f}°")
+                    st.metric("Mid-Zone Baseline", f"{mid_zone_aa:+.1f}°",
+                              help="Estimated bat path angle at 2.5ft (mid-zone) from regression")
                 with col_aa3:
-                    st.metric("Avg Pitch VAA", f"{avg_vaa:.1f}°")
+                    st.metric("Path Adjustment", f"{path_adjust:+.1f}°/ft",
+                              help="How much LA changes per foot of pitch height (+ = steeper on high pitches)")
+                with col_aa4:
+                    st.metric("Hard-Hit Threshold", f"{ev_75:.1f} mph",
+                              help=f"75th percentile EV — {len(hard_hit)} balls used for estimation")
 
                 st.markdown(
                     f'<div style="padding:12px 16px;background:white;border-radius:8px;border-left:5px solid {swing_color};'
@@ -4535,70 +4554,88 @@ def page_hitters_lab(data):
                     f'<div style="font-size:13px;color:#333 !important;margin-top:4px;">{swing_desc}</div>'
                     f'</div>', unsafe_allow_html=True)
 
-                # Attack angle by pitch type
+                # ── Attack Angle by Pitch Type (hard-hit only) ──
                 section_header("Attack Angle by Pitch Type")
+                st.caption("Median LA on hard-hit balls per pitch type — shows how the bat path adjusts to different pitch shapes")
                 aa_pt_rows = []
-                for pt in sorted(inplay_aa["TaggedPitchType"].dropna().unique()):
-                    pt_df = inplay_aa[inplay_aa["TaggedPitchType"] == pt]
-                    if len(pt_df) < 3:
+                for pt in sorted(hard_hit["TaggedPitchType"].dropna().unique()):
+                    pt_hh = hard_hit[hard_hit["TaggedPitchType"] == pt]
+                    pt_all = all_hit[all_hit["TaggedPitchType"] == pt]
+                    if len(pt_hh) < 3:
                         continue
                     aa_pt_rows.append({
                         "Pitch Type": pt,
-                        "n": len(pt_df),
-                        "Avg Attack Angle": f"{pt_df['AttackAngle'].mean():+.1f}°",
-                        "Avg LA": f"{pt_df['Angle'].mean():+.1f}°",
-                        "Avg VAA": f"{pt_df['VertApprAngle'].mean():.1f}°",
-                        "Avg EV": f"{pt_df['ExitSpeed'].mean():.1f}" if pt_df["ExitSpeed"].notna().any() else "-",
+                        "Hard-Hit n": len(pt_hh),
+                        "Total BIP": len(pt_all),
+                        "Attack Angle": f"{pt_hh['Angle'].median():+.1f}°",
+                        "All-Contact LA": f"{pt_all['Angle'].median():+.1f}°",
+                        "Hard-Hit EV": f"{pt_hh['ExitSpeed'].mean():.1f}",
+                        "Barrel%": f"{len(pt_all[(pt_all['ExitSpeed'] >= 98) & (pt_all['Angle'].between(8, 32))]) / max(len(pt_all), 1) * 100:.0f}%",
                     })
                 if aa_pt_rows:
                     st.dataframe(pd.DataFrame(aa_pt_rows).set_index("Pitch Type"), use_container_width=True)
 
-                # Attack angle distribution
+                # ── Distribution + Regression Plot ──
                 col_aa_dist, col_aa_height = st.columns(2)
                 with col_aa_dist:
-                    section_header("Attack Angle Distribution")
+                    section_header("Hard-Hit Launch Angle Distribution")
                     fig_aa = go.Figure()
+                    # All contact (faint)
                     fig_aa.add_trace(go.Histogram(
-                        x=inplay_aa["AttackAngle"], nbinsx=25,
-                        marker_color=swing_color, opacity=0.8, name="Attack Angle",
+                        x=all_hit["Angle"], nbinsx=30,
+                        marker_color="#ccc", opacity=0.5, name="All Contact",
                     ))
-                    fig_aa.add_vline(x=0, line_dash="dash", line_color="#888",
-                                     annotation_text="Level swing", annotation_position="top")
-                    fig_aa.add_vline(x=avg_aa, line_dash="solid", line_color="#1a1a2e",
-                                     annotation_text=f"Avg: {avg_aa:+.1f}°", annotation_position="top right")
-                    fig_aa.update_layout(**CHART_LAYOUT, height=300, xaxis_title="Attack Angle (°)",
-                                          yaxis_title="Count", showlegend=False)
+                    # Hard-hit (bold)
+                    fig_aa.add_trace(go.Histogram(
+                        x=hard_hit["Angle"], nbinsx=25,
+                        marker_color=swing_color, opacity=0.85, name=f"Hard-Hit (≥{ev_75:.0f} mph)",
+                    ))
+                    fig_aa.add_vline(x=attack_angle, line_dash="solid", line_color="#1a1a2e",
+                                     annotation_text=f"Attack: {attack_angle:+.1f}°", annotation_position="top right")
+                    fig_aa.add_vline(x=avg_la_all, line_dash="dash", line_color="#888",
+                                     annotation_text=f"All LA: {avg_la_all:+.1f}°", annotation_position="top left")
+                    fig_aa.update_layout(**CHART_LAYOUT, height=300, xaxis_title="Launch Angle (°)",
+                                          yaxis_title="Count", barmode="overlay",
+                                          legend=dict(orientation="h", y=1.08, x=0.5, xanchor="center"))
                     st.plotly_chart(fig_aa, use_container_width=True)
 
                 with col_aa_height:
-                    section_header("Attack Angle by Pitch Height")
-                    st.caption("Does the bat path adjust to pitch location?")
+                    section_header("Bat Path vs Pitch Height")
+                    st.caption(f"Regression on hard-hit balls: slope = {path_adjust:+.1f}°/ft, R² = {r_val**2:.2f}")
                     fig_aa_h = go.Figure()
+                    # All contact (faint)
                     fig_aa_h.add_trace(go.Scatter(
-                        x=inplay_aa["PlateLocHeight"], y=inplay_aa["AttackAngle"],
+                        x=all_hit["PlateLocHeight"], y=all_hit["Angle"],
                         mode="markers",
-                        marker=dict(size=6, color=inplay_aa["ExitSpeed"].fillna(80),
-                                    colorscale=[[0, "#1f77b4"], [0.5, "#f7f7f7"], [1, "#d22d49"]],
-                                    cmin=60, cmax=105, showscale=True,
+                        marker=dict(size=4, color="#ccc", opacity=0.3),
+                        name="All Contact", showlegend=True,
+                    ))
+                    # Hard-hit (bold, colored by EV)
+                    fig_aa_h.add_trace(go.Scatter(
+                        x=hard_hit["PlateLocHeight"], y=hard_hit["Angle"],
+                        mode="markers",
+                        marker=dict(size=7, color=hard_hit["ExitSpeed"],
+                                    colorscale=[[0, "#fe6100"], [1, "#d22d49"]],
+                                    cmin=ev_75, cmax=hard_hit["ExitSpeed"].max(), showscale=True,
                                     colorbar=dict(title="EV", len=0.6),
                                     line=dict(width=0.3, color="white")),
-                        hovertemplate="Height: %{x:.2f}ft<br>Attack: %{y:.1f}°<br>EV: %{marker.color:.1f}<extra></extra>",
+                        name=f"Hard-Hit (≥{ev_75:.0f})", showlegend=True,
+                        hovertemplate="Height: %{x:.2f}ft<br>LA: %{y:.1f}°<br>EV: %{marker.color:.1f}<extra></extra>",
                     ))
-                    # Trend line
-                    if len(inplay_aa) >= 10:
-                        z = np.polyfit(inplay_aa["PlateLocHeight"].values, inplay_aa["AttackAngle"].values, 1)
-                        x_line = np.linspace(inplay_aa["PlateLocHeight"].min(), inplay_aa["PlateLocHeight"].max(), 50)
-                        fig_aa_h.add_trace(go.Scatter(x=x_line, y=np.polyval(z, x_line), mode="lines",
-                                                       line=dict(color="#1a1a2e", width=2, dash="dash"),
-                                                       name="Trend", showlegend=False))
+                    # Regression line (hard-hit only)
+                    x_line = np.linspace(hard_hit["PlateLocHeight"].min(), hard_hit["PlateLocHeight"].max(), 50)
+                    fig_aa_h.add_trace(go.Scatter(
+                        x=x_line, y=intercept + slope * x_line, mode="lines",
+                        line=dict(color="#1a1a2e", width=2.5), name="Bat Path Regression", showlegend=True,
+                    ))
                     fig_aa_h.add_hline(y=0, line_dash="dot", line_color="#ccc")
                     fig_aa_h.update_layout(**CHART_LAYOUT, height=300,
-                                            xaxis_title="Pitch Height (ft)", yaxis_title="Attack Angle (°)",
-                                            showlegend=False)
+                                            xaxis_title="Pitch Height (ft)", yaxis_title="Launch Angle (°)",
+                                            legend=dict(orientation="h", y=1.08, x=0.5, xanchor="center"))
                     st.plotly_chart(fig_aa_h, use_container_width=True)
 
             else:
-                st.info("Not enough InPlay pitches with launch angle + VAA data.")
+                st.info("Not enough InPlay pitches with launch angle + EV data (need 10+).")
 
             # ── Barrel Zone Map ──
             section_header("Barrel Path — EV Heatmap")
