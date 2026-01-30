@@ -2622,19 +2622,15 @@ def _generate_ai_report(pdf, pitcher_name, stuff_df, tunnel_df, pair_df, all_dat
     # ── Comparison to Database ──
     lines.append("### Database Percentile Rankings")
     lines.append("")
-    # Compare this pitcher's stuff+ to all pitchers
-    all_pitchers = all_data[all_data["PitcherTeam"] == DAVIDSON_TEAM_ID].copy()
-    if "StuffPlus" not in all_pitchers.columns:
-        all_pitchers_stuff = _compute_stuff_plus(all_pitchers)
-    else:
-        all_pitchers_stuff = all_pitchers
+    # Compare this pitcher's stuff+ to all pitchers in the database
+    all_pitchers_stuff = _compute_stuff_plus(all_data, baseline=all_data)
     if not all_pitchers_stuff.empty:
         for pt in arsenal.index:
             my_stuff = arsenal.loc[pt, "stuff_avg"]
             all_pt = all_pitchers_stuff[all_pitchers_stuff["TaggedPitchType"] == pt]["StuffPlus"]
             if len(all_pt) > 10:
                 pctl = percentileofscore(all_pt.dropna(), my_stuff, kind="rank")
-                lines.append(f"- **{pt}**: {pctl:.0f}th percentile Stuff+ among all Davidson pitchers")
+                lines.append(f"- **{pt}**: {pctl:.0f}th percentile Stuff+ across all pitchers in database")
 
     return "\n".join(lines)
 
@@ -2673,7 +2669,7 @@ def page_pitch_design_lab(data):
                   "Pitch Design Lab")
 
     # Compute Stuff+
-    stuff_df = _compute_stuff_plus(pdf, baseline=dav_pitching)
+    stuff_df = _compute_stuff_plus(pdf, baseline=data)
     if "StuffPlus" not in stuff_df.columns:
         st.error("Could not compute Stuff+ scores.")
         return
@@ -2730,10 +2726,9 @@ def page_pitch_design_lab(data):
         st.dataframe(formatted, use_container_width=True)
 
         # Savant-style percentile bars for Stuff+
-        all_pitcher_data = data[data["PitcherTeam"] == DAVIDSON_TEAM_ID].copy()
-        all_stuff = _compute_stuff_plus(all_pitcher_data)
+        all_stuff = _compute_stuff_plus(data, baseline=data)
         if "StuffPlus" in all_stuff.columns:
-            section_header("Stuff+ Percentile Rankings (vs All Davidson Pitchers)")
+            section_header("Stuff+ Percentile Rankings (vs All Pitchers in Database)")
             metrics = []
             for pt in arsenal_summary.index:
                 my_val = stuff_df[stuff_df["TaggedPitchType"] == pt]["StuffPlus"].mean()
