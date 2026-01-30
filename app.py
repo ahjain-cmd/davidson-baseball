@@ -2196,28 +2196,51 @@ def _compute_stuff_plus(data, baseline=None):
     base = baseline.dropna(subset=["RelSpeed", "TaggedPitchType"]).copy()
 
     # Pitch-type-specific weights: what matters most for each archetype
+    # Positive weight = higher value is better. Negative = lower is better.
     weights = {
         "Fastball":  {"RelSpeed": 2.0, "InducedVertBreak": 2.0, "HorzBreak": 0.5, "Extension": 1.0, "VertApprAngle": 1.5, "SpinRate": 0.8},
         "Sinker":    {"RelSpeed": 1.5, "InducedVertBreak": -1.0, "HorzBreak": 1.5, "Extension": 1.0, "VertApprAngle": -1.0, "SpinRate": 0.5},
         "Cutter":    {"RelSpeed": 1.5, "InducedVertBreak": 0.5, "HorzBreak": 1.5, "Extension": 1.0, "VertApprAngle": 1.0, "SpinRate": 0.8},
         "Slider":    {"RelSpeed": 0.8, "InducedVertBreak": -1.5, "HorzBreak": 2.0, "Extension": 0.8, "VertApprAngle": -1.0, "SpinRate": 1.0},
         "Curveball": {"RelSpeed": -0.5, "InducedVertBreak": -2.0, "HorzBreak": 1.5, "Extension": 0.5, "VertApprAngle": -1.5, "SpinRate": 1.5},
-        "Changeup":  {"RelSpeed": -1.5, "InducedVertBreak": -1.0, "HorzBreak": 1.5, "Extension": 1.0, "VertApprAngle": -1.0, "SpinRate": -0.5},
+        # Changeup: higher velo = more deceptive (less reaction time with CH movement),
+        # more drop (lower IVB) = better, more arm-side run (HB) = better,
+        # VAA closer to FB (less steep / higher value) = more deceptive,
+        # lower spin = more drop, velo diff from FB = critical deception factor
+        "Changeup":  {"RelSpeed": 1.0, "InducedVertBreak": -1.5, "HorzBreak": 2.0, "Extension": 1.0, "VertApprAngle": 0.5, "SpinRate": -0.5, "VeloDiff": 2.0},
         "Sweeper":   {"RelSpeed": 0.5, "InducedVertBreak": -1.5, "HorzBreak": 2.5, "Extension": 0.8, "VertApprAngle": -1.0, "SpinRate": 1.0},
-        "Splitter":  {"RelSpeed": 1.0, "InducedVertBreak": -2.0, "HorzBreak": 0.5, "Extension": 1.2, "VertApprAngle": -1.5, "SpinRate": 0.3},
+        "Splitter":  {"RelSpeed": 1.0, "InducedVertBreak": -2.0, "HorzBreak": 0.5, "Extension": 1.2, "VertApprAngle": -1.5, "SpinRate": -0.3, "VeloDiff": 1.5},
         "Knuckle Curve": {"RelSpeed": -0.5, "InducedVertBreak": -2.0, "HorzBreak": 1.5, "Extension": 0.5, "VertApprAngle": -1.5, "SpinRate": 1.5},
     }
     default_w = {"RelSpeed": 1.0, "InducedVertBreak": 1.0, "HorzBreak": 1.0, "Extension": 1.0, "VertApprAngle": 1.0, "SpinRate": 1.0}
+
+    base_cols = ["RelSpeed", "InducedVertBreak", "HorzBreak", "Extension", "VertApprAngle", "SpinRate"]
 
     # Pre-compute baseline stats per pitch type
     baseline_stats = {}
     for pt, bgrp in base.groupby("TaggedPitchType"):
         stats = {}
-        for col in ["RelSpeed", "InducedVertBreak", "HorzBreak", "Extension", "VertApprAngle", "SpinRate"]:
+        for col in base_cols:
             if col in bgrp.columns:
                 vals = bgrp[col].astype(float).dropna()
                 stats[col] = (vals.mean(), vals.std())
         baseline_stats[pt] = stats
+
+    # Pre-compute per-pitcher fastball velo for VeloDiff calculation
+    # VeloDiff = pitcher's FB velo - this pitch's velo (higher diff = more deception for CH/SPL)
+    fb_types = {"Fastball", "Sinker", "Cutter"}
+    fb_velo = base[base["TaggedPitchType"].isin(fb_types)].groupby("Pitcher")["RelSpeed"].mean()
+
+    # Compute VeloDiff baseline stats for changeups/splitters in the DB
+    velo_diff_stats = {}
+    for pt in ["Changeup", "Splitter"]:
+        pt_data = base[base["TaggedPitchType"] == pt].copy()
+        if len(pt_data) > 0 and "Pitcher" in pt_data.columns:
+            pt_data["_fb_velo"] = pt_data["Pitcher"].map(fb_velo)
+            pt_data["VeloDiff"] = pt_data["_fb_velo"] - pt_data["RelSpeed"]
+            vd = pt_data["VeloDiff"].dropna()
+            if len(vd) > 2:
+                velo_diff_stats[pt] = (vd.mean(), vd.std())
 
     stuff_scores = []
     for pt, grp in df.groupby("TaggedPitchType"):
@@ -2226,6 +2249,19 @@ def _compute_stuff_plus(data, baseline=None):
         z_total = pd.Series(0.0, index=grp.index)
         w_total = 0.0
         for col, weight in w.items():
+            if col == "VeloDiff":
+                # Special handling: compute velo diff from pitcher's own fastball
+                if pt not in velo_diff_stats or "Pitcher" not in grp.columns:
+                    continue
+                grp_fb = grp["Pitcher"].map(fb_velo)
+                vd = grp_fb - grp["RelSpeed"].astype(float)
+                mu, sigma = velo_diff_stats[pt]
+                if sigma == 0 or pd.isna(sigma):
+                    continue
+                z = (vd - mu) / sigma
+                z_total += z.fillna(0) * weight
+                w_total += abs(weight)
+                continue
             if col not in grp.columns or col not in bstats:
                 continue
             mu, sigma = bstats[col]
