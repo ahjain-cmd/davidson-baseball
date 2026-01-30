@@ -1987,20 +1987,20 @@ def page_team(data):
         margin-top: 4px;
     }
     .stat-card {
-        background: #111; border-radius: 8px; padding: 12px 8px;
+        background: #111 !important; border-radius: 8px; padding: 12px 8px;
         text-align: center; border: 1px solid #333;
     }
-    .stat-card .val { font-size: 22px; font-weight: 800; color: #fff; }
-    .stat-card .lbl { font-size: 10px; color: #bbb; letter-spacing: 1px; text-transform: uppercase; }
+    .stat-card .val { font-size: 22px; font-weight: 800; color: #fff !important; }
+    .stat-card .lbl { font-size: 10px; color: #ccc !important; letter-spacing: 1px; text-transform: uppercase; }
     .leader-card {
-        background: #111; border-radius: 8px; padding: 12px 16px;
+        background: #111 !important; border-radius: 8px; padding: 12px 16px;
         margin: 6px 0; border: 1px solid #333;
         border-left: 4px solid #cc0000;
     }
-    .leader-card .cat { font-size: 11px; color: #bbb; letter-spacing: 1px; text-transform: uppercase; }
-    .leader-card .name { font-size: 17px; font-weight: 700; color: #fff; }
-    .leader-card .stat { font-size: 14px; font-weight: 600; color: #cc0000; }
-    .leader-card .note { font-size: 11px; color: #999; }
+    .leader-card .cat { font-size: 11px; color: #ccc !important; letter-spacing: 1px; text-transform: uppercase; }
+    .leader-card .name { font-size: 17px; font-weight: 700; color: #fff !important; }
+    .leader-card .stat { font-size: 14px; font-weight: 600; color: #cc0000 !important; }
+    .leader-card .note { font-size: 11px; color: #aaa !important; }
     .leader-card-alt { border-left-color: #fff !important; }
     .leader-card-alt .stat { color: #fff !important; }
     .leader-card-grn { border-left-color: #cc0000 !important; }
@@ -7135,13 +7135,15 @@ def page_defensive_positioning(data):
 # MAIN
 # ──────────────────────────────────────────────
 def main():
-    _logo_sidebar = os.path.join(_APP_DIR, "davidson_wildcats_logo_primary_2023_sportslogosnet-2961.png")
+    _logo_sidebar = os.path.join(_APP_DIR, "logo_real.png")
     if os.path.exists(_logo_sidebar):
-        st.sidebar.image(_logo_sidebar, width=80)
+        _lcol1, _lcol2, _lcol3 = st.sidebar.columns([1, 2, 1])
+        with _lcol2:
+            st.image(_logo_sidebar, use_container_width=True)
     st.sidebar.markdown(
         '<div style="text-align:center;padding:2px 0 5px 0;">'
-        '<div style="font-size:20px;font-weight:800;font-family:Inter,sans-serif;letter-spacing:1px;">W.I.L.D.C.A.T.S.</div>'
-        '<div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#888;'
+        '<div style="font-size:20px;font-weight:800;font-family:Inter,sans-serif;letter-spacing:1px;color:#cc0000 !important;">W.I.L.D.C.A.T.S.</div>'
+        '<div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#999 !important;'
         'font-family:Inter,sans-serif;">Davidson Baseball Analytics</div>'
         '</div>',
         unsafe_allow_html=True,
