@@ -2421,22 +2421,33 @@ def _compute_stuff_plus(data, baseline=None):
         baseline = df
     base = baseline.dropna(subset=["RelSpeed", "TaggedPitchType"]).copy()
 
-    # Pitch-type-specific weights: what matters most for each archetype
+    # Pitch-type-specific weights: derived from pitch-level and pitcher-level
+    # correlations with whiff rate and exit velo in this dataset.
     # Positive weight = higher value is better. Negative = lower is better.
+    # Data: 68k pitches, correlations computed at both pitch-level and pitcher-level.
     weights = {
-        "Fastball":  {"RelSpeed": 2.0, "InducedVertBreak": 2.0, "HorzBreak": 0.5, "Extension": 1.0, "VertApprAngle": 1.5, "SpinRate": 0.8},
-        "Sinker":    {"RelSpeed": 1.5, "InducedVertBreak": -1.0, "HorzBreak": 1.5, "Extension": 1.0, "VertApprAngle": -1.0, "SpinRate": 0.5},
-        "Cutter":    {"RelSpeed": 1.5, "InducedVertBreak": 0.5, "HorzBreak": 1.5, "Extension": 1.0, "VertApprAngle": 1.0, "SpinRate": 0.8},
-        "Slider":    {"RelSpeed": 0.8, "InducedVertBreak": -1.5, "HorzBreak": 2.0, "Extension": 0.8, "VertApprAngle": -1.0, "SpinRate": 1.0},
-        "Curveball": {"RelSpeed": -0.5, "InducedVertBreak": -2.0, "HorzBreak": 1.5, "Extension": 0.5, "VertApprAngle": -1.5, "SpinRate": 1.5},
-        # Changeup: higher velo = more deceptive (less reaction time with CH movement),
-        # more drop (lower IVB) = better, more arm-side run (HB) = better,
-        # VAA closer to FB (less steep / higher value) = more deceptive,
-        # lower spin = more drop, velo diff from FB = critical deception factor
-        "Changeup":  {"RelSpeed": 1.0, "InducedVertBreak": -1.5, "HorzBreak": 2.0, "Extension": 1.0, "VertApprAngle": 0.5, "SpinRate": -0.5, "VeloDiff": 2.0},
-        "Sweeper":   {"RelSpeed": 0.5, "InducedVertBreak": -1.5, "HorzBreak": 2.5, "Extension": 0.8, "VertApprAngle": -1.0, "SpinRate": 1.0},
-        "Splitter":  {"RelSpeed": 1.0, "InducedVertBreak": -2.0, "HorzBreak": 0.5, "Extension": 1.2, "VertApprAngle": -1.5, "SpinRate": -0.3, "VeloDiff": 1.5},
-        "Knuckle Curve": {"RelSpeed": -0.5, "InducedVertBreak": -2.0, "HorzBreak": 1.5, "Extension": 0.5, "VertApprAngle": -1.5, "SpinRate": 1.5},
+        # Fastball: VAA r=+.26, IVB r=+.24, Velo r=+.19, Spin r=+.17
+        "Fastball":       {"RelSpeed": 2.0, "InducedVertBreak": 2.5, "HorzBreak": 0.3, "Extension": 0.5, "VertApprAngle": 2.5, "SpinRate": 1.0},
+        "FourSeamFastBall": {"RelSpeed": 2.0, "InducedVertBreak": 2.5, "HorzBreak": 0.3, "Extension": 0.5, "VertApprAngle": 2.5, "SpinRate": 1.0},
+        # Sinker: Velo r=+.50 (dominant), VAA r=+.31, Spin r=+.28, HB r=-.27 (arm-side run)
+        "Sinker":         {"RelSpeed": 2.5, "InducedVertBreak": -0.5, "HorzBreak": 1.5, "Extension": 0.5, "VertApprAngle": -1.5, "SpinRate": 0.8},
+        "TwoSeamFastBall": {"RelSpeed": 2.5, "InducedVertBreak": -0.5, "HorzBreak": 1.5, "Extension": 0.5, "VertApprAngle": -1.5, "SpinRate": 0.8},
+        "OneSeamFastBall": {"RelSpeed": 2.5, "InducedVertBreak": -0.5, "HorzBreak": 1.5, "Extension": 0.5, "VertApprAngle": -1.5, "SpinRate": 0.8},
+        # Cutter: Spin r=+.42 (dominant), HB r=-.33 (glove-side = more whiffs), Ext r=-.27
+        "Cutter":         {"RelSpeed": 0.8, "InducedVertBreak": 0.3, "HorzBreak": -1.5, "Extension": -1.0, "VertApprAngle": -0.5, "SpinRate": 2.0},
+        # Slider: VAA r=-.23 (steeper=better, dominant), Spin r=+.26, Velo r=+.19
+        "Slider":         {"RelSpeed": 1.0, "InducedVertBreak": -0.5, "HorzBreak": 1.0, "Extension": 0.3, "VertApprAngle": -2.5, "SpinRate": 1.5},
+        # Curveball: VAA r=-.25 (steeper=better), Velo r=+.31, HB r=-.36 (glove-side), Ext r=-.37
+        "Curveball":      {"RelSpeed": 1.5, "InducedVertBreak": -1.5, "HorzBreak": -1.5, "Extension": -1.5, "VertApprAngle": -2.0, "SpinRate": 0.5},
+        # ChangeUp: VAA r=-.46 (dominant), VeloDiff r=+.30, IVB r=+.28, Spin r=+.19
+        # NOTE: data tags this as "ChangeUp" not "Changeup"
+        "ChangeUp":       {"RelSpeed": 0.5, "InducedVertBreak": 1.5, "HorzBreak": 1.0, "Extension": 0.5, "VertApprAngle": -2.5, "SpinRate": 1.0, "VeloDiff": 2.0},
+        "Changeup":       {"RelSpeed": 0.5, "InducedVertBreak": 1.5, "HorzBreak": 1.0, "Extension": 0.5, "VertApprAngle": -2.5, "SpinRate": 1.0, "VeloDiff": 2.0},
+        # Sweeper: small sample (105 pitches), Velo r=+.36, HB r=-.34, VAA r=-.32
+        "Sweeper":        {"RelSpeed": 1.5, "InducedVertBreak": -1.0, "HorzBreak": 2.0, "Extension": 0.8, "VertApprAngle": -1.5, "SpinRate": 0.5},
+        # Splitter: VAA r=-.37 (dominant), IVB r=-.15, small sample (169 pitches)
+        "Splitter":       {"RelSpeed": 1.0, "InducedVertBreak": -2.0, "HorzBreak": 0.5, "Extension": 1.0, "VertApprAngle": -2.0, "SpinRate": -0.3, "VeloDiff": 1.5},
+        "Knuckle Curve":  {"RelSpeed": 1.5, "InducedVertBreak": -1.5, "HorzBreak": -1.5, "Extension": -1.5, "VertApprAngle": -2.0, "SpinRate": 0.5},
     }
     default_w = {"RelSpeed": 1.0, "InducedVertBreak": 1.0, "HorzBreak": 1.0, "Extension": 1.0, "VertApprAngle": 1.0, "SpinRate": 1.0}
 
@@ -2454,12 +2465,12 @@ def _compute_stuff_plus(data, baseline=None):
 
     # Pre-compute per-pitcher fastball velo for VeloDiff calculation
     # VeloDiff = pitcher's FB velo - this pitch's velo (higher diff = more deception for CH/SPL)
-    fb_types = {"Fastball", "Sinker", "Cutter"}
+    fb_types = {"Fastball", "Sinker", "Cutter", "FourSeamFastBall", "TwoSeamFastBall", "OneSeamFastBall"}
     fb_velo = base[base["TaggedPitchType"].isin(fb_types)].groupby("Pitcher")["RelSpeed"].mean()
 
     # Compute VeloDiff baseline stats for changeups/splitters in the DB
     velo_diff_stats = {}
-    for pt in ["Changeup", "Splitter"]:
+    for pt in ["Changeup", "ChangeUp", "Splitter"]:
         pt_data = base[base["TaggedPitchType"] == pt].copy()
         if len(pt_data) > 0 and "Pitcher" in pt_data.columns:
             pt_data["_fb_velo"] = pt_data["Pitcher"].map(fb_velo)
