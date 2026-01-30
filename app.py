@@ -4788,8 +4788,9 @@ def page_hitters_lab(data):
                 insights.append(f"More vulnerable **down** ({low_whiff_rate:.0f}% whiff low vs {high_whiff_rate:.0f}% high) — bat path may sweep over breaking balls.")
 
             # Inside vs outside
-            inside_ev = inplay_ev[inplay_ev["PlateLocSide"] < -0.28]["ExitSpeed"].mean() if batter_side == "Right" else inplay_ev[inplay_ev["PlateLocSide"] > 0.28]["ExitSpeed"].mean()
-            outside_ev = inplay_ev[inplay_ev["PlateLocSide"] > 0.28]["ExitSpeed"].mean() if batter_side == "Right" else inplay_ev[inplay_ev["PlateLocSide"] < -0.28]["ExitSpeed"].mean()
+            _bs = bdf["BatterSide"].mode().iloc[0] if "BatterSide" in bdf.columns and bdf["BatterSide"].notna().any() else "Right"
+            inside_ev = inplay_ev[inplay_ev["PlateLocSide"] < -0.28]["ExitSpeed"].mean() if _bs == "Right" else inplay_ev[inplay_ev["PlateLocSide"] > 0.28]["ExitSpeed"].mean()
+            outside_ev = inplay_ev[inplay_ev["PlateLocSide"] > 0.28]["ExitSpeed"].mean() if _bs == "Right" else inplay_ev[inplay_ev["PlateLocSide"] < -0.28]["ExitSpeed"].mean()
             if not pd.isna(inside_ev) and not pd.isna(outside_ev):
                 if inside_ev > outside_ev + 3:
                     insights.append(f"Stronger **inside** ({inside_ev:.1f} mph) than outside ({outside_ev:.1f} mph) — barrel reaches inside pitch well.")
