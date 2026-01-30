@@ -4001,7 +4001,7 @@ def page_hitters_lab(data):
                 x=h_labels, y=v_labels,
                 colorscale=[[0, "#1f77b4"], [0.5, "#f7f7f7"], [1, "#d22d49"]],
                 zmin=0, zmax=100, showscale=True,
-                colorbar=dict(title="Swing%", titleside="right", len=0.8),
+                colorbar=dict(title="Swing%", len=0.8),
             ))
             fig_grid.add_shape(type="rect", x0=0.5, x1=3.5, y0=0.5, y1=3.5,
                                 line=dict(color="#333", width=3), fillcolor="rgba(0,0,0,0)")
@@ -4017,7 +4017,7 @@ def page_hitters_lab(data):
                 x=h_labels, y=v_labels,
                 colorscale=[[0, "#1f77b4"], [0.5, "#f7f7f7"], [1, "#d22d49"]],
                 zmin=60, zmax=100, showscale=True,
-                colorbar=dict(title="EV", titleside="right", len=0.8),
+                colorbar=dict(title="EV", len=0.8),
             ))
             fig_ev_grid.add_shape(type="rect", x0=0.5, x1=3.5, y0=0.5, y1=3.5,
                                    line=dict(color="#333", width=3), fillcolor="rgba(0,0,0,0)")
@@ -4129,7 +4129,7 @@ def page_hitters_lab(data):
                     x=h_lbl, y=v_lbl,
                     colorscale=[[0, "#2ca02c"], [0.5, "#f7f7f7"], [1, "#d22d49"]],
                     zmin=0, zmax=60, showscale=True,
-                    colorbar=dict(title="Whiff%", titleside="right", len=0.8)))
+                    colorbar=dict(title="Whiff%", len=0.8)))
                 fig_wz.add_shape(type="rect", x0=0.5, x1=3.5, y0=0.5, y1=3.5,
                                   line=dict(color="#333", width=3), fillcolor="rgba(0,0,0,0)")
                 fig_wz.update_layout(**CHART_LAYOUT, height=380)
