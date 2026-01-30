@@ -4527,11 +4527,11 @@ def page_hitters_lab(data):
                     horz_center, horz_adjust, horz_r2 = np.nan, np.nan, np.nan
 
                 # ── BAT SPEED PROXY ──
-                # From collision physics: bat_speed ≈ (EV + COR * pitch_speed) / (1 + COR)
+                # From collision physics: bat_speed ≈ (EV - COR * pitch_speed) / (1 + COR)
                 # COR ≈ 0.45 for wood/BBCOR bats
                 COR = 0.45
                 if "RelSpeed" in hard_hit.columns and hard_hit["RelSpeed"].notna().any():
-                    hard_hit["BatSpeedProxy"] = (hard_hit["ExitSpeed"] + COR * hard_hit["RelSpeed"]) / (1 + COR)
+                    hard_hit["BatSpeedProxy"] = (hard_hit["ExitSpeed"] - COR * hard_hit["RelSpeed"]) / (1 + COR)
                     bat_speed_avg = hard_hit["BatSpeedProxy"].mean()
                     bat_speed_max = hard_hit["BatSpeedProxy"].max()
                     # DB comparison
@@ -4539,7 +4539,7 @@ def page_hitters_lab(data):
                     if len(all_db_inplay) > 0:
                         all_db_ev75 = all_db_inplay["ExitSpeed"].quantile(0.75)
                         all_db_hh = all_db_inplay[all_db_inplay["ExitSpeed"] >= all_db_ev75]
-                        all_db_hh_bs = (all_db_hh["ExitSpeed"] + COR * all_db_hh["RelSpeed"]) / (1 + COR)
+                        all_db_hh_bs = (all_db_hh["ExitSpeed"] - COR * all_db_hh["RelSpeed"]) / (1 + COR)
                         bat_speed_pctile = (all_db_hh_bs < bat_speed_avg).mean() * 100
                     else:
                         bat_speed_pctile = np.nan
@@ -4612,13 +4612,13 @@ def page_hitters_lab(data):
 
                 # ═══ SECTION 2: Bat Speed & Contact Depth ═══
                 section_header("Bat Speed & Contact Depth")
-                st.caption("Bat speed derived from collision physics (EV, pitch speed, COR≈0.45). "
-                            "Contact depth from Effective Velo vs Release Speed — positive = out front, negative = deep.")
+                st.caption("Bat speed from collision physics: (EV − COR×PitchSpeed) / (1+COR), COR≈0.45. "
+                            "Contact depth from Effective Velo − Release Speed: positive = out front, negative = deep.")
                 col_b1, col_b2, col_b3, col_b4 = st.columns(4)
                 with col_b1:
                     if not pd.isna(bat_speed_avg):
                         st.metric("Bat Speed (est.)", f"{bat_speed_avg:.1f} mph",
-                                  help="(EV + 0.45 × PitchSpeed) / 1.45 on hard-hit balls")
+                                  help="(EV − 0.45 × PitchSpeed) / 1.45 on hard-hit balls")
                     else:
                         st.metric("Bat Speed (est.)", "—")
                 with col_b2:
