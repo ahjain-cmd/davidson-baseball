@@ -2085,21 +2085,39 @@ def page_team(data):
                                 f'<div class="note">{int(top["count"])} balls in play &middot; {top["max"]:.1f} max</div>'
                                 f'</div>', unsafe_allow_html=True)
 
-                # Barrel leader
+                # Barrel leader (only show if someone actually barreled a ball)
+                _showed_barrel = False
                 if "Angle" in week_inplay.columns:
                     wb = week_inplay.copy()
                     wb["is_barrel"] = (wb["ExitSpeed"] >= 98) & (wb["Angle"].between(8, 32))
                     barrel_ct = wb.groupby("Batter")["is_barrel"].agg(["sum", "count"]).reset_index()
-                    barrel_ct = barrel_ct[barrel_ct["count"] >= 3].copy()
-                    barrel_ct["rate"] = barrel_ct["sum"] / barrel_ct["count"] * 100
-                    barrel_ct = barrel_ct.sort_values("sum", ascending=False)
+                    barrel_ct = barrel_ct[(barrel_ct["count"] >= 3) & (barrel_ct["sum"] > 0)].copy()
                     if len(barrel_ct) > 0:
+                        barrel_ct["rate"] = barrel_ct["sum"] / barrel_ct["count"] * 100
+                        barrel_ct = barrel_ct.sort_values("sum", ascending=False)
                         tb = barrel_ct.iloc[0]
                         st.markdown(f'<div class="leader-card leader-card-alt">'
                                     f'<div class="cat">Most Barrels</div>'
                                     f'<div class="name">{display_name(tb["Batter"])}</div>'
                                     f'<div class="stat">{int(tb["sum"])} barrels ({tb["rate"]:.0f}%)</div>'
                                     f'<div class="note">{int(tb["count"])} balls in play</div>'
+                                    f'</div>', unsafe_allow_html=True)
+                        _showed_barrel = True
+                if not _showed_barrel and "Angle" in week_inplay.columns:
+                    # Fallback: best sweet spot rate
+                    wb2 = week_inplay.copy()
+                    wb2["is_ss"] = wb2["Angle"].between(8, 32)
+                    ss_ct = wb2.groupby("Batter")["is_ss"].agg(["sum", "count"]).reset_index()
+                    ss_ct = ss_ct[ss_ct["count"] >= 3].copy()
+                    if len(ss_ct) > 0:
+                        ss_ct["rate"] = ss_ct["sum"] / ss_ct["count"] * 100
+                        ss_ct = ss_ct.sort_values("rate", ascending=False)
+                        ts = ss_ct.iloc[0]
+                        st.markdown(f'<div class="leader-card leader-card-alt">'
+                                    f'<div class="cat">Best Sweet Spot%</div>'
+                                    f'<div class="name">{display_name(ts["Batter"])}</div>'
+                                    f'<div class="stat">{ts["rate"]:.0f}% sweet spot</div>'
+                                    f'<div class="note">{int(ts["count"])} balls in play</div>'
                                     f'</div>', unsafe_allow_html=True)
 
                 # Max single hit
