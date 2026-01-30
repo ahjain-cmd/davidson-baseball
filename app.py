@@ -2175,15 +2175,24 @@ def page_scouting(data):
 # PITCH DESIGN LAB
 # ──────────────────────────────────────────────
 
-def _compute_stuff_plus(data):
-    """Compute Stuff+ for every pitch in the database.
+def _compute_stuff_plus(data, baseline=None):
+    """Compute Stuff+ for every pitch in data.
     Model: z-score composite of velo, IVB, HB, extension, VAA, spin rate
-    relative to same pitch type. 100 = average, each 10 = 1 stdev better."""
-    required = ["RelSpeed", "InducedVertBreak", "HorzBreak", "Extension",
-                 "VertApprAngle", "SpinRate", "TaggedPitchType"]
+    relative to same pitch type across the BASELINE population.
+    100 = average, each 10 = 1 stdev better.
+
+    Args:
+        data: DataFrame of pitches to score
+        baseline: DataFrame to compute mean/std from (full team data).
+                  If None, uses data itself (should be full team).
+    """
     df = data.dropna(subset=["RelSpeed", "TaggedPitchType"]).copy()
     if df.empty:
         return df
+
+    if baseline is None:
+        baseline = df
+    base = baseline.dropna(subset=["RelSpeed", "TaggedPitchType"]).copy()
 
     # Pitch-type-specific weights: what matters most for each archetype
     weights = {
@@ -2199,19 +2208,29 @@ def _compute_stuff_plus(data):
     }
     default_w = {"RelSpeed": 1.0, "InducedVertBreak": 1.0, "HorzBreak": 1.0, "Extension": 1.0, "VertApprAngle": 1.0, "SpinRate": 1.0}
 
+    # Pre-compute baseline stats per pitch type
+    baseline_stats = {}
+    for pt, bgrp in base.groupby("TaggedPitchType"):
+        stats = {}
+        for col in ["RelSpeed", "InducedVertBreak", "HorzBreak", "Extension", "VertApprAngle", "SpinRate"]:
+            if col in bgrp.columns:
+                vals = bgrp[col].astype(float).dropna()
+                stats[col] = (vals.mean(), vals.std())
+        baseline_stats[pt] = stats
+
     stuff_scores = []
     for pt, grp in df.groupby("TaggedPitchType"):
         w = weights.get(pt, default_w)
+        bstats = baseline_stats.get(pt, {})
         z_total = pd.Series(0.0, index=grp.index)
         w_total = 0.0
         for col, weight in w.items():
-            if col not in grp.columns:
+            if col not in grp.columns or col not in bstats:
+                continue
+            mu, sigma = bstats[col]
+            if sigma == 0 or pd.isna(sigma) or pd.isna(mu):
                 continue
             vals = grp[col].astype(float)
-            mu = vals.mean()
-            sigma = vals.std()
-            if sigma == 0 or pd.isna(sigma):
-                continue
             z = (vals - mu) / sigma
             z_total += z * weight
             w_total += abs(weight)
@@ -2654,7 +2673,7 @@ def page_pitch_design_lab(data):
                   "Pitch Design Lab")
 
     # Compute Stuff+
-    stuff_df = _compute_stuff_plus(pdf)
+    stuff_df = _compute_stuff_plus(pdf, baseline=dav_pitching)
     if "StuffPlus" not in stuff_df.columns:
         st.error("Could not compute Stuff+ scores.")
         return
