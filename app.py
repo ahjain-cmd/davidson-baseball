@@ -3382,43 +3382,6 @@ def page_pitch_design_lab(data):
                     )
                     st.plotly_chart(fig_div, use_container_width=True)
 
-                    # AI insight
-                    for pair in div_df["Pair"].unique():
-                        commit = div_df[(div_df["Pair"] == pair) & (div_df["Checkpoint"] == "Commit Point")]
-                        plate = div_df[(div_df["Pair"] == pair) & (div_df["Checkpoint"] == "Plate")]
-                        if not commit.empty and not plate.empty:
-                            c_sep = commit.iloc[0]["Total Sep (in)"]
-                            p_sep = plate.iloc[0]["Total Sep (in)"]
-                            if c_sep < 2:
-                                quality, qcolor = "Elite", "#22c55e"
-                            elif c_sep < 3.5:
-                                quality, qcolor = "Good", "#3b82f6"
-                            elif c_sep < 5:
-                                quality, qcolor = "Average", "#f59e0b"
-                            elif c_sep < 7:
-                                quality, qcolor = "Below Avg", "#f97316"
-                            else:
-                                quality, qcolor = "Poor", "#ef4444"
-                            insight = ""
-                            if c_sep < 3.5:
-                                insight = " — hitter cannot distinguish these pitches at the decision point"
-                            elif c_sep < 5:
-                                insight = " — some deception but advanced hitters can read the difference"
-                            else:
-                                insight = " — hitter can identify pitch type before committing"
-                            st.markdown(
-                                f'<div style="border-left:4px solid {qcolor};padding:12px 16px;'
-                                f'border-radius:4px;margin:8px 0;font-size:16px;line-height:1.5;'
-                                f'background:{qcolor}10;">'
-                                f'<b style="font-size:17px;">{pair}:</b> '
-                                f'<span style="font-size:16px;">{c_sep:.1f}" apart at commit, '
-                                f'{p_sep:.1f}" apart at plate. '
-                                f'Tunnel quality: <b style="color:{qcolor};font-size:17px;">{quality}</b>'
-                                f'{insight}'
-                                f'</span></div>',
-                                unsafe_allow_html=True,
-                            )
-
     # ═══════════════════════════════════════════
     # TAB 6: COMMAND+ SCORING
     # ═══════════════════════════════════════════
