@@ -1960,7 +1960,165 @@ def page_catcher(data):
 # PAGE: TEAM OVERVIEW
 # ──────────────────────────────────────────────
 def page_team(data):
-    st.header("Team Overview")
+    # ── Branded Header ──
+    _logo_path = os.path.join(_APP_DIR, "logo_real.png")
+    _celeb_path = os.path.join(_APP_DIR, "celebration.jpg")
+    st.markdown("""
+    <div style="background:linear-gradient(135deg,#1a1a2e 0%,#000 50%,#8b0000 100%);
+                border-radius:16px;padding:28px 32px;margin-bottom:24px;position:relative;overflow:hidden;">
+        <div style="position:absolute;top:0;left:0;right:0;bottom:0;
+                    background:url('data:image/svg+xml,<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\"><text y=\"50\" font-size=\"80\" opacity=\"0.03\" fill=\"white\">⚾</text></svg>')
+                    repeat;opacity:0.5;"></div>
+        <div style="position:relative;z-index:1;text-align:center;">
+            <div style="font-size:14px;letter-spacing:6px;color:#aaa;font-weight:500;margin-bottom:4px;">DAVIDSON BASEBALL</div>
+            <div style="font-size:42px;font-weight:900;color:white;letter-spacing:2px;
+                        text-shadow:2px 2px 8px rgba(139,0,0,0.6);">W.I.L.D.C.A.T.S.</div>
+            <div style="font-size:13px;color:#d4a574;letter-spacing:3px;margin-top:4px;font-weight:400;">
+                Wildcat Intelligence & Live Data Computing for Advanced Trackman Statistics
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if os.path.exists(_logo_path):
+        col_logo, col_title, col_celeb = st.columns([1, 3, 1])
+    else:
+        col_title = st.container()
+
+    # ── Quick Stats Banner ──
+    dav_data = data[(data["PitcherTeam"] == DAVIDSON_TEAM_ID) | (data["BatterTeam"] == DAVIDSON_TEAM_ID)]
+    latest_date = dav_data["Date"].max()
+    total_pitches = len(dav_data)
+    total_games = dav_data.groupby("Date").ngroups
+    n_pitchers = dav_data[dav_data["PitcherTeam"] == DAVIDSON_TEAM_ID]["Pitcher"].nunique()
+    n_batters = dav_data[dav_data["BatterTeam"] == DAVIDSON_TEAM_ID]["Batter"].nunique()
+
+    col_s1, col_s2, col_s3, col_s4, col_s5 = st.columns(5)
+    with col_s1:
+        st.metric("Total Pitches", f"{total_pitches:,}")
+    with col_s2:
+        st.metric("Games Tracked", f"{total_games}")
+    with col_s3:
+        st.metric("Pitchers", f"{n_pitchers}")
+    with col_s4:
+        st.metric("Hitters", f"{n_batters}")
+    with col_s5:
+        st.metric("Last Data", latest_date.strftime("%b %d, %Y") if pd.notna(latest_date) else "—")
+
+    st.markdown("---")
+
+    # ── Last 7 Days Leaderboard ──
+    if pd.notna(latest_date):
+        week_ago = latest_date - pd.Timedelta(days=7)
+        recent = dav_data[dav_data["Date"] > week_ago]
+    else:
+        recent = pd.DataFrame()
+
+    section_header("This Week's Leaders")
+    if len(recent) < 10:
+        st.info("Not enough data in the last 7 days for weekly leaders. Showing full-season leaderboards below.")
+    else:
+        st.caption(f"Data from {week_ago.strftime('%b %d')} – {latest_date.strftime('%b %d, %Y')}")
+        col_wh, col_wp = st.columns(2)
+
+        with col_wh:
+            st.markdown("##### Hitting")
+            # Weekly hitting leaders
+            week_bat = recent[recent["BatterTeam"] == DAVIDSON_TEAM_ID].copy()
+            week_inplay = week_bat[week_bat["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
+            if len(week_inplay) >= 5:
+                ev_leader = week_inplay.groupby("Batter")["ExitSpeed"].agg(["mean", "max", "count"]).reset_index()
+                ev_leader = ev_leader[ev_leader["count"] >= 3].sort_values("mean", ascending=False)
+                if len(ev_leader) > 0:
+                    top = ev_leader.iloc[0]
+                    st.markdown(f'<div style="padding:10px 14px;background:#f8f8f8;border-radius:8px;border-left:4px solid #8b0000;margin:4px 0;">'
+                                f'<span style="font-size:13px;color:#888;">Hardest Contact</span><br>'
+                                f'<span style="font-size:18px;font-weight:800;color:#1a1a2e;">{display_name(top["Batter"])}</span> '
+                                f'<span style="font-size:15px;color:#8b0000;">{top["mean"]:.1f} avg EV</span> '
+                                f'<span style="font-size:12px;color:#888;">({int(top["count"])} BIP)</span>'
+                                f'</div>', unsafe_allow_html=True)
+
+                # Barrel leader
+                week_barrels = week_inplay.copy()
+                if "Angle" in week_barrels.columns:
+                    week_barrels["is_barrel"] = (week_barrels["ExitSpeed"] >= 98) & (week_barrels["Angle"].between(8, 32))
+                    barrel_ct = week_barrels.groupby("Batter")["is_barrel"].agg(["sum", "count"]).reset_index()
+                    barrel_ct = barrel_ct[barrel_ct["count"] >= 3].copy()
+                    barrel_ct["rate"] = barrel_ct["sum"] / barrel_ct["count"] * 100
+                    barrel_ct = barrel_ct.sort_values("sum", ascending=False)
+                    if len(barrel_ct) > 0:
+                        tb = barrel_ct.iloc[0]
+                        st.markdown(f'<div style="padding:10px 14px;background:#f8f8f8;border-radius:8px;border-left:4px solid #d22d49;margin:4px 0;">'
+                                    f'<span style="font-size:13px;color:#888;">Most Barrels</span><br>'
+                                    f'<span style="font-size:18px;font-weight:800;color:#1a1a2e;">{display_name(tb["Batter"])}</span> '
+                                    f'<span style="font-size:15px;color:#d22d49;">{int(tb["sum"])} barrels</span> '
+                                    f'<span style="font-size:12px;color:#888;">({tb["rate"]:.0f}% rate)</span>'
+                                    f'</div>', unsafe_allow_html=True)
+
+                # Max EV
+                max_ev_row = week_inplay.loc[week_inplay["ExitSpeed"].idxmax()]
+                st.markdown(f'<div style="padding:10px 14px;background:#f8f8f8;border-radius:8px;border-left:4px solid #fe6100;margin:4px 0;">'
+                            f'<span style="font-size:13px;color:#888;">Hardest Single Hit</span><br>'
+                            f'<span style="font-size:18px;font-weight:800;color:#1a1a2e;">{display_name(max_ev_row["Batter"])}</span> '
+                            f'<span style="font-size:15px;color:#fe6100;">{max_ev_row["ExitSpeed"]:.1f} mph</span>'
+                            f'</div>', unsafe_allow_html=True)
+            else:
+                st.caption("Not enough in-play data this week.")
+
+        with col_wp:
+            st.markdown("##### Pitching")
+            week_pit = recent[recent["PitcherTeam"] == DAVIDSON_TEAM_ID].copy()
+            if len(week_pit) >= 10:
+                # Whiff leader
+                pit_swings = week_pit[week_pit["PitchCall"].isin(SWING_CALLS)]
+                pit_whiffs = week_pit[week_pit["PitchCall"] == "StrikeSwinging"]
+                whiff_by_p = pit_swings.groupby("Pitcher").size().reset_index(name="swings")
+                whiff_ct = pit_whiffs.groupby("Pitcher").size().reset_index(name="whiffs")
+                whiff_by_p = whiff_by_p.merge(whiff_ct, on="Pitcher", how="left").fillna(0)
+                whiff_by_p["whiff_rate"] = whiff_by_p["whiffs"] / whiff_by_p["swings"] * 100
+                whiff_by_p = whiff_by_p[whiff_by_p["swings"] >= 10].sort_values("whiff_rate", ascending=False)
+                if len(whiff_by_p) > 0:
+                    tw = whiff_by_p.iloc[0]
+                    st.markdown(f'<div style="padding:10px 14px;background:#f8f8f8;border-radius:8px;border-left:4px solid #8b0000;margin:4px 0;">'
+                                f'<span style="font-size:13px;color:#888;">Highest Whiff Rate</span><br>'
+                                f'<span style="font-size:18px;font-weight:800;color:#1a1a2e;">{display_name(tw["Pitcher"])}</span> '
+                                f'<span style="font-size:15px;color:#8b0000;">{tw["whiff_rate"]:.0f}% whiff</span> '
+                                f'<span style="font-size:12px;color:#888;">({int(tw["swings"])} swings)</span>'
+                                f'</div>', unsafe_allow_html=True)
+
+                # Velo leader
+                fb_data = week_pit[week_pit["TaggedPitchType"].isin(["Fastball", "Sinker", "Cutter"])]
+                if len(fb_data) > 0:
+                    fb_velo = fb_data.groupby("Pitcher")["RelSpeed"].agg(["mean", "max", "count"]).reset_index()
+                    fb_velo = fb_velo[fb_velo["count"] >= 5].sort_values("max", ascending=False)
+                    if len(fb_velo) > 0:
+                        tv = fb_velo.iloc[0]
+                        st.markdown(f'<div style="padding:10px 14px;background:#f8f8f8;border-radius:8px;border-left:4px solid #d22d49;margin:4px 0;">'
+                                    f'<span style="font-size:13px;color:#888;">Top Velo</span><br>'
+                                    f'<span style="font-size:18px;font-weight:800;color:#1a1a2e;">{display_name(tv["Pitcher"])}</span> '
+                                    f'<span style="font-size:15px;color:#d22d49;">{tv["max"]:.1f} max</span> '
+                                    f'<span style="font-size:12px;color:#888;">({tv["mean"]:.1f} avg, {int(tv["count"])} FB)</span>'
+                                    f'</div>', unsafe_allow_html=True)
+
+                # Lowest EV against
+                pit_inplay = recent[(recent["PitcherTeam"] == DAVIDSON_TEAM_ID) & (recent["PitchCall"] == "InPlay")]
+                pit_ev = pit_inplay.dropna(subset=["ExitSpeed"]).groupby("Pitcher")["ExitSpeed"].agg(["mean", "count"]).reset_index()
+                pit_ev = pit_ev[pit_ev["count"] >= 3].sort_values("mean")
+                if len(pit_ev) > 0:
+                    te = pit_ev.iloc[0]
+                    st.markdown(f'<div style="padding:10px 14px;background:#f8f8f8;border-radius:8px;border-left:4px solid #2ca02c;margin:4px 0;">'
+                                f'<span style="font-size:13px;color:#888;">Weakest Contact Allowed</span><br>'
+                                f'<span style="font-size:18px;font-weight:800;color:#1a1a2e;">{display_name(te["Pitcher"])}</span> '
+                                f'<span style="font-size:15px;color:#2ca02c;">{te["mean"]:.1f} avg EV against</span> '
+                                f'<span style="font-size:12px;color:#888;">({int(te["count"])} BIP)</span>'
+                                f'</div>', unsafe_allow_html=True)
+            else:
+                st.caption("Not enough pitching data this week.")
+
+    st.markdown("---")
+
+    # ── Full Season Leaderboards ──
+    section_header("Season Leaderboards")
     all_seasons = sorted(data["Season"].dropna().unique())
     sel = st.multiselect("Season", all_seasons, default=all_seasons, key="to_s")
 
