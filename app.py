@@ -5278,7 +5278,7 @@ def page_game_planning(data):
                                 unsafe_allow_html=True)
 
                 # Full table with tunnel data
-                with st.expander("Full Sequence + Tunnel Table"):
+                with st.expander("Full 2-Pitch Sequence + Tunnel Table"):
                     disp_seq = seq_df.drop(columns=["_whiff", "_combo"]).copy()
                     for c in ["Swing%", "Whiff%", "CSW%"]:
                         disp_seq[c] = disp_seq[c].map(lambda x: f"{x:.1f}%")
@@ -5287,6 +5287,408 @@ def page_game_planning(data):
                     disp_seq["Combo Score"] = disp_seq["Combo Score"].map(lambda x: f"{x:.0f}")
                     disp_seq = disp_seq.sort_values("Combo Score", ascending=False)
                     st.dataframe(disp_seq.set_index("Sequence"), use_container_width=True)
+
+            # ── 3-PITCH & 4-PITCH SEQUENCE ANALYSIS ──────────────
+            st.markdown("---")
+            section_header("Multi-Pitch Sequence Patterns")
+            st.caption("3-pitch and 4-pitch sequences with conditional outcome probabilities — "
+                       "what actually happens when this pitcher follows a pattern")
+
+            # Build extended sequence columns from the sorted pitch data
+            sdf2 = sdf.copy()
+            sdf2["Pitch2"] = sdf2.groupby(pa_cols)["TaggedPitchType"].shift(-1)
+            sdf2["Pitch3"] = sdf2.groupby(pa_cols)["TaggedPitchType"].shift(-2)
+            sdf2["Pitch4"] = sdf2.groupby(pa_cols)["TaggedPitchType"].shift(-3)
+            sdf2["Call1"] = sdf2["PitchCall"]
+            sdf2["Call2"] = sdf2.groupby(pa_cols)["PitchCall"].shift(-1)
+            sdf2["Call3"] = sdf2.groupby(pa_cols)["PitchCall"].shift(-2)
+            sdf2["Call4"] = sdf2.groupby(pa_cols)["PitchCall"].shift(-3)
+            sdf2["EV3"] = sdf2.groupby(pa_cols)["ExitSpeed"].shift(-2)
+            sdf2["EV4"] = sdf2.groupby(pa_cols)["ExitSpeed"].shift(-3)
+
+            # Outcome classification helper
+            def _classify_outcome(call, ev=np.nan):
+                if call == "StrikeSwinging":
+                    return "Whiff"
+                elif call == "StrikeCalled":
+                    return "Called Strike"
+                elif call in ("BallCalled", "HitByPitch", "BallinDirt", "BallIntentional"):
+                    return "Ball"
+                elif call in ("FoulBall", "FoulBallNotFieldable", "FoulBallFieldable"):
+                    return "Foul"
+                elif call == "InPlay":
+                    if not pd.isna(ev) and ev < 75:
+                        return "Weak Contact"
+                    elif not pd.isna(ev) and ev >= 95:
+                        return "Hard Contact"
+                    else:
+                        return "In Play"
+                return "Other"
+
+            tab_3p, tab_4p, tab_tree = st.tabs(["3-Pitch Sequences", "4-Pitch Sequences", "Sequence Trees"])
+
+            # ── 3-Pitch Sequences ──
+            with tab_3p:
+                section_header("3-Pitch Sequence Analysis")
+                st.caption("Pitch 1 → Pitch 2 → Pitch 3: What happens on the 3rd pitch?")
+
+                seq3 = sdf2.dropna(subset=["Pitch2", "Pitch3", "Call3"]).copy()
+                if len(seq3) < 20:
+                    st.info("Not enough 3-pitch sequences (need 20+).")
+                else:
+                    # Build 3-pitch sequence stats
+                    seq3["Seq3"] = seq3["TaggedPitchType"] + " → " + seq3["Pitch2"] + " → " + seq3["Pitch3"]
+                    seq3_counts = seq3["Seq3"].value_counts()
+                    top_seq3 = seq3_counts[seq3_counts >= 3].head(20).index.tolist()
+
+                    if top_seq3:
+                        seq3_rows = []
+                        for s3 in top_seq3:
+                            s3_df = seq3[seq3["Seq3"] == s3]
+                            n = len(s3_df)
+                            # Outcome on 3rd pitch
+                            sw3 = s3_df[s3_df["Call3"].isin(SWING_CALLS)]
+                            wh3 = s3_df[s3_df["Call3"] == "StrikeSwinging"]
+                            csw3 = s3_df[s3_df["Call3"].isin(["StrikeSwinging", "StrikeCalled"])]
+                            ip3 = s3_df[s3_df["Call3"] == "InPlay"]
+                            ev3_vals = ip3["EV3"].dropna()
+                            # Conditional: what was Call1 outcome?
+                            call1_strike = s3_df[s3_df["Call1"].isin(["StrikeCalled", "StrikeSwinging",
+                                                                       "FoulBall", "FoulBallNotFieldable",
+                                                                       "FoulBallFieldable", "InPlay"])]
+                            pct_strike1 = len(call1_strike) / max(n, 1) * 100
+
+                            # Tunnel data for the pair transitions
+                            pitches = s3.split(" → ")
+                            tn_12 = tunnel_lookup.get((pitches[0], pitches[1]))
+                            tn_23 = tunnel_lookup.get((pitches[1], pitches[2]))
+                            tunnel_avg = np.nanmean([
+                                tn_12["Tunnel Score"] if tn_12 is not None else np.nan,
+                                tn_23["Tunnel Score"] if tn_23 is not None else np.nan,
+                            ])
+
+                            seq3_rows.append({
+                                "Sequence": s3,
+                                "n": n,
+                                "Strike1%": pct_strike1,
+                                "Whiff3%": len(wh3) / max(len(sw3), 1) * 100 if len(sw3) > 0 else 0,
+                                "CSW3%": len(csw3) / n * 100,
+                                "Swing3%": len(sw3) / n * 100,
+                                "Avg EV3": ev3_vals.mean() if len(ev3_vals) > 0 else np.nan,
+                                "Weak%": len(ev3_vals[ev3_vals < 75]) / max(len(ev3_vals), 1) * 100 if len(ev3_vals) > 0 else np.nan,
+                                "Tunnel Avg": tunnel_avg,
+                                "_score": (len(wh3) / max(len(sw3), 1) * 100 if len(sw3) > 0 else 0) * 0.4
+                                          + (len(csw3) / n * 100) * 0.3
+                                          + (tunnel_avg if not pd.isna(tunnel_avg) else 40) * 0.3,
+                            })
+
+                        if seq3_rows:
+                            seq3_df = pd.DataFrame(seq3_rows).sort_values("_score", ascending=False)
+
+                            # Top 3-pitch sequences
+                            st.markdown("**Top 3-Pitch Sequences (by combined whiff + CSW + tunnel)**")
+                            for _, row in seq3_df.head(8).iterrows():
+                                tn_str = f"{row['Tunnel Avg']:.0f}" if not pd.isna(row["Tunnel Avg"]) else "-"
+                                ev_str = f" | EV: {row['Avg EV3']:.1f}" if not pd.isna(row["Avg EV3"]) else ""
+                                weak_str = f" | Weak: {row['Weak%']:.0f}%" if not pd.isna(row["Weak%"]) else ""
+                                score_clr = "#2ca02c" if row["_score"] > 50 else "#fe6100" if row["_score"] > 35 else "#d22d49"
+                                st.markdown(
+                                    f'<div style="padding:8px 14px;background:white;border-radius:6px;margin:3px 0;'
+                                    f'border-left:4px solid {score_clr};border:1px solid #eee;">'
+                                    f'<span style="font-size:14px;font-weight:800;color:#1a1a2e !important;">'
+                                    f'{row["Sequence"]}</span>'
+                                    f'<span style="float:right;font-size:12px;font-weight:700;color:{score_clr} !important;">'
+                                    f'Score: {row["_score"]:.0f}</span>'
+                                    f'<div style="font-size:11px;color:#555 !important;">'
+                                    f'n={row["n"]} | Strike1: {row["Strike1%"]:.0f}% | '
+                                    f'Whiff3: {row["Whiff3%"]:.0f}% | CSW3: {row["CSW3%"]:.0f}%{ev_str}{weak_str} | '
+                                    f'Tunnel: {tn_str}</div></div>', unsafe_allow_html=True)
+
+                            # Conditional outcome breakdown
+                            section_header("Conditional Outcomes — \"If Pitch 1 = Strike, then...\"")
+                            st.caption("How the 3rd pitch performs when Pitch 1 was a strike vs ball")
+
+                            top3_seq = seq3_df["Sequence"].head(5).tolist()
+                            cond_rows = []
+                            for s3 in top3_seq:
+                                s3_df = seq3[seq3["Seq3"] == s3]
+                                # Split by Pitch 1 outcome
+                                strike1 = s3_df[s3_df["Call1"].isin(["StrikeCalled", "StrikeSwinging",
+                                                                      "FoulBall", "FoulBallNotFieldable",
+                                                                      "FoulBallFieldable", "InPlay"])]
+                                ball1 = s3_df[~s3_df.index.isin(strike1.index)]
+                                for label_c, cdf in [("After Strike", strike1), ("After Ball", ball1)]:
+                                    if len(cdf) < 2:
+                                        continue
+                                    sw = cdf[cdf["Call3"].isin(SWING_CALLS)]
+                                    wh = cdf[cdf["Call3"] == "StrikeSwinging"]
+                                    ip = cdf[cdf["Call3"] == "InPlay"]
+                                    ev_v = ip["EV3"].dropna()
+                                    cond_rows.append({
+                                        "Sequence": s3,
+                                        "Condition": label_c,
+                                        "n": len(cdf),
+                                        "Swing%": f"{len(sw)/len(cdf)*100:.0f}%",
+                                        "Whiff%": f"{len(wh)/max(len(sw),1)*100:.0f}%" if len(sw) > 0 else "-",
+                                        "InPlay%": f"{len(ip)/len(cdf)*100:.0f}%",
+                                        "Avg EV": f"{ev_v.mean():.1f}" if len(ev_v) > 0 else "-",
+                                        "Weak%": f"{len(ev_v[ev_v<75])/max(len(ev_v),1)*100:.0f}%" if len(ev_v) > 0 else "-",
+                                    })
+                            if cond_rows:
+                                st.dataframe(pd.DataFrame(cond_rows).set_index(["Sequence", "Condition"]),
+                                             use_container_width=True)
+
+                            # Full table
+                            with st.expander("Full 3-Pitch Sequence Table"):
+                                disp3 = seq3_df.drop(columns=["_score"]).copy()
+                                for c in ["Strike1%", "Whiff3%", "CSW3%", "Swing3%"]:
+                                    disp3[c] = disp3[c].map(lambda x: f"{x:.1f}%")
+                                disp3["Avg EV3"] = disp3["Avg EV3"].map(lambda x: f"{x:.1f}" if not pd.isna(x) else "-")
+                                disp3["Weak%"] = disp3["Weak%"].map(lambda x: f"{x:.0f}%" if not pd.isna(x) else "-")
+                                disp3["Tunnel Avg"] = disp3["Tunnel Avg"].map(lambda x: f"{x:.0f}" if not pd.isna(x) else "-")
+                                st.dataframe(disp3.set_index("Sequence"), use_container_width=True)
+
+            # ── 4-Pitch Sequences ──
+            with tab_4p:
+                section_header("4-Pitch Sequence Analysis")
+                st.caption("Pitch 1 → Pitch 2 → Pitch 3 → Pitch 4: Deep pattern analysis")
+
+                seq4 = sdf2.dropna(subset=["Pitch2", "Pitch3", "Pitch4", "Call4"]).copy()
+                if len(seq4) < 20:
+                    st.info("Not enough 4-pitch sequences (need 20+).")
+                else:
+                    seq4["Seq4"] = (seq4["TaggedPitchType"] + " → " + seq4["Pitch2"] + " → " +
+                                    seq4["Pitch3"] + " → " + seq4["Pitch4"])
+                    seq4_counts = seq4["Seq4"].value_counts()
+                    top_seq4 = seq4_counts[seq4_counts >= 3].head(20).index.tolist()
+
+                    if top_seq4:
+                        seq4_rows = []
+                        for s4 in top_seq4:
+                            s4_df = seq4[seq4["Seq4"] == s4]
+                            n = len(s4_df)
+                            sw4 = s4_df[s4_df["Call4"].isin(SWING_CALLS)]
+                            wh4 = s4_df[s4_df["Call4"] == "StrikeSwinging"]
+                            csw4 = s4_df[s4_df["Call4"].isin(["StrikeSwinging", "StrikeCalled"])]
+                            ip4 = s4_df[s4_df["Call4"] == "InPlay"]
+                            ev4_vals = ip4["EV4"].dropna()
+
+                            # Count strikes in first 3 pitches
+                            strike_calls = ["StrikeCalled", "StrikeSwinging", "FoulBall",
+                                            "FoulBallNotFieldable", "FoulBallFieldable", "InPlay"]
+                            s4_df_c = s4_df.copy()
+                            s4_df_c["_str1"] = s4_df_c["Call1"].isin(strike_calls).astype(int)
+                            s4_df_c["_str2"] = s4_df_c["Call2"].isin(strike_calls).astype(int)
+                            s4_df_c["_str3"] = s4_df_c["Call3"].isin(strike_calls).astype(int)
+                            avg_strikes = (s4_df_c["_str1"] + s4_df_c["_str2"] + s4_df_c["_str3"]).mean()
+
+                            pitches = s4.split(" → ")
+                            tunnel_scores = []
+                            for k in range(len(pitches) - 1):
+                                tn = tunnel_lookup.get((pitches[k], pitches[k+1]))
+                                if tn is not None:
+                                    tunnel_scores.append(tn["Tunnel Score"])
+                            tunnel_avg = np.mean(tunnel_scores) if tunnel_scores else np.nan
+
+                            seq4_rows.append({
+                                "Sequence": s4,
+                                "n": n,
+                                "Avg Strikes (1-3)": round(avg_strikes, 1),
+                                "Whiff4%": len(wh4) / max(len(sw4), 1) * 100 if len(sw4) > 0 else 0,
+                                "CSW4%": len(csw4) / n * 100,
+                                "Swing4%": len(sw4) / n * 100,
+                                "Avg EV4": ev4_vals.mean() if len(ev4_vals) > 0 else np.nan,
+                                "Tunnel Avg": tunnel_avg,
+                                "_score": (len(wh4) / max(len(sw4), 1) * 100 if len(sw4) > 0 else 0) * 0.4
+                                          + (len(csw4) / n * 100) * 0.3
+                                          + (tunnel_avg if not pd.isna(tunnel_avg) else 40) * 0.3,
+                            })
+
+                        if seq4_rows:
+                            seq4_df = pd.DataFrame(seq4_rows).sort_values("_score", ascending=False)
+
+                            st.markdown("**Top 4-Pitch Sequences**")
+                            for _, row in seq4_df.head(8).iterrows():
+                                tn_str = f"{row['Tunnel Avg']:.0f}" if not pd.isna(row["Tunnel Avg"]) else "-"
+                                ev_str = f" | EV: {row['Avg EV4']:.1f}" if not pd.isna(row["Avg EV4"]) else ""
+                                score_clr = "#2ca02c" if row["_score"] > 50 else "#fe6100" if row["_score"] > 35 else "#d22d49"
+                                st.markdown(
+                                    f'<div style="padding:8px 14px;background:white;border-radius:6px;margin:3px 0;'
+                                    f'border-left:4px solid {score_clr};border:1px solid #eee;">'
+                                    f'<span style="font-size:14px;font-weight:800;color:#1a1a2e !important;">'
+                                    f'{row["Sequence"]}</span>'
+                                    f'<span style="float:right;font-size:12px;font-weight:700;color:{score_clr} !important;">'
+                                    f'Score: {row["_score"]:.0f}</span>'
+                                    f'<div style="font-size:11px;color:#555 !important;">'
+                                    f'n={row["n"]} | Strikes(1-3): {row["Avg Strikes (1-3)"]:.1f} | '
+                                    f'Whiff4: {row["Whiff4%"]:.0f}% | CSW4: {row["CSW4%"]:.0f}%{ev_str} | '
+                                    f'Tunnel: {tn_str}</div></div>', unsafe_allow_html=True)
+
+                            with st.expander("Full 4-Pitch Sequence Table"):
+                                disp4 = seq4_df.drop(columns=["_score"]).copy()
+                                for c in ["Whiff4%", "CSW4%", "Swing4%"]:
+                                    disp4[c] = disp4[c].map(lambda x: f"{x:.1f}%")
+                                disp4["Avg EV4"] = disp4["Avg EV4"].map(lambda x: f"{x:.1f}" if not pd.isna(x) else "-")
+                                disp4["Tunnel Avg"] = disp4["Tunnel Avg"].map(lambda x: f"{x:.0f}" if not pd.isna(x) else "-")
+                                st.dataframe(disp4.set_index("Sequence"), use_container_width=True)
+                    else:
+                        st.info("No 4-pitch sequences with 3+ occurrences found.")
+
+            # ── Sequence Decision Trees ──
+            with tab_tree:
+                section_header("Sequence Decision Trees")
+                st.caption("Select a starting pitch to see branching probabilities — "
+                           "\"After Slider strike → what comes next? What's the outcome?\"")
+
+                # Starting pitch selection
+                start_pitch = st.selectbox("Start with pitch:", pitch_types, key="gp_tree_start")
+
+                # Build the tree from sdf2
+                tree_base = sdf2[sdf2["TaggedPitchType"] == start_pitch].copy()
+                if len(tree_base) < 10:
+                    st.info(f"Not enough at-bats starting with {start_pitch}.")
+                else:
+                    # Level 1: What outcome on Pitch 1?
+                    tree_base["Out1"] = tree_base["Call1"].map(lambda c: "Strike" if c in [
+                        "StrikeCalled", "StrikeSwinging", "FoulBall", "FoulBallNotFieldable",
+                        "FoulBallFieldable", "InPlay"] else "Ball")
+
+                    section_header(f"After {start_pitch}...")
+                    for outcome1 in ["Strike", "Ball"]:
+                        o1_df = tree_base[tree_base["Out1"] == outcome1]
+                        if len(o1_df) < 3:
+                            continue
+                        o1_pct = len(o1_df) / len(tree_base) * 100
+
+                        # What pitch comes next?
+                        o1_with_p2 = o1_df.dropna(subset=["Pitch2"])
+                        if len(o1_with_p2) < 3:
+                            continue
+                        p2_counts = o1_with_p2["Pitch2"].value_counts()
+                        o1_clr = "#2ca02c" if outcome1 == "Strike" else "#d22d49"
+
+                        st.markdown(
+                            f'<div style="padding:10px 14px;background:#f8f8f8;border-radius:8px;'
+                            f'border-left:5px solid {o1_clr};margin:6px 0;">'
+                            f'<span style="font-size:15px;font-weight:800;color:{o1_clr} !important;">'
+                            f'{start_pitch} = {outcome1} ({o1_pct:.0f}%)</span></div>',
+                            unsafe_allow_html=True)
+
+                        # Level 2 branches
+                        branch_rows = []
+                        for p2_name in p2_counts.head(4).index:
+                            p2_df = o1_with_p2[o1_with_p2["Pitch2"] == p2_name]
+                            p2_pct = len(p2_df) / len(o1_with_p2) * 100
+                            # Outcome on Pitch 2
+                            sw2 = p2_df[p2_df["Call2"].isin(SWING_CALLS)]
+                            wh2 = p2_df[p2_df["Call2"] == "StrikeSwinging"]
+                            csw2 = p2_df[p2_df["Call2"].isin(["StrikeSwinging", "StrikeCalled"])]
+                            ip2 = p2_df[p2_df["Call2"] == "InPlay"]
+
+                            # Level 3: what's the 3rd pitch after this?
+                            p2_with_p3 = p2_df.dropna(subset=["Pitch3"])
+                            p3_top = p2_with_p3["Pitch3"].value_counts().head(3) if len(p2_with_p3) >= 3 else pd.Series(dtype=float)
+                            p3_str = ", ".join([f"{pt} ({ct/len(p2_with_p3)*100:.0f}%)" for pt, ct in p3_top.items()]) if len(p3_top) > 0 else "-"
+
+                            # Outcome summary on pitch 2
+                            outcomes = []
+                            if len(wh2) > 0:
+                                outcomes.append(f"Whiff {len(wh2)/max(len(sw2),1)*100:.0f}%")
+                            if len(csw2) > 0:
+                                outcomes.append(f"CSW {len(csw2)/len(p2_df)*100:.0f}%")
+                            if len(ip2) > 0:
+                                ev_avg = ip2.merge(sdf2[["ExitSpeed"]], left_index=True, right_index=True, suffixes=("", "_dup"))["ExitSpeed"].mean()
+                                outcomes.append(f"InPlay {len(ip2)} ({ev_avg:.0f} EV)" if not pd.isna(ev_avg) else f"InPlay {len(ip2)}")
+
+                            branch_rows.append({
+                                "Next Pitch": p2_name,
+                                "Frequency": f"{p2_pct:.0f}%",
+                                "n": len(p2_df),
+                                "P2 Outcome": " | ".join(outcomes) if outcomes else "-",
+                                "Then Pitch 3": p3_str,
+                            })
+
+                        if branch_rows:
+                            bdf_tree = pd.DataFrame(branch_rows)
+                            st.dataframe(bdf_tree.set_index("Next Pitch"), use_container_width=True)
+
+                    # Head-to-head comparison
+                    section_header("Compare Sequences Head-to-Head")
+                    st.caption("Does Slider → Slider → Fastball work better than Slider → Fastball → Slider?")
+                    seq3_all = sdf2.dropna(subset=["Pitch2", "Pitch3", "Call3"]).copy()
+                    seq3_all["Seq3"] = seq3_all["TaggedPitchType"] + " → " + seq3_all["Pitch2"] + " → " + seq3_all["Pitch3"]
+                    avail_seqs = seq3_all["Seq3"].value_counts()
+                    avail_seqs = avail_seqs[avail_seqs >= 3].index.tolist()
+
+                    if len(avail_seqs) >= 2:
+                        col_cmp1, col_cmp2 = st.columns(2)
+                        with col_cmp1:
+                            seq_a = st.selectbox("Sequence A", avail_seqs, key="gp_cmp_a")
+                        with col_cmp2:
+                            seq_b = st.selectbox("Sequence B", [s for s in avail_seqs if s != seq_a],
+                                                 key="gp_cmp_b")
+
+                        cmp_rows = []
+                        for seq_name in [seq_a, seq_b]:
+                            cdf = seq3_all[seq3_all["Seq3"] == seq_name]
+                            n = len(cdf)
+                            sw = cdf[cdf["Call3"].isin(SWING_CALLS)]
+                            wh = cdf[cdf["Call3"] == "StrikeSwinging"]
+                            csw = cdf[cdf["Call3"].isin(["StrikeSwinging", "StrikeCalled"])]
+                            ip = cdf[cdf["Call3"] == "InPlay"]
+                            ev_v = ip["EV3"].dropna()
+                            weak = ev_v[ev_v < 75] if len(ev_v) > 0 else pd.Series(dtype=float)
+                            hard = ev_v[ev_v >= 95] if len(ev_v) > 0 else pd.Series(dtype=float)
+
+                            pitches = seq_name.split(" → ")
+                            tscores = []
+                            for k in range(len(pitches) - 1):
+                                tn = tunnel_lookup.get((pitches[k], pitches[k+1]))
+                                if tn is not None:
+                                    tscores.append(tn["Tunnel Score"])
+                            t_avg = np.mean(tscores) if tscores else np.nan
+
+                            cmp_rows.append({
+                                "Sequence": seq_name,
+                                "n": n,
+                                "Swing%": f"{len(sw)/n*100:.1f}%",
+                                "Whiff%": f"{len(wh)/max(len(sw),1)*100:.1f}%" if len(sw) > 0 else "-",
+                                "CSW%": f"{len(csw)/n*100:.1f}%",
+                                "InPlay": len(ip),
+                                "Avg EV": f"{ev_v.mean():.1f}" if len(ev_v) > 0 else "-",
+                                "Weak Contact%": f"{len(weak)/max(len(ev_v),1)*100:.0f}%" if len(ev_v) > 0 else "-",
+                                "Hard Contact%": f"{len(hard)/max(len(ev_v),1)*100:.0f}%" if len(ev_v) > 0 else "-",
+                                "Tunnel Avg": f"{t_avg:.0f}" if not pd.isna(t_avg) else "-",
+                            })
+
+                        if cmp_rows:
+                            st.dataframe(pd.DataFrame(cmp_rows).set_index("Sequence"), use_container_width=True)
+
+                            # Winner declaration
+                            a_row = cmp_rows[0]
+                            b_row = cmp_rows[1]
+                            a_whiff = float(a_row["Whiff%"].replace("%", "")) if a_row["Whiff%"] != "-" else 0
+                            b_whiff = float(b_row["Whiff%"].replace("%", "")) if b_row["Whiff%"] != "-" else 0
+                            a_csw = float(a_row["CSW%"].replace("%", ""))
+                            b_csw = float(b_row["CSW%"].replace("%", ""))
+                            if a_whiff + a_csw > b_whiff + b_csw:
+                                winner = seq_a
+                                w_clr = "#2ca02c"
+                            elif b_whiff + b_csw > a_whiff + a_csw:
+                                winner = seq_b
+                                w_clr = "#2ca02c"
+                            else:
+                                winner = "Tie"
+                                w_clr = "#888"
+                            if winner != "Tie":
+                                st.markdown(
+                                    f'<div style="padding:10px;background:#f0fff0;border-radius:8px;border:1px solid #cce0cc;'
+                                    f'text-align:center;">'
+                                    f'<span style="font-size:14px;font-weight:800;color:{w_clr} !important;">'
+                                    f'Winner: {winner}</span></div>', unsafe_allow_html=True)
+                    else:
+                        st.info("Need at least 2 sequences with 3+ occurrences to compare.")
+
         else:
             st.info("Not enough columns to determine pitch sequences.")
 
