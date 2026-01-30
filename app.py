@@ -4475,77 +4475,133 @@ def page_hitters_lab(data):
     # ─── Tab 7: Swing Path Analysis ─────────────────────
     with tab_swing:
         section_header("Swing Path Analysis")
-        st.caption("Bat path estimated from hard-hit ball launch angles, pitch-height regression, and contact quality maps — no bat sensor needed")
+        st.caption("Bat path reconstructed from hard-hit ball physics, pitch-height regression, bat speed estimation, and contact-depth analysis")
 
         swings = bdf[bdf["PitchCall"].isin(SWING_CALLS)].copy()
         whiffs = bdf[bdf["PitchCall"] == "StrikeSwinging"].copy()
         contacts = bdf[bdf["PitchCall"].isin(CONTACT_CALLS)].copy()
         inplay = bdf[(bdf["PitchCall"] == "InPlay")].copy()
         inplay_ev = inplay.dropna(subset=["ExitSpeed", "PlateLocSide", "PlateLocHeight"])
+        _bs = bdf["BatterSide"].mode().iloc[0] if "BatterSide" in bdf.columns and bdf["BatterSide"].notna().any() else "Right"
 
         if len(swings) < 10:
             st.info("Not enough swing data (need 10+ swings).")
         else:
-            # ── Attack Angle Estimation (Hard-Hit Ball Method) ──
-            section_header("Estimated Attack Angle")
-            st.caption("Attack angle estimated from **median launch angle on hard-hit balls** (EV ≥ 75th percentile). "
-                        "On squared-up contact the ball leaves roughly in the bat's path direction, filtering out mishits that distort the measurement.")
+            from scipy import stats as sp_stats
 
-            inplay_aa = inplay.dropna(subset=["Angle", "ExitSpeed", "PlateLocHeight"]).copy()
-            if len(inplay_aa) >= 10:
-                # Hard-hit threshold = hitter's 75th percentile EV
-                ev_75 = inplay_aa["ExitSpeed"].quantile(0.75)
-                hard_hit = inplay_aa[inplay_aa["ExitSpeed"] >= ev_75].copy()
-                all_hit = inplay_aa.copy()
+            # ── Core data: all in-play with EV + LA + location ──
+            inplay_full = inplay.dropna(subset=["Angle", "ExitSpeed", "PlateLocHeight", "PlateLocSide"]).copy()
 
-                # Primary metric: median LA on hard-hit balls = best attack angle proxy
+            if len(inplay_full) >= 10:
+                # ── Hard-hit selection: top 25% EV (best attack angle proxy) ──
+                ev_75 = inplay_full["ExitSpeed"].quantile(0.75)
+                hard_hit = inplay_full[inplay_full["ExitSpeed"] >= ev_75].copy()
+                all_hit = inplay_full.copy()
+
+                # ── VERTICAL ATTACK ANGLE ──
+                # Primary: median LA on hard-hit = best proxy for bat path angle
+                # On squared-up contact, ball exits roughly along bat's travel direction
                 attack_angle = hard_hit["Angle"].median()
                 avg_la_all = all_hit["Angle"].median()
-                hard_hit_ev = hard_hit["ExitSpeed"].mean()
+                # EV²-weighted mean gives extra emphasis to absolute best contact
+                hard_hit_w = np.average(hard_hit["Angle"], weights=hard_hit["ExitSpeed"]**2)
 
                 # Regression: LA vs pitch height on hard-hit balls
-                # Slope = how much hitter adjusts path per foot of pitch height
-                # Intercept at mid-zone (2.5 ft) = baseline attack angle
-                from scipy import stats as sp_stats
-                slope, intercept, r_val, _, _ = sp_stats.linregress(hard_hit["PlateLocHeight"].values, hard_hit["Angle"].values)
-                mid_zone_aa = intercept + slope * 2.5  # baseline at mid-zone height
-                path_adjust = slope  # degrees per foot of pitch height
+                # Slope = path adjustment rate (how much hitter changes plane per ft of pitch height)
+                # Value at 2.5ft = mid-zone baseline attack angle
+                v_slope, v_int, v_r, _, _ = sp_stats.linregress(hard_hit["PlateLocHeight"].values, hard_hit["Angle"].values)
+                mid_zone_aa = v_int + v_slope * 2.5
+                path_adjust = v_slope
 
-                # Classify swing type using hard-hit median
+                # ── HORIZONTAL BAT PATH ──
+                # Direction vs PlateLocSide on hard-hit: slope = horizontal path tendency
+                h_data = hard_hit.dropna(subset=["Direction"])
+                if len(h_data) >= 5:
+                    h_slope, h_int, h_r, _, _ = sp_stats.linregress(h_data["PlateLocSide"].values, h_data["Direction"].values)
+                    # Positive slope for RHH = pulls inside pitches more (natural)
+                    # h_int at PlateLocSide=0 = center-field tendency
+                    horz_center = h_int  # spray direction on center-plate pitch
+                    horz_adjust = h_slope  # deg/ft of horizontal location
+                    horz_r2 = h_r**2
+                else:
+                    horz_center, horz_adjust, horz_r2 = np.nan, np.nan, np.nan
+
+                # ── BAT SPEED PROXY ──
+                # From collision physics: bat_speed ≈ (EV + COR * pitch_speed) / (1 + COR)
+                # COR ≈ 0.45 for wood/BBCOR bats
+                COR = 0.45
+                if "RelSpeed" in hard_hit.columns and hard_hit["RelSpeed"].notna().any():
+                    hard_hit["BatSpeedProxy"] = (hard_hit["ExitSpeed"] + COR * hard_hit["RelSpeed"]) / (1 + COR)
+                    bat_speed_avg = hard_hit["BatSpeedProxy"].mean()
+                    bat_speed_max = hard_hit["BatSpeedProxy"].max()
+                    # DB comparison
+                    all_db_inplay = data[(data["PitchCall"] == "InPlay")].dropna(subset=["ExitSpeed", "RelSpeed"])
+                    if len(all_db_inplay) > 0:
+                        all_db_ev75 = all_db_inplay["ExitSpeed"].quantile(0.75)
+                        all_db_hh = all_db_inplay[all_db_inplay["ExitSpeed"] >= all_db_ev75]
+                        all_db_hh_bs = (all_db_hh["ExitSpeed"] + COR * all_db_hh["RelSpeed"]) / (1 + COR)
+                        bat_speed_pctile = (all_db_hh_bs < bat_speed_avg).mean() * 100
+                    else:
+                        bat_speed_pctile = np.nan
+                else:
+                    bat_speed_avg = bat_speed_max = bat_speed_pctile = np.nan
+
+                # ── CONTACT DEPTH PROXY ──
+                # EffectiveVelo accounts for extension — higher EffVelo means earlier contact point
+                # ContactDepth = EffectiveVelo - RelSpeed: more negative = deeper contact (closer to catcher)
+                if "EffectiveVelo" in hard_hit.columns and hard_hit["EffectiveVelo"].notna().any():
+                    hard_hit["ContactDepth"] = hard_hit["EffectiveVelo"] - hard_hit["RelSpeed"]
+                    contact_depth = hard_hit["ContactDepth"].mean()
+                    # Positive = out front, negative = deeper
+                    if contact_depth > 0:
+                        depth_label = "Out Front"
+                        depth_desc = "Gets to the ball early — turns on inside pitches, may be early on off-speed"
+                    elif contact_depth > -1.5:
+                        depth_label = "Neutral"
+                        depth_desc = "Average timing depth — balanced contact point"
+                    else:
+                        depth_label = "Deep Contact"
+                        depth_desc = "Lets the ball travel — strong to opposite field, may struggle with inside velocity"
+                else:
+                    contact_depth = np.nan
+                    depth_label = depth_desc = None
+
+                # ── Swing type classification ──
                 if attack_angle > 20:
-                    swing_type = "Steep Uppercut"
-                    swing_color = "#d22d49"
+                    swing_type, swing_color = "Steep Uppercut", "#d22d49"
                     swing_desc = "Extreme loft — high HR upside but vulnerable to high fastballs and off-speed below zone"
                 elif attack_angle > 12:
-                    swing_type = "Lift-Oriented"
-                    swing_color = "#fe6100"
+                    swing_type, swing_color = "Lift-Oriented", "#fe6100"
                     swing_desc = "Modern power swing — generates carry and hard fly balls consistently"
                 elif attack_angle > 5:
-                    swing_type = "Slight Uppercut"
-                    swing_color = "#f7c631"
+                    swing_type, swing_color = "Slight Uppercut", "#f7c631"
                     swing_desc = "Balanced loft — matches most pitch planes well, produces line drives and fly balls"
                 elif attack_angle > -2:
-                    swing_type = "Level"
-                    swing_color = "#2ca02c"
+                    swing_type, swing_color = "Level", "#2ca02c"
                     swing_desc = "Flat bat path — contact-oriented, line drive approach with gap-to-gap power"
                 else:
-                    swing_type = "Downward / Chopper"
-                    swing_color = "#1f77b4"
+                    swing_type, swing_color = "Downward / Chopper", "#1f77b4"
                     swing_desc = "Downward swing plane — ground ball heavy, limits hard fly ball contact"
 
-                col_aa1, col_aa2, col_aa3, col_aa4 = st.columns(4)
-                with col_aa1:
-                    st.metric("Attack Angle (Hard-Hit)", f"{attack_angle:+.1f}°",
-                              help="Median LA on balls hit ≥ 75th pctile EV")
-                with col_aa2:
+                # ═══ SECTION 1: Attack Angle Overview ═══
+                section_header("Vertical Attack Angle")
+                st.caption("Median launch angle on hard-hit balls (EV ≥ 75th pctile). On squared-up contact, "
+                            "ball exit direction closely mirrors bat path, filtering out mishits.")
+
+                col_a1, col_a2, col_a3, col_a4 = st.columns(4)
+                with col_a1:
+                    st.metric("Attack Angle", f"{attack_angle:+.1f}°",
+                              help="Median LA on hard-hit balls — best single proxy for bat path angle")
+                with col_a2:
                     st.metric("Mid-Zone Baseline", f"{mid_zone_aa:+.1f}°",
-                              help="Estimated bat path angle at 2.5ft (mid-zone) from regression")
-                with col_aa3:
-                    st.metric("Path Adjustment", f"{path_adjust:+.1f}°/ft",
-                              help="How much LA changes per foot of pitch height (+ = steeper on high pitches)")
-                with col_aa4:
-                    st.metric("Hard-Hit Threshold", f"{ev_75:.1f} mph",
-                              help=f"75th percentile EV — {len(hard_hit)} balls used for estimation")
+                              help="Attack angle at 2.5ft pitch height from regression")
+                with col_a3:
+                    st.metric("Path Adjust", f"{path_adjust:+.1f}°/ft",
+                              help="How much bat path changes per foot of pitch height")
+                with col_a4:
+                    delta_aa = attack_angle - avg_la_all
+                    st.metric("Hard-Hit vs All LA", f"{delta_aa:+.1f}°",
+                              help=f"Hard-hit median ({attack_angle:+.1f}°) minus all-contact median ({avg_la_all:+.1f}°)")
 
                 st.markdown(
                     f'<div style="padding:12px 16px;background:white;border-radius:8px;border-left:5px solid {swing_color};'
@@ -4554,38 +4610,79 @@ def page_hitters_lab(data):
                     f'<div style="font-size:13px;color:#333 !important;margin-top:4px;">{swing_desc}</div>'
                     f'</div>', unsafe_allow_html=True)
 
-                # ── Attack Angle by Pitch Type (hard-hit only) ──
+                # ═══ SECTION 2: Bat Speed & Contact Depth ═══
+                section_header("Bat Speed & Contact Depth")
+                st.caption("Bat speed derived from collision physics (EV, pitch speed, COR≈0.45). "
+                            "Contact depth from Effective Velo vs Release Speed — positive = out front, negative = deep.")
+                col_b1, col_b2, col_b3, col_b4 = st.columns(4)
+                with col_b1:
+                    if not pd.isna(bat_speed_avg):
+                        st.metric("Bat Speed (est.)", f"{bat_speed_avg:.1f} mph",
+                                  help="(EV + 0.45 × PitchSpeed) / 1.45 on hard-hit balls")
+                    else:
+                        st.metric("Bat Speed (est.)", "—")
+                with col_b2:
+                    if not pd.isna(bat_speed_max):
+                        st.metric("Max Bat Speed", f"{bat_speed_max:.1f} mph")
+                    else:
+                        st.metric("Max Bat Speed", "—")
+                with col_b3:
+                    if not pd.isna(bat_speed_pctile):
+                        st.metric("DB Percentile", f"{bat_speed_pctile:.0f}th",
+                                  help="Where this hitter's avg bat speed ranks among all hitters in the database")
+                    else:
+                        st.metric("DB Percentile", "—")
+                with col_b4:
+                    if not pd.isna(contact_depth):
+                        st.metric("Contact Depth", f"{contact_depth:+.1f} mph",
+                                  help="EffectiveVelo − RelSpeed. Positive = out front, negative = deep")
+                    else:
+                        st.metric("Contact Depth", "—")
+
+                if depth_label:
+                    depth_color = "#fe6100" if depth_label == "Out Front" else ("#2ca02c" if depth_label == "Neutral" else "#1f77b4")
+                    st.markdown(
+                        f'<div style="padding:8px 14px;background:white;border-radius:8px;border-left:4px solid {depth_color};'
+                        f'border:1px solid #eee;margin:6px 0;">'
+                        f'<span style="font-weight:700;color:{depth_color} !important;">{depth_label}</span> — '
+                        f'<span style="font-size:13px;color:#333 !important;">{depth_desc}</span>'
+                        f'</div>', unsafe_allow_html=True)
+
+                # ═══ SECTION 3: Attack Angle by Pitch Type ═══
                 section_header("Attack Angle by Pitch Type")
-                st.caption("Median LA on hard-hit balls per pitch type — shows how the bat path adjusts to different pitch shapes")
+                st.caption("Median LA on hard-hit balls per pitch type — includes bat speed and contact depth per type")
                 aa_pt_rows = []
                 for pt in sorted(hard_hit["TaggedPitchType"].dropna().unique()):
                     pt_hh = hard_hit[hard_hit["TaggedPitchType"] == pt]
                     pt_all = all_hit[all_hit["TaggedPitchType"] == pt]
                     if len(pt_hh) < 3:
                         continue
-                    aa_pt_rows.append({
+                    row = {
                         "Pitch Type": pt,
                         "Hard-Hit n": len(pt_hh),
                         "Total BIP": len(pt_all),
                         "Attack Angle": f"{pt_hh['Angle'].median():+.1f}°",
-                        "All-Contact LA": f"{pt_all['Angle'].median():+.1f}°",
+                        "All LA": f"{pt_all['Angle'].median():+.1f}°",
                         "Hard-Hit EV": f"{pt_hh['ExitSpeed'].mean():.1f}",
                         "Barrel%": f"{len(pt_all[(pt_all['ExitSpeed'] >= 98) & (pt_all['Angle'].between(8, 32))]) / max(len(pt_all), 1) * 100:.0f}%",
-                    })
+                    }
+                    if "BatSpeedProxy" in pt_hh.columns and pt_hh["BatSpeedProxy"].notna().any():
+                        row["Bat Speed"] = f"{pt_hh['BatSpeedProxy'].mean():.1f}"
+                    if "ContactDepth" in pt_hh.columns and pt_hh["ContactDepth"].notna().any():
+                        row["Depth"] = f"{pt_hh['ContactDepth'].mean():+.1f}"
+                    aa_pt_rows.append(row)
                 if aa_pt_rows:
                     st.dataframe(pd.DataFrame(aa_pt_rows).set_index("Pitch Type"), use_container_width=True)
 
-                # ── Distribution + Regression Plot ──
+                # ═══ SECTION 4: Visualizations ═══
                 col_aa_dist, col_aa_height = st.columns(2)
                 with col_aa_dist:
-                    section_header("Hard-Hit Launch Angle Distribution")
+                    section_header("Hard-Hit LA Distribution")
                     fig_aa = go.Figure()
-                    # All contact (faint)
                     fig_aa.add_trace(go.Histogram(
                         x=all_hit["Angle"], nbinsx=30,
                         marker_color="#ccc", opacity=0.5, name="All Contact",
                     ))
-                    # Hard-hit (bold)
                     fig_aa.add_trace(go.Histogram(
                         x=hard_hit["Angle"], nbinsx=25,
                         marker_color=swing_color, opacity=0.85, name=f"Hard-Hit (≥{ev_75:.0f} mph)",
@@ -4601,16 +4698,14 @@ def page_hitters_lab(data):
 
                 with col_aa_height:
                     section_header("Bat Path vs Pitch Height")
-                    st.caption(f"Regression on hard-hit balls: slope = {path_adjust:+.1f}°/ft, R² = {r_val**2:.2f}")
+                    st.caption(f"Slope = {path_adjust:+.1f}°/ft | R² = {v_r**2:.2f} | "
+                               f"At 2.5ft → {mid_zone_aa:+.1f}°")
                     fig_aa_h = go.Figure()
-                    # All contact (faint)
                     fig_aa_h.add_trace(go.Scatter(
                         x=all_hit["PlateLocHeight"], y=all_hit["Angle"],
-                        mode="markers",
-                        marker=dict(size=4, color="#ccc", opacity=0.3),
-                        name="All Contact", showlegend=True,
+                        mode="markers", marker=dict(size=4, color="#ccc", opacity=0.3),
+                        name="All Contact",
                     ))
-                    # Hard-hit (bold, colored by EV)
                     fig_aa_h.add_trace(go.Scatter(
                         x=hard_hit["PlateLocHeight"], y=hard_hit["Angle"],
                         mode="markers",
@@ -4619,14 +4714,13 @@ def page_hitters_lab(data):
                                     cmin=ev_75, cmax=hard_hit["ExitSpeed"].max(), showscale=True,
                                     colorbar=dict(title="EV", len=0.6),
                                     line=dict(width=0.3, color="white")),
-                        name=f"Hard-Hit (≥{ev_75:.0f})", showlegend=True,
+                        name=f"Hard-Hit (≥{ev_75:.0f})",
                         hovertemplate="Height: %{x:.2f}ft<br>LA: %{y:.1f}°<br>EV: %{marker.color:.1f}<extra></extra>",
                     ))
-                    # Regression line (hard-hit only)
                     x_line = np.linspace(hard_hit["PlateLocHeight"].min(), hard_hit["PlateLocHeight"].max(), 50)
                     fig_aa_h.add_trace(go.Scatter(
-                        x=x_line, y=intercept + slope * x_line, mode="lines",
-                        line=dict(color="#1a1a2e", width=2.5), name="Bat Path Regression", showlegend=True,
+                        x=x_line, y=v_int + v_slope * x_line, mode="lines",
+                        line=dict(color="#1a1a2e", width=2.5), name="Bat Path Fit",
                     ))
                     fig_aa_h.add_hline(y=0, line_dash="dot", line_color="#ccc")
                     fig_aa_h.update_layout(**CHART_LAYOUT, height=300,
@@ -4634,8 +4728,126 @@ def page_hitters_lab(data):
                                             legend=dict(orientation="h", y=1.08, x=0.5, xanchor="center"))
                     st.plotly_chart(fig_aa_h, use_container_width=True)
 
+                # ── Horizontal path + Bat speed by height ──
+                col_horz, col_bs_h = st.columns(2)
+                with col_horz:
+                    section_header("Horizontal Bat Path")
+                    if not pd.isna(horz_center) and len(h_data) >= 5:
+                        st.caption(f"Direction vs plate location on hard-hit balls | Slope = {horz_adjust:+.1f}°/ft | R² = {horz_r2:.2f}")
+                        fig_hp = go.Figure()
+                        fig_hp.add_trace(go.Scatter(
+                            x=h_data["PlateLocSide"], y=h_data["Direction"],
+                            mode="markers",
+                            marker=dict(size=6, color=h_data["ExitSpeed"],
+                                        colorscale=[[0, "#1f77b4"], [0.5, "#f7f7f7"], [1, "#d22d49"]],
+                                        cmin=ev_75, cmax=h_data["ExitSpeed"].max(), showscale=True,
+                                        colorbar=dict(title="EV", len=0.6)),
+                            hovertemplate="Side: %{x:.2f}<br>Dir: %{y:.1f}°<br>EV: %{marker.color:.1f}<extra></extra>",
+                            name="Hard-Hit",
+                        ))
+                        hx = np.linspace(h_data["PlateLocSide"].min(), h_data["PlateLocSide"].max(), 50)
+                        fig_hp.add_trace(go.Scatter(
+                            x=hx, y=h_int + h_slope * hx, mode="lines",
+                            line=dict(color="#1a1a2e", width=2.5), name="Trend",
+                        ))
+                        fig_hp.add_hline(y=0, line_dash="dot", line_color="#ccc", annotation_text="Center Field")
+                        fig_hp.update_layout(**CHART_LAYOUT, height=300,
+                                              xaxis_title="Plate Location (Side)", yaxis_title="Spray Direction (°)",
+                                              legend=dict(orientation="h", y=1.08, x=0.5, xanchor="center"))
+                        st.plotly_chart(fig_hp, use_container_width=True)
+                        # Pull tendency note
+                        if _bs == "Right":
+                            pull_dir = "negative" if horz_center < -10 else ("positive/oppo" if horz_center > 10 else "center")
+                        else:
+                            pull_dir = "positive" if horz_center > 10 else ("negative/oppo" if horz_center < -10 else "center")
+                        st.caption(f"Center-plate spray direction: {horz_center:+.1f}° — tendency: **{pull_dir}**")
+                    else:
+                        st.info("Not enough hard-hit data with spray direction.")
+
+                with col_bs_h:
+                    section_header("Bat Speed by Pitch Height")
+                    if "BatSpeedProxy" in hard_hit.columns and hard_hit["BatSpeedProxy"].notna().sum() >= 5:
+                        # Bin by pitch height thirds
+                        height_bins = pd.qcut(hard_hit["PlateLocHeight"], q=3, labels=["Low", "Mid", "High"])
+                        bs_by_h = hard_hit.groupby(height_bins, observed=True)["BatSpeedProxy"].agg(["mean", "count"]).reset_index()
+                        bs_by_h.columns = ["Zone", "Avg Bat Speed", "n"]
+                        fig_bs = go.Figure()
+                        colors = ["#1f77b4", "#2ca02c", "#d22d49"]
+                        for i, (_, row) in enumerate(bs_by_h.iterrows()):
+                            fig_bs.add_trace(go.Bar(
+                                x=[row["Zone"]], y=[row["Avg Bat Speed"]],
+                                marker_color=colors[i % 3], name=row["Zone"],
+                                text=f"{row['Avg Bat Speed']:.1f}", textposition="outside",
+                                hovertemplate=f"{row['Zone']}: {row['Avg Bat Speed']:.1f} mph (n={row['n']})<extra></extra>",
+                            ))
+                        fig_bs.update_layout(**CHART_LAYOUT, height=300, yaxis_title="Bat Speed (mph)",
+                                              showlegend=False, yaxis=dict(range=[
+                                                  max(0, bs_by_h["Avg Bat Speed"].min() - 5),
+                                                  bs_by_h["Avg Bat Speed"].max() + 3]))
+                        st.plotly_chart(fig_bs, use_container_width=True)
+                        best_zone = bs_by_h.loc[bs_by_h["Avg Bat Speed"].idxmax(), "Zone"]
+                        st.caption(f"Fastest bat speed in the **{best_zone}** third of the zone")
+                    else:
+                        st.info("Not enough data for bat speed by height analysis.")
+
+                # ── Contact Depth by Pitch Type ──
+                if "ContactDepth" in hard_hit.columns and hard_hit["ContactDepth"].notna().sum() >= 5:
+                    col_depth_pt, col_depth_loc = st.columns(2)
+                    with col_depth_pt:
+                        section_header("Contact Depth by Pitch Type")
+                        st.caption("Positive = out front (early), negative = deep (late). Helps identify timing weaknesses.")
+                        cd_rows = []
+                        for pt in sorted(hard_hit["TaggedPitchType"].dropna().unique()):
+                            pt_cd = hard_hit[hard_hit["TaggedPitchType"] == pt]["ContactDepth"]
+                            if len(pt_cd) < 3:
+                                continue
+                            cd_rows.append({"Pitch Type": pt, "Avg Depth": pt_cd.mean(), "n": len(pt_cd)})
+                        if cd_rows:
+                            cd_df = pd.DataFrame(cd_rows).sort_values("Avg Depth", ascending=False)
+                            fig_cd = go.Figure()
+                            fig_cd.add_trace(go.Bar(
+                                x=cd_df["Pitch Type"], y=cd_df["Avg Depth"],
+                                marker_color=[("#fe6100" if d > 0 else "#1f77b4") for d in cd_df["Avg Depth"]],
+                                text=[f"{d:+.1f}" for d in cd_df["Avg Depth"]], textposition="outside",
+                            ))
+                            fig_cd.add_hline(y=0, line_dash="solid", line_color="#333")
+                            fig_cd.update_layout(**CHART_LAYOUT, height=300, yaxis_title="Contact Depth (mph)",
+                                                  showlegend=False)
+                            st.plotly_chart(fig_cd, use_container_width=True)
+
+                    with col_depth_loc:
+                        section_header("Contact Depth: Inside vs Outside")
+                        st.caption("Does the hitter get out front on inside pitches and stay deep on outside?")
+                        if _bs == "Right":
+                            in_cd = hard_hit[hard_hit["PlateLocSide"] < -0.28]["ContactDepth"]
+                            out_cd = hard_hit[hard_hit["PlateLocSide"] > 0.28]["ContactDepth"]
+                        else:
+                            in_cd = hard_hit[hard_hit["PlateLocSide"] > 0.28]["ContactDepth"]
+                            out_cd = hard_hit[hard_hit["PlateLocSide"] < -0.28]["ContactDepth"]
+                        if len(in_cd) >= 3 and len(out_cd) >= 3:
+                            fig_io = go.Figure()
+                            fig_io.add_trace(go.Bar(x=["Inside"], y=[in_cd.mean()],
+                                                     marker_color="#fe6100", text=f"{in_cd.mean():+.1f}",
+                                                     textposition="outside", name="Inside"))
+                            fig_io.add_trace(go.Bar(x=["Outside"], y=[out_cd.mean()],
+                                                     marker_color="#1f77b4", text=f"{out_cd.mean():+.1f}",
+                                                     textposition="outside", name="Outside"))
+                            fig_io.add_hline(y=0, line_dash="solid", line_color="#333")
+                            fig_io.update_layout(**CHART_LAYOUT, height=300, yaxis_title="Contact Depth (mph)",
+                                                  showlegend=False)
+                            st.plotly_chart(fig_io, use_container_width=True)
+                            diff = in_cd.mean() - out_cd.mean()
+                            if diff > 0.5:
+                                st.caption("Gets out front on inside pitches — good inside coverage, may pull off outside")
+                            elif diff < -0.5:
+                                st.caption("Deeper on inside pitches — may be late on inside velocity")
+                            else:
+                                st.caption("Consistent contact depth inside-to-outside — balanced timing")
+                        else:
+                            st.info("Not enough inside/outside data.")
+
             else:
-                st.info("Not enough InPlay pitches with launch angle + EV data (need 10+).")
+                st.info("Not enough InPlay pitches with LA + EV data (need 10+).")
 
             # ── Barrel Zone Map ──
             section_header("Barrel Path — EV Heatmap")
@@ -4643,7 +4855,6 @@ def page_hitters_lab(data):
             if len(inplay_ev) >= 10:
                 col_barrel, col_whiff_path = st.columns(2)
                 with col_barrel:
-                    # EV heatmap using contour
                     fig_barrel = go.Figure()
                     fig_barrel.add_trace(go.Histogram2dContour(
                         x=inplay_ev["PlateLocSide"], y=inplay_ev["PlateLocHeight"],
@@ -4655,7 +4866,6 @@ def page_hitters_lab(data):
                         showscale=True,
                         colorbar=dict(title="Avg EV", len=0.8),
                     ))
-                    # Overlay barrel contacts as stars
                     barrels = inplay_ev[(inplay_ev["ExitSpeed"] >= 98) & (inplay_ev["Angle"].between(8, 32))] if "Angle" in inplay_ev.columns else pd.DataFrame()
                     if len(barrels) > 0:
                         fig_barrel.add_trace(go.Scatter(
@@ -4673,7 +4883,6 @@ def page_hitters_lab(data):
                     st.plotly_chart(fig_barrel, use_container_width=True)
 
                 with col_whiff_path:
-                    # Whiff density — where the bat ISN'T
                     section_header("Swing & Miss Zones")
                     st.caption("Where the bat path has holes — these are the gaps in the swing plane")
                     wh_loc = whiffs.dropna(subset=["PlateLocSide", "PlateLocHeight"])
@@ -4688,7 +4897,6 @@ def page_hitters_lab(data):
                             showscale=True,
                             colorbar=dict(title="Whiff Density", len=0.8),
                         ))
-                        # Overlay contact locations faintly
                         con_loc = contacts.dropna(subset=["PlateLocSide", "PlateLocHeight"])
                         if len(con_loc) > 0:
                             fig_whiff.add_trace(go.Scatter(
@@ -4735,7 +4943,6 @@ def page_hitters_lab(data):
                     st.plotly_chart(fig_dec, use_container_width=True)
 
                 with col_dec2:
-                    # Swing decision contour — probability of swinging at each location
                     section_header("Swing Probability Contour")
                     all_with_loc = bdf.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
                     all_with_loc["is_swing"] = all_with_loc["PitchCall"].isin(SWING_CALLS).astype(int)
@@ -4757,46 +4964,34 @@ def page_hitters_lab(data):
                                             title="Swing Probability by Location")
                     st.plotly_chart(fig_prob, use_container_width=True)
 
-            # ── Swing Path Summary Card ──
+            # ── Swing Path Summary ──
             section_header("Swing Path Profile")
-            swing_n = len(swings)
-            whiff_n = len(whiffs)
-            contact_n = len(contacts)
-            inplay_n = len(inplay_ev)
-
-            # Compute zone-level stats for the profile
             high_swings = swings[swings["PlateLocHeight"] > 2.83] if "PlateLocHeight" in swings.columns else pd.DataFrame()
             low_swings = swings[swings["PlateLocHeight"] < 2.17] if "PlateLocHeight" in swings.columns else pd.DataFrame()
             high_whiff_rate = len(high_swings[high_swings["PitchCall"] == "StrikeSwinging"]) / max(len(high_swings), 1) * 100
             low_whiff_rate = len(low_swings[low_swings["PitchCall"] == "StrikeSwinging"]) / max(len(low_swings), 1) * 100
-
             high_ev = inplay_ev[inplay_ev["PlateLocHeight"] > 2.83]["ExitSpeed"].mean() if len(inplay_ev[inplay_ev["PlateLocHeight"] > 2.83]) >= 3 else np.nan
             low_ev = inplay_ev[inplay_ev["PlateLocHeight"] < 2.17]["ExitSpeed"].mean() if len(inplay_ev[inplay_ev["PlateLocHeight"] < 2.17]) >= 3 else np.nan
 
             insights = []
             if not pd.isna(high_ev) and not pd.isna(low_ev):
                 if high_ev > low_ev + 3:
-                    insights.append(f"Barrel is **higher in the zone** — {high_ev:.1f} mph (high) vs {low_ev:.1f} mph (low). Swing plane sits up.")
+                    insights.append(f"Barrel sits **high** — {high_ev:.1f} mph (up) vs {low_ev:.1f} mph (down). Swing plane is elevated.")
                 elif low_ev > high_ev + 3:
-                    insights.append(f"Barrel is **lower in the zone** — {low_ev:.1f} mph (low) vs {high_ev:.1f} mph (high). Swing plane sits down.")
+                    insights.append(f"Barrel sits **low** — {low_ev:.1f} mph (down) vs {high_ev:.1f} mph (up). Swing plane is depressed.")
                 else:
-                    insights.append(f"Even EV top-to-bottom ({high_ev:.1f} high vs {low_ev:.1f} low) — good vertical barrel coverage.")
-
+                    insights.append(f"Even vertical barrel coverage ({high_ev:.1f} high vs {low_ev:.1f} low).")
             if high_whiff_rate > low_whiff_rate + 10:
-                insights.append(f"More vulnerable **up** ({high_whiff_rate:.0f}% whiff high vs {low_whiff_rate:.0f}% low) — bat path may sit below the high fastball.")
+                insights.append(f"Vulnerable **up** ({high_whiff_rate:.0f}% whiff high vs {low_whiff_rate:.0f}% low) — bat path sits below high fastball plane.")
             elif low_whiff_rate > high_whiff_rate + 10:
-                insights.append(f"More vulnerable **down** ({low_whiff_rate:.0f}% whiff low vs {high_whiff_rate:.0f}% high) — bat path may sweep over breaking balls.")
-
-            # Inside vs outside
-            _bs = bdf["BatterSide"].mode().iloc[0] if "BatterSide" in bdf.columns and bdf["BatterSide"].notna().any() else "Right"
+                insights.append(f"Vulnerable **down** ({low_whiff_rate:.0f}% whiff low vs {high_whiff_rate:.0f}% high) — bat sweeps over breaking balls.")
             inside_ev = inplay_ev[inplay_ev["PlateLocSide"] < -0.28]["ExitSpeed"].mean() if _bs == "Right" else inplay_ev[inplay_ev["PlateLocSide"] > 0.28]["ExitSpeed"].mean()
             outside_ev = inplay_ev[inplay_ev["PlateLocSide"] > 0.28]["ExitSpeed"].mean() if _bs == "Right" else inplay_ev[inplay_ev["PlateLocSide"] < -0.28]["ExitSpeed"].mean()
             if not pd.isna(inside_ev) and not pd.isna(outside_ev):
                 if inside_ev > outside_ev + 3:
                     insights.append(f"Stronger **inside** ({inside_ev:.1f} mph) than outside ({outside_ev:.1f} mph) — barrel reaches inside pitch well.")
                 elif outside_ev > inside_ev + 3:
-                    insights.append(f"Stronger **outside** ({outside_ev:.1f} mph) than inside ({inside_ev:.1f} mph) — extends barrel well to the outer half.")
-
+                    insights.append(f"Stronger **outside** ({outside_ev:.1f} mph) than inside ({inside_ev:.1f} mph) — extends barrel to outer half.")
             if insights:
                 for insight in insights:
                     st.markdown(f"- {insight}")
