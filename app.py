@@ -280,6 +280,7 @@ def load_all_data():
               "ZoneSpeed", "EffectiveVelo", "HangTime", "PopTime"]:
         if c in data.columns:
             data[c] = pd.to_numeric(data[c], errors="coerce")
+    data = normalize_pitch_types(data)
     return data
 
 
@@ -4483,6 +4484,566 @@ def page_hitters_lab(data):
 
 
 # ──────────────────────────────────────────────
+# PAGE: MATCHUP OPTIMIZER
+# ──────────────────────────────────────────────
+def page_matchup_optimizer(data):
+    st.markdown('<div class="section-header">Matchup Optimizer</div>', unsafe_allow_html=True)
+    st.caption("Rank Davidson hitters by expected performance against a specific opposing pitcher's arsenal")
+
+    # Select opponent pitcher
+    opp_pitching = data[~data["Pitcher"].isin(ROSTER_2026) & data["PitcherTeam"].notna()].copy()
+    if opp_pitching.empty:
+        st.warning("No opponent pitching data found.")
+        return
+
+    opp_pitchers = sorted(opp_pitching["Pitcher"].unique())
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        opp_pitcher = st.selectbox("Select Opposing Pitcher", opp_pitchers,
+                                    format_func=display_name, key="mo_pitcher")
+    with col2:
+        seasons = sorted(data["Season"].dropna().unique())
+        season_filter = st.multiselect("Season", seasons, default=seasons, key="mo_season")
+
+    opdf = opp_pitching[opp_pitching["Pitcher"] == opp_pitcher]
+    if season_filter:
+        opdf = opdf[opdf["Season"].isin(season_filter)]
+    if len(opdf) < 10:
+        st.warning("Not enough data for this pitcher (need 10+ pitches).")
+        return
+
+    throws = opdf["PitcherThrows"].mode().iloc[0] if opdf["PitcherThrows"].notna().any() else "?"
+    team = opdf["PitcherTeam"].mode().iloc[0] if opdf["PitcherTeam"].notna().any() else "?"
+
+    # Pitcher arsenal summary
+    section_header(f"{display_name(opp_pitcher)} — {team} ({throws}HP) — {len(opdf)} pitches")
+
+    arsenal = []
+    for pt in sorted(opdf["TaggedPitchType"].dropna().unique()):
+        pt_df = opdf[opdf["TaggedPitchType"] == pt]
+        pct = len(pt_df) / len(opdf) * 100
+        avg_velo = pt_df["RelSpeed"].mean() if pt_df["RelSpeed"].notna().any() else np.nan
+        arsenal.append({"Pitch": pt, "Usage": f"{pct:.0f}%", "Avg Velo": f"{avg_velo:.1f}" if not pd.isna(avg_velo) else "-",
+                        "usage_num": pct})
+    arsenal_df = pd.DataFrame(arsenal).sort_values("usage_num", ascending=False).drop(columns=["usage_num"])
+    st.dataframe(arsenal_df.set_index("Pitch"), use_container_width=True)
+
+    # Score each Davidson hitter vs this pitcher's pitch type mix
+    section_header("Hitter Rankings vs This Pitcher")
+    dav_hitting = filter_davidson(data, role="batter")
+    if season_filter:
+        dav_hitting = dav_hitting[dav_hitting["Season"].isin(season_filter)]
+
+    pitch_mix = opdf["TaggedPitchType"].value_counts(normalize=True)
+
+    hitter_scores = []
+    for batter in dav_hitting["Batter"].unique():
+        bdf = dav_hitting[dav_hitting["Batter"] == batter]
+        if len(bdf) < 20:
+            continue
+        side = bdf["BatterSide"].mode().iloc[0] if bdf["BatterSide"].notna().any() else "?"
+        bats = {"Right": "R", "Left": "L", "Switch": "S"}.get(side, side)
+
+        # Weighted score across pitch types
+        weighted_ev = 0
+        weighted_whiff = 0
+        weighted_chase = 0
+        total_weight = 0
+        pt_details = {}
+
+        for pt, pct in pitch_mix.items():
+            pt_bdf = bdf[bdf["TaggedPitchType"] == pt]
+            if len(pt_bdf) < 3:
+                continue
+            sw = pt_bdf[pt_bdf["PitchCall"].isin(SWING_CALLS)]
+            wh = pt_bdf[pt_bdf["PitchCall"] == "StrikeSwinging"]
+            bt = pt_bdf[pt_bdf["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
+            oz = pt_bdf[~((pt_bdf["PlateLocSide"].abs() <= 0.83) & (pt_bdf["PlateLocHeight"].between(1.5, 3.5))) & pt_bdf["PlateLocSide"].notna()]
+            ch = oz[oz["PitchCall"].isin(SWING_CALLS)]
+
+            avg_ev = bt["ExitSpeed"].mean() if len(bt) > 0 else 75
+            whiff_rate = len(wh) / max(len(sw), 1) * 100 if len(sw) > 0 else 50
+            chase_rate = len(ch) / max(len(oz), 1) * 100 if len(oz) > 0 else 30
+
+            weighted_ev += avg_ev * pct
+            weighted_whiff += whiff_rate * pct
+            weighted_chase += chase_rate * pct
+            total_weight += pct
+            pt_details[pt] = {"EV": f"{avg_ev:.1f}", "Whiff": f"{whiff_rate:.0f}%"}
+
+        if total_weight < 0.3:
+            continue
+
+        weighted_ev /= total_weight
+        weighted_whiff /= total_weight
+        weighted_chase /= total_weight
+
+        # Composite score: higher EV good, lower whiff good, lower chase good
+        composite = (weighted_ev - 75) * 2 - weighted_whiff * 0.5 - weighted_chase * 0.3
+
+        # Platoon advantage
+        platoon = ""
+        if throws == "Right" and bats == "L":
+            platoon = "Platoon+"
+        elif throws == "Left" and bats == "R":
+            platoon = "Platoon+"
+        elif throws == "Right" and bats == "R":
+            platoon = "Same"
+        elif throws == "Left" and bats == "L":
+            platoon = "Same"
+
+        hitter_scores.append({
+            "Hitter": batter,
+            "Bats": bats,
+            "Platoon": platoon,
+            "Pitches": len(bdf),
+            "xEV": round(weighted_ev, 1),
+            "xWhiff%": round(weighted_whiff, 1),
+            "xChase%": round(weighted_chase, 1),
+            "Score": round(composite, 1),
+            "_score": composite,
+        })
+
+    if hitter_scores:
+        score_df = pd.DataFrame(hitter_scores).sort_values("_score", ascending=False)
+
+        # Color-code ranks
+        st.markdown("*Higher Score = better matchup. Score combines expected EV, whiff rate, and chase rate weighted by pitcher's pitch mix.*")
+
+        display_scores = score_df.drop(columns=["_score"]).copy()
+        display_scores.insert(0, "Rank", range(1, len(display_scores) + 1))
+        display_scores["Hitter"] = display_scores["Hitter"].apply(display_name)
+        st.dataframe(display_scores.set_index("Rank"), use_container_width=True, height=min(len(display_scores) * 40 + 50, 600))
+
+        # Top 9 lineup recommendation
+        section_header("Recommended Lineup (Top 9)")
+        top9 = score_df.head(9)
+        lineup_cols = st.columns(3)
+        for i, (_, row) in enumerate(top9.iterrows()):
+            with lineup_cols[i % 3]:
+                clr = "#2ca02c" if row["Score"] > 10 else "#f7c631" if row["Score"] > 0 else "#d22d49"
+                st.markdown(
+                    f'<div style="padding:10px;background:white;border-radius:8px;border:1px solid #eee;margin:4px 0;'
+                    f'border-left:4px solid {clr};">'
+                    f'<div style="font-size:20px;font-weight:800;color:#1a1a2e !important;">#{i+1}</div>'
+                    f'<div style="font-size:14px;font-weight:700;color:#1a1a2e !important;">{display_name(row["Hitter"])}</div>'
+                    f'<div style="font-size:11px;color:#666 !important;">Bats: {row["Bats"]} | {row["Platoon"]} | '
+                    f'xEV: {row["xEV"]} | Score: {row["Score"]}</div></div>', unsafe_allow_html=True)
+
+        # Detailed matchup breakdown for selected hitter
+        section_header("Detailed Matchup Breakdown")
+        selected = st.selectbox("Select Hitter for Detail", score_df["Hitter"].tolist(),
+                                 format_func=display_name, key="mo_detail")
+        sel_bdf = dav_hitting[dav_hitting["Batter"] == selected]
+        detail_rows = []
+        for pt in sorted(opdf["TaggedPitchType"].dropna().unique()):
+            pt_usage = len(opdf[opdf["TaggedPitchType"] == pt]) / len(opdf) * 100
+            pt_bdf = sel_bdf[sel_bdf["TaggedPitchType"] == pt]
+            if len(pt_bdf) < 3:
+                detail_rows.append({"Pitch": pt, "Opp Usage": f"{pt_usage:.0f}%", "Seen": len(pt_bdf),
+                                     "Swing%": "-", "Whiff%": "-", "Avg EV": "-", "Barrel%": "-"})
+                continue
+            sw = pt_bdf[pt_bdf["PitchCall"].isin(SWING_CALLS)]
+            wh = pt_bdf[pt_bdf["PitchCall"] == "StrikeSwinging"]
+            bt = pt_bdf[pt_bdf["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
+            br = bt[(bt["ExitSpeed"] >= 98) & (bt["Angle"].between(8, 32))] if len(bt) > 0 else pd.DataFrame()
+            detail_rows.append({
+                "Pitch": pt,
+                "Opp Usage": f"{pt_usage:.0f}%",
+                "Seen": len(pt_bdf),
+                "Swing%": f"{len(sw)/len(pt_bdf)*100:.1f}%",
+                "Whiff%": f"{len(wh)/max(len(sw),1)*100:.1f}%" if len(sw) > 0 else "-",
+                "Avg EV": f"{bt['ExitSpeed'].mean():.1f}" if len(bt) > 0 else "-",
+                "Barrel%": f"{len(br)/max(len(bt),1)*100:.1f}%" if len(bt) > 0 else "-",
+            })
+        if detail_rows:
+            st.dataframe(pd.DataFrame(detail_rows).set_index("Pitch"), use_container_width=True)
+    else:
+        st.info("Not enough Davidson hitting data against these pitch types.")
+
+
+# ──────────────────────────────────────────────
+# PAGE: GAME PLANNING
+# ──────────────────────────────────────────────
+def page_game_planning(data):
+    st.markdown('<div class="section-header">Game Planning</div>', unsafe_allow_html=True)
+    st.caption("Pitch sequencing engine, count leverage analysis, and effective velocity — actionable intel for game day")
+
+    dav_pitching = filter_davidson(data, role="pitcher")
+    if dav_pitching.empty:
+        st.warning("No Davidson pitching data found.")
+        return
+
+    pitchers = sorted(dav_pitching["Pitcher"].unique())
+    col_sel1, col_sel2 = st.columns([2, 1])
+    with col_sel1:
+        pitcher = st.selectbox("Select Pitcher", pitchers, format_func=display_name, key="gp_pitcher")
+    with col_sel2:
+        seasons = sorted(dav_pitching["Season"].dropna().unique())
+        season_filter = st.multiselect("Season", seasons, default=seasons, key="gp_season")
+
+    pdf = dav_pitching[dav_pitching["Pitcher"] == pitcher].copy()
+    if season_filter:
+        pdf = pdf[pdf["Season"].isin(season_filter)]
+    if len(pdf) < 30:
+        st.warning("Not enough pitches (need 30+).")
+        return
+
+    jersey = JERSEY.get(pitcher, "")
+    pos = POSITION.get(pitcher, "")
+    throws = pdf["PitcherThrows"].mode().iloc[0] if pdf["PitcherThrows"].notna().any() else ""
+    t_str = {"Right": "R", "Left": "L"}.get(throws, throws)
+
+    player_header(pitcher, jersey, pos,
+                  f"{pos} | Throws: {t_str} | Davidson Wildcats",
+                  f"{len(pdf):,} pitches | Seasons: {', '.join(str(int(s)) for s in sorted(pdf['Season'].dropna().unique()))}")
+
+    tab_seq, tab_count, tab_effv = st.tabs(["Pitch Sequencing", "Count Leverage", "Effective Velocity"])
+
+    # ─── Tab: Pitch Sequencing Engine ──────────────
+    with tab_seq:
+        section_header("Pitch Sequencing Engine")
+        st.caption("What happens after pitch A → when you throw pitch B?")
+
+        # Build sequence pairs
+        sort_cols = [c for c in ["GameID", "PAofInning", "Inning", "PitchNo"] if c in pdf.columns]
+        if len(sort_cols) >= 2:
+            sdf = pdf.sort_values(sort_cols).copy()
+            pa_cols = [c for c in ["GameID", "PAofInning", "Inning"] if c in pdf.columns]
+            sdf["NextPitch"] = sdf.groupby(pa_cols)["TaggedPitchType"].shift(-1)
+            sdf["NextCall"] = sdf.groupby(pa_cols)["PitchCall"].shift(-1)
+            sdf["NextEV"] = sdf.groupby(pa_cols)["ExitSpeed"].shift(-1)
+            pairs = sdf.dropna(subset=["NextPitch"])
+
+            # Sequence matrix
+            section_header("Sequence Effectiveness Matrix")
+            st.caption("Rows = current pitch, Columns = next pitch. Cell = Whiff% on the next pitch.")
+
+            pitch_types = sorted(pdf["TaggedPitchType"].dropna().unique())
+            matrix_data = np.full((len(pitch_types), len(pitch_types)), np.nan)
+            matrix_annot = [['' for _ in pitch_types] for _ in pitch_types]
+            matrix_n = [[0 for _ in pitch_types] for _ in pitch_types]
+
+            for i, pt_a in enumerate(pitch_types):
+                for j, pt_b in enumerate(pitch_types):
+                    pair = pairs[(pairs["TaggedPitchType"] == pt_a) & (pairs["NextPitch"] == pt_b)]
+                    if len(pair) < 3:
+                        continue
+                    sw = pair[pair["NextCall"].isin(SWING_CALLS)]
+                    wh = pair[pair["NextCall"] == "StrikeSwinging"]
+                    if len(sw) > 0:
+                        whiff_pct = len(wh) / len(sw) * 100
+                        matrix_data[i, j] = whiff_pct
+                        matrix_annot[i][j] = f"{whiff_pct:.0f}%\n({len(pair)})"
+                    matrix_n[i][j] = len(pair)
+
+            fig_matrix = go.Figure(data=go.Heatmap(
+                z=matrix_data, text=matrix_annot, texttemplate="%{text}",
+                x=pitch_types, y=pitch_types,
+                colorscale=[[0, "#f7f7f7"], [0.3, "#f7c631"], [0.6, "#fe6100"], [1, "#d22d49"]],
+                zmin=0, zmax=50, showscale=True,
+                colorbar=dict(title="Whiff%", len=0.8),
+            ))
+            fig_matrix.update_layout(**CHART_LAYOUT, height=max(300, len(pitch_types) * 60 + 60),
+                                      xaxis_title="Next Pitch (B)", yaxis_title="Current Pitch (A)",
+                                      xaxis=dict(side="bottom"))
+            st.plotly_chart(fig_matrix, use_container_width=True)
+
+            # Best / worst sequences
+            seq_rows = []
+            for i, pt_a in enumerate(pitch_types):
+                for j, pt_b in enumerate(pitch_types):
+                    pair = pairs[(pairs["TaggedPitchType"] == pt_a) & (pairs["NextPitch"] == pt_b)]
+                    if len(pair) < 5:
+                        continue
+                    sw = pair[pair["NextCall"].isin(SWING_CALLS)]
+                    wh = pair[pair["NextCall"] == "StrikeSwinging"]
+                    ct = pair[pair["NextCall"].isin(CONTACT_CALLS)]
+                    bt = pair[pair["NextCall"] == "InPlay"].dropna(subset=["NextEV"])
+                    csw = pair[pair["NextCall"].isin(["StrikeSwinging", "StrikeCalled"])]
+                    seq_rows.append({
+                        "Sequence": f"{pt_a} → {pt_b}",
+                        "Count": len(pair),
+                        "Swing%": len(sw) / len(pair) * 100,
+                        "Whiff%": len(wh) / max(len(sw), 1) * 100 if len(sw) > 0 else 0,
+                        "CSW%": len(csw) / len(pair) * 100,
+                        "Avg EV": bt["NextEV"].mean() if len(bt) > 0 else np.nan,
+                        "_whiff": len(wh) / max(len(sw), 1) * 100 if len(sw) > 0 else 0,
+                    })
+
+            if seq_rows:
+                seq_df = pd.DataFrame(seq_rows).sort_values("_whiff", ascending=False)
+                col_best, col_worst = st.columns(2)
+                with col_best:
+                    section_header("Best Sequences (Highest Whiff%)")
+                    top5 = seq_df.head(5)
+                    for _, row in top5.iterrows():
+                        st.markdown(
+                            f'<div style="padding:8px 12px;background:white;border-radius:6px;margin:4px 0;'
+                            f'border-left:4px solid #2ca02c;border:1px solid #eee;">'
+                            f'<span style="font-size:14px;font-weight:700;color:#1a1a2e !important;">{row["Sequence"]}</span>'
+                            f'<span style="float:right;font-size:13px;font-weight:800;color:#2ca02c !important;">'
+                            f'Whiff: {row["Whiff%"]:.0f}% | CSW: {row["CSW%"]:.0f}%</span>'
+                            f'<div style="font-size:11px;color:#666 !important;">n={row["Count"]} | '
+                            f'Avg EV: {row["Avg EV"]:.1f}</div></div>' if not pd.isna(row["Avg EV"]) else
+                            f'<div style="padding:8px 12px;background:white;border-radius:6px;margin:4px 0;'
+                            f'border-left:4px solid #2ca02c;border:1px solid #eee;">'
+                            f'<span style="font-size:14px;font-weight:700;color:#1a1a2e !important;">{row["Sequence"]}</span>'
+                            f'<span style="float:right;font-size:13px;font-weight:800;color:#2ca02c !important;">'
+                            f'Whiff: {row["Whiff%"]:.0f}% | CSW: {row["CSW%"]:.0f}%</span>'
+                            f'<div style="font-size:11px;color:#666 !important;">n={row["Count"]}</div></div>',
+                            unsafe_allow_html=True)
+                with col_worst:
+                    section_header("Worst Sequences (Most Damage)")
+                    bot5 = seq_df.dropna(subset=["Avg EV"]).sort_values("Avg EV", ascending=False).head(5)
+                    for _, row in bot5.iterrows():
+                        st.markdown(
+                            f'<div style="padding:8px 12px;background:white;border-radius:6px;margin:4px 0;'
+                            f'border-left:4px solid #d22d49;border:1px solid #eee;">'
+                            f'<span style="font-size:14px;font-weight:700;color:#1a1a2e !important;">{row["Sequence"]}</span>'
+                            f'<span style="float:right;font-size:13px;font-weight:800;color:#d22d49 !important;">'
+                            f'EV: {row["Avg EV"]:.1f} | Whiff: {row["Whiff%"]:.0f}%</span>'
+                            f'<div style="font-size:11px;color:#666 !important;">n={row["Count"]}</div></div>',
+                            unsafe_allow_html=True)
+
+                # Full table
+                with st.expander("Full Sequence Table"):
+                    disp_seq = seq_df.drop(columns=["_whiff"]).copy()
+                    for c in ["Swing%", "Whiff%", "CSW%"]:
+                        disp_seq[c] = disp_seq[c].map(lambda x: f"{x:.1f}%")
+                    disp_seq["Avg EV"] = disp_seq["Avg EV"].map(lambda x: f"{x:.1f}" if not pd.isna(x) else "-")
+                    st.dataframe(disp_seq.set_index("Sequence"), use_container_width=True)
+        else:
+            st.info("Not enough columns to determine pitch sequences.")
+
+    # ─── Tab: Count Leverage ──────────────────────
+    with tab_count:
+        section_header("Count Leverage Analysis")
+        st.caption("Optimal pitch selection by count — what works best in each situation")
+
+        pdf_c = pdf.dropna(subset=["Balls", "Strikes"]).copy()
+        pdf_c["Balls"] = pdf_c["Balls"].astype(int)
+        pdf_c["Strikes"] = pdf_c["Strikes"].astype(int)
+        pdf_c["Count"] = pdf_c["Balls"].astype(str) + "-" + pdf_c["Strikes"].astype(str)
+
+        pitch_types = sorted(pdf["TaggedPitchType"].dropna().unique())
+
+        # For each count, show best pitch type by whiff% and CSW%
+        section_header("Best Pitch by Count (Whiff%)")
+        count_pitch_data = {}
+        for b in range(4):
+            for s in range(3):
+                count_str = f"{b}-{s}"
+                cd = pdf_c[(pdf_c["Balls"] == b) & (pdf_c["Strikes"] == s)]
+                if len(cd) < 5:
+                    continue
+                best_pt = None
+                best_whiff = -1
+                pt_results = {}
+                for pt in pitch_types:
+                    pt_cd = cd[cd["TaggedPitchType"] == pt]
+                    if len(pt_cd) < 3:
+                        continue
+                    sw = pt_cd[pt_cd["PitchCall"].isin(SWING_CALLS)]
+                    wh = pt_cd[pt_cd["PitchCall"] == "StrikeSwinging"]
+                    csw = pt_cd[pt_cd["PitchCall"].isin(["StrikeSwinging", "StrikeCalled"])]
+                    bt = pt_cd[pt_cd["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
+                    whiff = len(wh) / max(len(sw), 1) * 100 if len(sw) > 0 else 0
+                    csw_pct = len(csw) / len(pt_cd) * 100
+                    ev = bt["ExitSpeed"].mean() if len(bt) > 0 else np.nan
+                    pt_results[pt] = {"Usage": f"{len(pt_cd)/len(cd)*100:.0f}%", "Whiff%": whiff,
+                                       "CSW%": csw_pct, "Avg EV": ev, "n": len(pt_cd)}
+                    if whiff > best_whiff:
+                        best_whiff = whiff
+                        best_pt = pt
+                count_pitch_data[count_str] = {"best": best_pt, "best_whiff": best_whiff, "details": pt_results, "total": len(cd)}
+
+        # Display as grid
+        grid_best = [['' for _ in range(3)] for _ in range(4)]
+        grid_whiff = np.full((4, 3), np.nan)
+        for b in range(4):
+            for s in range(3):
+                k = f"{b}-{s}"
+                if k in count_pitch_data and count_pitch_data[k]["best"]:
+                    d = count_pitch_data[k]
+                    grid_best[b][s] = f"{d['best']}\n{d['best_whiff']:.0f}%"
+                    grid_whiff[b][s] = d["best_whiff"]
+
+        fig_best = go.Figure(data=go.Heatmap(
+            z=grid_whiff, text=grid_best, texttemplate="%{text}",
+            x=["0 Strikes", "1 Strike", "2 Strikes"], y=["0 Balls", "1 Ball", "2 Balls", "3 Balls"],
+            colorscale=[[0, "#f7f7f7"], [0.5, "#f7c631"], [1, "#d22d49"]],
+            zmin=0, zmax=50, showscale=True,
+            colorbar=dict(title="Whiff%", len=0.8),
+            textfont=dict(size=11),
+        ))
+        fig_best.update_layout(**CHART_LAYOUT, height=350, title="Best Pitch + Whiff% by Count")
+        st.plotly_chart(fig_best, use_container_width=True)
+
+        # Pitch usage by count
+        section_header("Pitch Usage by Count")
+        usage_rows = []
+        for b in range(4):
+            for s in range(3):
+                cd = pdf_c[(pdf_c["Balls"] == b) & (pdf_c["Strikes"] == s)]
+                if len(cd) < 5:
+                    continue
+                row = {"Count": f"{b}-{s}", "Total": len(cd)}
+                for pt in pitch_types:
+                    row[pt] = f"{len(cd[cd['TaggedPitchType'] == pt])/len(cd)*100:.0f}%"
+                usage_rows.append(row)
+        if usage_rows:
+            st.dataframe(pd.DataFrame(usage_rows).set_index("Count"), use_container_width=True)
+
+        # Detailed count breakdown
+        section_header("Detailed Count Cheat Sheet")
+        selected_count = st.selectbox("Select Count", [f"{b}-{s}" for b in range(4) for s in range(3)], key="gp_count")
+        if selected_count in count_pitch_data:
+            details = count_pitch_data[selected_count]["details"]
+            detail_rows = []
+            for pt, d in sorted(details.items(), key=lambda x: -x[1]["Whiff%"]):
+                detail_rows.append({
+                    "Pitch Type": pt,
+                    "Usage": d["Usage"],
+                    "n": d["n"],
+                    "Whiff%": f"{d['Whiff%']:.1f}%",
+                    "CSW%": f"{d['CSW%']:.1f}%",
+                    "Avg EV": f"{d['Avg EV']:.1f}" if not pd.isna(d["Avg EV"]) else "-",
+                })
+            if detail_rows:
+                st.dataframe(pd.DataFrame(detail_rows).set_index("Pitch Type"), use_container_width=True)
+                best = detail_rows[0]
+                st.success(f"**Recommendation in {selected_count}:** Throw **{detail_rows[0]['Pitch Type']}** — "
+                           f"{detail_rows[0]['Whiff%']} whiff rate, {detail_rows[0]['CSW%']} CSW%")
+
+        # Ahead vs Behind vs Even
+        section_header("Situational Pitch Selection")
+        pdf_c["Situation"] = "Even"
+        pdf_c.loc[pdf_c["Balls"] < pdf_c["Strikes"], "Situation"] = "Ahead"
+        pdf_c.loc[pdf_c["Balls"] > pdf_c["Strikes"], "Situation"] = "Behind"
+
+        sit_rows = []
+        for sit in ["Ahead", "Even", "Behind"]:
+            sit_df = pdf_c[pdf_c["Situation"] == sit]
+            if len(sit_df) < 10:
+                continue
+            sw = sit_df[sit_df["PitchCall"].isin(SWING_CALLS)]
+            wh = sit_df[sit_df["PitchCall"] == "StrikeSwinging"]
+            csw = sit_df[sit_df["PitchCall"].isin(["StrikeSwinging", "StrikeCalled"])]
+            bt = sit_df[sit_df["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
+            top_pt = sit_df["TaggedPitchType"].value_counts().index[0] if len(sit_df) > 0 else "-"
+            sit_rows.append({
+                "Situation": sit,
+                "Pitches": len(sit_df),
+                "Top Pitch": top_pt,
+                "Zone%": f"{len(sit_df[(sit_df['PlateLocSide'].abs() <= 0.83) & (sit_df['PlateLocHeight'].between(1.5, 3.5))])/max(len(sit_df[sit_df['PlateLocSide'].notna()]),1)*100:.1f}%",
+                "Whiff%": f"{len(wh)/max(len(sw),1)*100:.1f}%",
+                "CSW%": f"{len(csw)/len(sit_df)*100:.1f}%",
+                "Avg EV": f"{bt['ExitSpeed'].mean():.1f}" if len(bt) > 0 else "-",
+            })
+        if sit_rows:
+            st.dataframe(pd.DataFrame(sit_rows).set_index("Situation"), use_container_width=True)
+
+    # ─── Tab: Effective Velocity ──────────────────
+    with tab_effv:
+        section_header("Effective Velocity Analysis")
+        st.caption("Perceived velocity based on pitch location and extension — a 91mph fastball up-and-in plays like 94+ mph")
+
+        ev_df = pdf.dropna(subset=["RelSpeed", "PlateLocSide", "PlateLocHeight"]).copy()
+        if len(ev_df) < 20:
+            st.info("Not enough location data for effective velocity analysis.")
+        else:
+            # Compute effective velocity if not present
+            if "EffectiveVelo" in ev_df.columns and ev_df["EffectiveVelo"].notna().sum() > len(ev_df) * 0.5:
+                ev_df["EffVelo"] = ev_df["EffectiveVelo"]
+            else:
+                # Estimate: up-and-in adds ~2-3 mph, down-and-away subtracts ~2-3 mph
+                # Hitter's reaction zone: pitches up and glove-side arrive "faster"
+                loc_adj = (ev_df["PlateLocHeight"] - 2.5) * 1.5 + ev_df["PlateLocSide"].abs() * (-0.5)
+                ev_df["EffVelo"] = ev_df["RelSpeed"] + loc_adj
+
+            col_scatter, col_diff = st.columns(2)
+            with col_scatter:
+                section_header("Effective Velocity by Location")
+                fig_effv = go.Figure()
+                fig_effv.add_trace(go.Scatter(
+                    x=ev_df["PlateLocSide"], y=ev_df["PlateLocHeight"],
+                    mode="markers",
+                    marker=dict(size=6, color=ev_df["EffVelo"],
+                                colorscale=[[0, "#1f77b4"], [0.5, "#f7f7f7"], [1, "#d22d49"]],
+                                cmin=ev_df["EffVelo"].quantile(0.05),
+                                cmax=ev_df["EffVelo"].quantile(0.95),
+                                showscale=True, colorbar=dict(title="Eff Velo", len=0.8),
+                                line=dict(width=0.3, color="white")),
+                    hovertemplate="Actual: %{customdata[0]:.1f}<br>Effective: %{marker.color:.1f}<extra></extra>",
+                    customdata=ev_df[["RelSpeed"]].values,
+                    showlegend=False,
+                ))
+                add_strike_zone(fig_effv)
+                fig_effv.update_layout(**CHART_LAYOUT, height=420,
+                                        xaxis=dict(range=[-2.5, 2.5], title="Horizontal"),
+                                        yaxis=dict(range=[0, 5], title="Vertical"))
+                st.plotly_chart(fig_effv, use_container_width=True)
+
+            with col_diff:
+                section_header("Velo Differential (Effective - Actual)")
+                ev_df["VeloDiff"] = ev_df["EffVelo"] - ev_df["RelSpeed"]
+                fig_diff = go.Figure()
+                fig_diff.add_trace(go.Scatter(
+                    x=ev_df["PlateLocSide"], y=ev_df["PlateLocHeight"],
+                    mode="markers",
+                    marker=dict(size=6, color=ev_df["VeloDiff"],
+                                colorscale=[[0, "#1f77b4"], [0.5, "#f7f7f7"], [1, "#d22d49"]],
+                                cmid=0, showscale=True,
+                                colorbar=dict(title="Diff", len=0.8),
+                                line=dict(width=0.3, color="white")),
+                    hovertemplate="Diff: %{marker.color:+.1f} mph<extra></extra>",
+                    showlegend=False,
+                ))
+                add_strike_zone(fig_diff)
+                fig_diff.update_layout(**CHART_LAYOUT, height=420,
+                                        xaxis=dict(range=[-2.5, 2.5], title="Horizontal"),
+                                        yaxis=dict(range=[0, 5], title="Vertical"))
+                st.plotly_chart(fig_diff, use_container_width=True)
+
+            # Effective velo by pitch type
+            section_header("Effective Velocity by Pitch Type")
+            effv_pt_rows = []
+            for pt in sorted(ev_df["TaggedPitchType"].dropna().unique()):
+                pt_df = ev_df[ev_df["TaggedPitchType"] == pt]
+                if len(pt_df) < 5:
+                    continue
+                effv_pt_rows.append({
+                    "Pitch Type": pt,
+                    "Actual Velo": f"{pt_df['RelSpeed'].mean():.1f}",
+                    "Eff Velo": f"{pt_df['EffVelo'].mean():.1f}",
+                    "Diff": f"{(pt_df['EffVelo'] - pt_df['RelSpeed']).mean():+.1f}",
+                    "Max Eff": f"{pt_df['EffVelo'].max():.1f}",
+                    "Min Eff": f"{pt_df['EffVelo'].min():.1f}",
+                })
+            if effv_pt_rows:
+                st.dataframe(pd.DataFrame(effv_pt_rows).set_index("Pitch Type"), use_container_width=True)
+
+            # Velo tunneling — show how pitch types overlap in effective velo
+            section_header("Velocity Tunneling")
+            st.caption("When different pitches arrive at similar effective velocities, hitters can't distinguish them")
+            fig_tunnel = go.Figure()
+            for pt in sorted(ev_df["TaggedPitchType"].dropna().unique()):
+                pt_df = ev_df[ev_df["TaggedPitchType"] == pt]
+                if len(pt_df) < 10:
+                    continue
+                clr = PITCH_COLORS.get(pt, "#aaa")
+                fig_tunnel.add_trace(go.Violin(
+                    y=pt_df["EffVelo"], name=pt,
+                    box_visible=True, meanline_visible=True,
+                    fillcolor=clr, line_color=clr, opacity=0.6,
+                ))
+            fig_tunnel.update_layout(**CHART_LAYOUT, height=380, showlegend=False,
+                                      yaxis_title="Effective Velocity (mph)")
+            st.plotly_chart(fig_tunnel, use_container_width=True)
+
+
+# ──────────────────────────────────────────────
 # MAIN
 # ──────────────────────────────────────────────
 def main():
@@ -4505,6 +5066,8 @@ def main():
         "Player Development",
         "Pitch Design Lab",
         "Hitters Lab",
+        "Matchup Optimizer",
+        "Game Planning",
         "Game Log",
         "Opponent Scouting",
     ], label_visibility="collapsed")
@@ -4536,6 +5099,10 @@ def main():
         page_pitch_design_lab(data)
     elif page == "Hitters Lab":
         page_hitters_lab(data)
+    elif page == "Matchup Optimizer":
+        page_matchup_optimizer(data)
+    elif page == "Game Planning":
+        page_game_planning(data)
     elif page == "Game Log":
         page_game_log(data)
     elif page == "Opponent Scouting":
