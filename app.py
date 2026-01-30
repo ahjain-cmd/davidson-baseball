@@ -1960,48 +1960,51 @@ def page_catcher(data):
 # PAGE: TEAM OVERVIEW
 # ──────────────────────────────────────────────
 def page_team(data):
-    # ── Branded Header ──
-    _logo_path = os.path.join(_APP_DIR, "logo_real.png")
-    _celeb_path = os.path.join(_APP_DIR, "celebration.jpg")
-    st.markdown("""
-    <div style="background:linear-gradient(135deg,#1a1a2e 0%,#000 50%,#8b0000 100%);
-                border-radius:16px;padding:28px 32px;margin-bottom:24px;position:relative;overflow:hidden;">
-        <div style="position:absolute;top:0;left:0;right:0;bottom:0;
-                    background:url('data:image/svg+xml,<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\"><text y=\"50\" font-size=\"80\" opacity=\"0.03\" fill=\"white\">⚾</text></svg>')
-                    repeat;opacity:0.5;"></div>
-        <div style="position:relative;z-index:1;text-align:center;">
-            <div style="font-size:14px;letter-spacing:6px;color:#aaa;font-weight:500;margin-bottom:4px;">DAVIDSON BASEBALL</div>
-            <div style="font-size:42px;font-weight:900;color:white;letter-spacing:2px;
-                        text-shadow:2px 2px 8px rgba(139,0,0,0.6);">W.I.L.D.C.A.T.S.</div>
-            <div style="font-size:13px;color:#d4a574;letter-spacing:3px;margin-top:4px;font-weight:400;">
+    # ── Branded Banner with Logo and Celebration Photo ──
+    _logo_path = os.path.join(_APP_DIR, "davidson_wildcats_logo_primary_2023_sportslogosnet-2961.png")
+    _celeb_path = os.path.join(_APP_DIR, "regionalchamps_copy.jpg")
+
+    # Hero banner with images
+    col_logo, col_center, col_celeb = st.columns([1, 3, 1])
+    with col_logo:
+        if os.path.exists(_logo_path):
+            st.image(_logo_path, width=120)
+    with col_center:
+        st.markdown("""
+        <div style="text-align:center;padding:8px 0;">
+            <div style="font-size:13px;letter-spacing:6px;color:#888 !important;font-weight:500;">DAVIDSON BASEBALL</div>
+            <div style="font-size:40px;font-weight:900;color:#cc0000 !important;letter-spacing:2px;line-height:1.1;">W.I.L.D.C.A.T.S.</div>
+            <div style="font-size:11px;color:#666 !important;letter-spacing:2px;margin-top:2px;">
                 Wildcat Intelligence & Live Data Computing for Advanced Trackman Statistics
             </div>
         </div>
-    </div>
-    """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
+    with col_celeb:
+        if os.path.exists(_celeb_path):
+            st.image(_celeb_path, width=160)
 
-    if os.path.exists(_logo_path):
-        col_logo, col_title, col_celeb = st.columns([1, 3, 1])
-    else:
-        col_title = st.container()
+    # Davidson-red divider
+    st.markdown('<div style="height:4px;background:linear-gradient(90deg,#cc0000,#1a1a2e,#cc0000);border-radius:2px;margin:8px 0 16px 0;"></div>',
+                unsafe_allow_html=True)
 
-    # ── Quick Stats Banner ──
-    dav_data = data[(data["PitcherTeam"] == DAVIDSON_TEAM_ID) | (data["BatterTeam"] == DAVIDSON_TEAM_ID)]
-    latest_date = dav_data["Date"].max()
-    total_pitches = len(dav_data)
-    total_games = dav_data.groupby("Date").ngroups
-    n_pitchers = dav_data[dav_data["PitcherTeam"] == DAVIDSON_TEAM_ID]["Pitcher"].nunique()
-    n_batters = dav_data[dav_data["BatterTeam"] == DAVIDSON_TEAM_ID]["Batter"].nunique()
+    # ── Quick Stats Banner (Davidson-only data) ──
+    dav_pitching = data[data["PitcherTeam"] == DAVIDSON_TEAM_ID]
+    dav_batting = data[data["BatterTeam"] == DAVIDSON_TEAM_ID]
+    dav_roster_p = dav_pitching[dav_pitching["Pitcher"].isin(ROSTER_2026)]
+    dav_roster_b = dav_batting[dav_batting["Batter"].isin(ROSTER_2026)]
+    latest_date = data["Date"].max()
+    # Count Davidson games (dates where Davidson pitched or batted)
+    dav_dates = pd.concat([dav_pitching["Date"], dav_batting["Date"]]).dropna().dt.date.nunique()
 
     col_s1, col_s2, col_s3, col_s4, col_s5 = st.columns(5)
     with col_s1:
-        st.metric("Total Pitches", f"{total_pitches:,}")
+        st.metric("Total Pitches", f"{len(data):,}")
     with col_s2:
-        st.metric("Games Tracked", f"{total_games}")
+        st.metric("Davidson Games", f"{dav_dates}")
     with col_s3:
-        st.metric("Pitchers", f"{n_pitchers}")
+        st.metric("Rostered Pitchers", f"{len([p for p in ROSTER_2026 if p in dav_pitching['Pitcher'].values])}")
     with col_s4:
-        st.metric("Hitters", f"{n_batters}")
+        st.metric("Rostered Hitters", f"{len([b for b in ROSTER_2026 if b in dav_batting['Batter'].values])}")
     with col_s5:
         st.metric("Last Data", latest_date.strftime("%b %d, %Y") if pd.notna(latest_date) else "—")
 
@@ -7084,22 +7087,24 @@ def page_defensive_positioning(data):
 # MAIN
 # ──────────────────────────────────────────────
 def main():
+    _logo_sidebar = os.path.join(_APP_DIR, "davidson_wildcats_logo_primary_2023_sportslogosnet-2961.png")
+    if os.path.exists(_logo_sidebar):
+        st.sidebar.image(_logo_sidebar, width=80)
     st.sidebar.markdown(
-        '<div class="sidebar-brand" style="text-align:center;padding:10px 0 5px 0;">'
-        '<div class="sidebar-brand-title" style="font-size:22px;font-weight:800;font-family:Inter,sans-serif;">'
-        'Davidson Baseball</div>'
-        '<div class="sidebar-brand-sub" style="font-size:11px;letter-spacing:1px;text-transform:uppercase;'
-        'font-family:Inter,sans-serif;">Trackman Analytics</div>'
+        '<div style="text-align:center;padding:2px 0 5px 0;">'
+        '<div style="font-size:20px;font-weight:800;font-family:Inter,sans-serif;letter-spacing:1px;">W.I.L.D.C.A.T.S.</div>'
+        '<div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#888;'
+        'font-family:Inter,sans-serif;">Davidson Baseball Analytics</div>'
         '</div>',
         unsafe_allow_html=True,
     )
     st.sidebar.markdown("---")
 
     page = st.sidebar.radio("Navigation", [
+        "Team Overview",
         "Hitter Card",
         "Pitcher Card",
         "Catcher Analytics",
-        "Team Overview",
         "Player Development",
         "Pitch Design Lab",
         "Hitters Lab",
