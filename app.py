@@ -3418,176 +3418,194 @@ def _pitching_plan_content(tm, team, data, season_filter):
         st.info("No matchup data generated.")
         return
     all_matchups.sort(key=lambda x: x["overall_score"], reverse=True)
-    # Summary table — data-heavy, minimal text
+    # ── Helper functions & constants for bullpen cards ──
+    _hfmt = lambda v, fmt=".0f": f"{v:{fmt}}" if not pd.isna(v) else "-"
+    _hard_pitches = {"Fastball", "Sinker", "Cutter"}
+    _swing_map = {
+        "Fastball": "swing_vs_hard", "Sinker": "swing_vs_hard", "Cutter": "swing_vs_hard",
+        "Slider": "swing_vs_sl", "Sweeper": "swing_vs_sl",
+        "Curveball": "swing_vs_cb", "Knuckle Curve": "swing_vs_cb",
+        "Changeup": "swing_vs_ch", "Splitter": "swing_vs_ch",
+    }
+
+    def _lookup_tunnel(a, b, tun_df):
+        if not isinstance(tun_df, pd.DataFrame) or tun_df.empty:
+            return np.nan, "-"
+        m = tun_df[((tun_df["Pitch A"]==a)&(tun_df["Pitch B"]==b))|((tun_df["Pitch A"]==b)&(tun_df["Pitch B"]==a))]
+        if m.empty:
+            return np.nan, "-"
+        return m.iloc[0]["Tunnel Score"], m.iloc[0]["Grade"]
+
+    def _lookup_seq(setup, follow, seq_df):
+        if not isinstance(seq_df, pd.DataFrame) or seq_df.empty:
+            return np.nan
+        m = seq_df[(seq_df["Setup Pitch"]==setup)&(seq_df["Follow Pitch"]==follow)]
+        return m.iloc[0]["Whiff%"] if not m.empty else np.nan
+
+    def _pitch_score_composite(pt_name, pt_data, hd, tun_df):
+        """Single composite score (0-100) combining all factors for one pitch vs one hitter."""
+        components, weights = [], []
+        sp = pt_data.get("stuff_plus", np.nan)
+        if not pd.isna(sp):
+            components.append(min(max((sp - 70) / 60 * 100, 0), 100)); weights.append(20)
+        wh = pt_data.get("our_whiff", np.nan)
+        if not pd.isna(wh):
+            components.append(min(wh / 50 * 100, 100)); weights.append(15)
+        csw = pt_data.get("our_csw", np.nan)
+        if not pd.isna(csw):
+            components.append(min(csw / 40 * 100, 100)); weights.append(10)
+        is_hard = pt_name in _hard_pitches
+        their_2k = hd.get("whiff_2k_hard" if is_hard else "whiff_2k_os", np.nan)
+        if not pd.isna(their_2k):
+            components.append(min(their_2k / 40 * 100, 100)); weights.append(20)
+        our_chase = pt_data.get("our_chase", np.nan)
+        their_chase = hd.get("chase_pct", np.nan)
+        if not pd.isna(our_chase) and not pd.isna(their_chase):
+            components.append(min((our_chase * their_chase) / (30*30) * 100, 100)); weights.append(15)
+        sw_key = _swing_map.get(pt_name, "")
+        their_sw = hd.get(sw_key, np.nan) if sw_key else np.nan
+        if not pd.isna(their_sw):
+            components.append(min(max((70 - their_sw) / 50 * 100, 0), 100)); weights.append(10)
+        if not isinstance(tun_df, pd.DataFrame) or tun_df.empty:
+            pass
+        else:
+            t_m = tun_df[(tun_df["Pitch A"]==pt_name)|(tun_df["Pitch B"]==pt_name)]
+            if not t_m.empty:
+                components.append(t_m.iloc[0]["Tunnel Score"]); weights.append(10)
+        if not weights:
+            return 50
+        return sum(c*w for c,w in zip(components, weights)) / sum(weights)
+
+    def _build_3pitch_sequences(sorted_ps, hd, tun_df, seq_df):
+        """Build best 3-pitch sequences: setup → bridge → putaway."""
+        pitches = [name for name, _ in sorted_ps]
+        if len(pitches) < 2:
+            return []
+        seqs = []
+        for p1 in pitches:
+            for p2 in pitches:
+                for p3 in pitches:
+                    if p1 == p2 == p3:
+                        continue
+                    t12, _ = _lookup_tunnel(p1, p2, tun_df)
+                    t23, _ = _lookup_tunnel(p2, p3, tun_df)
+                    sw12 = _lookup_seq(p1, p2, seq_df)
+                    sw23 = _lookup_seq(p2, p3, seq_df)
+                    is_hard = p3 in _hard_pitches
+                    their_2k = hd.get("whiff_2k_hard" if is_hard else "whiff_2k_os", np.nan)
+                    parts, wts = [], []
+                    if not pd.isna(t12):
+                        parts.append(t12); wts.append(15)
+                    if not pd.isna(t23):
+                        parts.append(t23); wts.append(20)
+                    if not pd.isna(sw12):
+                        parts.append(min(sw12 / 50 * 100, 100)); wts.append(15)
+                    if not pd.isna(sw23):
+                        parts.append(min(sw23 / 50 * 100, 100)); wts.append(25)
+                    if not pd.isna(their_2k):
+                        parts.append(min(their_2k / 40 * 100, 100)); wts.append(25)
+                    if not wts:
+                        continue
+                    combo = sum(p*w for p,w in zip(parts, wts)) / sum(wts)
+                    seqs.append({
+                        "seq": f"{p1} → {p2} → {p3}", "p1": p1, "p2": p2, "p3": p3,
+                        "score": round(combo, 1),
+                        "t12": t12, "t23": t23, "sw23": sw23, "their_2k": their_2k,
+                    })
+        seqs.sort(key=lambda x: x["score"], reverse=True)
+        seen_putaway = set()
+        top = []
+        for s in seqs:
+            if s["p3"] not in seen_putaway:
+                top.append(s)
+                seen_putaway.add(s["p3"])
+            if len(top) >= 3:
+                break
+        return top
+
+    # Summary table
     summary_rows = []
     for m in all_matchups:
         ps = m["pitch_scores"]
-        best_pt = max(ps.items(), key=lambda x: x[1]["score"]) if ps else ("?", {"score": 0})
-        worst_pt = min(ps.items(), key=lambda x: x[1]["score"]) if ps else ("?", {"score": 0})
         hd = m.get("hitter_data", {})
-        # Find best sequence for this hitter type (putaway-oriented)
-        best_seq = ""
-        if not isinstance(sequences, pd.DataFrame) or not sequences.empty:
-            sorted_ps = sorted(ps.items(), key=lambda x: x[1]["score"], reverse=True)
-            if len(sorted_ps) >= 2:
-                best_seq = f"{sorted_ps[0][0]}→{sorted_ps[1][0]}"
+        sorted_ps = sorted(ps.items(), key=lambda x: x[1]["score"], reverse=True)
+        best_pt = sorted_ps[0][0] if sorted_ps else "?"
+        # Build top 3-pitch seq for summary
+        top_seqs = _build_3pitch_sequences(sorted_ps, hd, tunnels, sequences)
+        seq_str = top_seqs[0]["seq"] if top_seqs else (f"{sorted_ps[0][0]}→{sorted_ps[1][0]}" if len(sorted_ps) >= 2 else "-")
         summary_rows.append({
             "Hitter": display_name(m["hitter"]), "B": m["bats"],
-            "PA": f"{hd.get('pa', '-'):.0f}" if not pd.isna(hd.get("pa", np.nan)) else "-",
-            "OPS": f"{hd.get('ops', '-'):.3f}" if not pd.isna(hd.get("ops", np.nan)) else "-",
-            "K%": f"{hd.get('k_pct', '-'):.0f}" if not pd.isna(hd.get("k_pct", np.nan)) else "-",
-            "Chase%": f"{hd.get('chase_pct', '-'):.0f}" if not pd.isna(hd.get("chase_pct", np.nan)) else "-",
-            "Score": round(m["overall_score"], 1),
             "Platoon": m["platoon"],
-            "Best": best_pt[0], "Avoid": worst_pt[0] if worst_pt[0] != best_pt[0] else "-",
-            "Seq": best_seq,
+            "Score": round(m["overall_score"], 1),
+            "Go-To": best_pt,
+            "Best Sequence": seq_str,
         })
     st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
-    # ── Bullpen Cards — one per hitter, ready to read before going out ──
+    # ── Bullpen Cards ──
     st.markdown("---")
     section_header("Bullpen Cards")
-    _hfmt = lambda v, fmt=".0f": f"{v:{fmt}}" if not pd.isna(v) else "-"
+
     for matchup in all_matchups:
         score = matchup["overall_score"]
-        clr = "#2ca02c" if score > 60 else "#f7c631" if score > 48 else "#d22d49"
         hd = matchup.get("hitter_data", {})
         ps = matchup["pitch_scores"]
         sorted_ps = sorted(ps.items(), key=lambda x: x[1]["score"], reverse=True)
-        best_name = sorted_ps[0][0] if sorted_ps else "?"
-        worst_name = sorted_ps[-1][0] if sorted_ps else "?"
+        # Compute composite scores per pitch
+        composites = {}
+        for pt_name, pt_data in sorted_ps:
+            composites[pt_name] = round(_pitch_score_composite(pt_name, pt_data, hd, tunnels), 0)
+        # Build 3-pitch sequences
+        top_seqs = _build_3pitch_sequences(sorted_ps, hd, tunnels, sequences)
+        # Expander label: clean and simple
+        best_c = max(composites.items(), key=lambda x: x[1]) if composites else ("?", 0)
         with st.expander(
             f"{'🟢' if score > 60 else '🟡' if score > 48 else '🔴'} "
             f"{display_name(matchup['hitter'])} ({matchup['bats']}) — {matchup['platoon']} — "
-            f"Score {score:.0f}"
+            f"Go-To: {best_c[0]}"
         ):
-            # ── ROW 1: Who is this hitter? (Their numbers vs our hand) ──
-            st.markdown(f"**Hitter Profile** — {_hfmt(hd.get('pa'), '.0f')} PA")
-            r1 = st.columns(8)
-            for c, (lbl, key, fmt) in zip(r1, [
-                ("OPS", "ops", ".3f"), ("wOBA vs Us", "woba_split", ".3f"),
-                ("K%", "k_pct", ".0f"), ("BB%", "bb_pct", ".0f"),
-                ("Chase%", "chase_pct", ".0f"), ("SwStr%", "swstrk_pct", ".0f"),
-                ("EV", "ev", ".1f"), ("Barrel%", "barrel_pct", ".1f"),
-            ]):
-                c.metric(lbl, _hfmt(hd.get(key), fmt))
-
-            # ── ROW 2: First Pitch Plan + 2-Strike Plan side by side ──
-            col_fp, col_2k = st.columns(2)
-            with col_fp:
-                st.markdown("**First Pitch — Their Swing Rates**")
-                # Map our pitches to their swing rate against that class
-                _swing_map = {
-                    "Fastball": "swing_vs_hard", "Sinker": "swing_vs_hard", "Cutter": "swing_vs_hard",
-                    "Slider": "swing_vs_sl", "Sweeper": "swing_vs_sl",
-                    "Curveball": "swing_vs_cb", "Knuckle Curve": "swing_vs_cb",
-                    "Changeup": "swing_vs_ch", "Splitter": "swing_vs_ch",
-                }
-                fp_rows = []
-                for pt_name, pt_data in sorted_ps:
-                    sw_key = _swing_map.get(pt_name, "")
-                    their_swing = hd.get(sw_key, np.nan) if sw_key else np.nan
-                    fp_rows.append({
-                        "Our Pitch": pt_name,
-                        "Velo": f"{pt_data['velo']:.1f}" if not pd.isna(pt_data.get("velo")) else "-",
-                        "S+": _hfmt(pt_data.get("stuff_plus")),
-                        "Their Sw%": _hfmt(their_swing),
-                        "Our CSW%": _hfmt(pt_data.get("our_csw")),
-                    })
-                st.dataframe(pd.DataFrame(fp_rows), use_container_width=True, hide_index=True)
-                # First pitch swing tendency
-                fp_hard = hd.get("fp_swing_hard", np.nan)
-                fp_ch = hd.get("fp_swing_ch", np.nan)
-                if not pd.isna(fp_hard) or not pd.isna(fp_ch):
-                    parts = []
-                    if not pd.isna(fp_hard):
-                        parts.append(f"FB: {fp_hard:.0f}%")
-                    if not pd.isna(fp_ch):
-                        parts.append(f"CH: {fp_ch:.0f}%")
-                    st.caption(f"1st pitch swing (empty): {' | '.join(parts)}")
-
-            with col_2k:
-                st.markdown("**2 Strikes — Their Whiff Rates vs Our Hand**")
-                w2k_hard = hd.get("whiff_2k_hard", np.nan)
-                w2k_os = hd.get("whiff_2k_os", np.nan)
-                # Build 2K table: our pitch → their 2K whiff rate for that class
-                _hard_pitches = {"Fastball", "Sinker", "Cutter"}
-                twok_rows = []
-                for pt_name, pt_data in sorted_ps:
-                    is_hard = pt_name in _hard_pitches
-                    their_2k = w2k_hard if is_hard else w2k_os
-                    # Get best sequence into this putaway pitch
-                    seq_whiff = np.nan
-                    if not isinstance(sequences, pd.DataFrame) or not sequences.empty:
-                        s_match = sequences[sequences["Follow Pitch"] == pt_name].sort_values("Whiff%", ascending=False)
-                        if not s_match.empty:
-                            seq_whiff = s_match.iloc[0]["Whiff%"]
-                    # Tunnel grade for best setup into this pitch
-                    tun_into = "-"
-                    if not isinstance(tunnels, pd.DataFrame) or not tunnels.empty:
-                        t_m = tunnels[(tunnels["Pitch A"] == pt_name) | (tunnels["Pitch B"] == pt_name)]
-                        if not t_m.empty:
-                            best_t = t_m.iloc[0]
-                            partner = best_t["Pitch B"] if best_t["Pitch A"] == pt_name else best_t["Pitch A"]
-                            tun_into = f"{best_t['Grade']} ({partner})"
-                    twok_rows.append({
-                        "Putaway": pt_name,
-                        "Our Whiff%": _hfmt(pt_data.get("our_whiff")),
-                        "Their 2K": _hfmt(their_2k),
-                        "Seq Whiff": _hfmt(seq_whiff),
-                        "Tunnel": tun_into,
-                    })
-                st.dataframe(pd.DataFrame(twok_rows), use_container_width=True, hide_index=True)
-                if not pd.isna(w2k_hard) or not pd.isna(w2k_os):
-                    st.caption(f"2K Whiff vs {'LHP' if throws_str=='LHP' else 'RHP'}: Hard {_hfmt(w2k_hard)}% | OS {_hfmt(w2k_os)}%")
-
-            # ── ROW 3: Batted ball & zone tendencies ──
-            col_bb, col_zone = st.columns(2)
-            with col_bb:
-                st.markdown("**Batted Ball**")
-                bb_cols = st.columns(5)
-                for c, (lbl, key, fmt) in zip(bb_cols, [
-                    ("GB%", "gb_pct", ".0f"), ("FB%", "fb_pct", ".0f"),
-                    ("LD%", "ld_pct", ".0f"), ("Pull%", "pull_pct", ".0f"),
-                    ("P/PA", "p_per_pa", ".1f"),
-                ]):
-                    c.metric(lbl, _hfmt(hd.get(key), fmt))
-            with col_zone:
-                st.markdown("**Zone Tendencies — Where They See Pitches**")
-                z_cols = st.columns(4)
-                for c, (lbl, key) in zip(z_cols, [
-                    ("Up", "high_pct"), ("Down", "low_pct"),
-                    ("In", "inside_pct"), ("Away", "outside_pct"),
-                ]):
-                    c.metric(lbl, _hfmt(hd.get(key)) + "%" if not pd.isna(hd.get(key, np.nan)) else "-")
-
-            # ── ROW 4: Sequence plan — the actual plan ──
-            if len(sorted_ps) >= 2:
-                st.markdown("---")
-                lead = sorted_ps[0][0]
-                putaway_candidates = [(n, d) for n, d in sorted_ps if n != lead]
-                putaway = putaway_candidates[0][0] if putaway_candidates else sorted_ps[1][0]
-                # Get sequence data
-                seq_w, seq_csw, seq_chase = "-", "-", "-"
-                if not isinstance(sequences, pd.DataFrame) or not sequences.empty:
-                    s_match = sequences[(sequences["Setup Pitch"] == lead) & (sequences["Follow Pitch"] == putaway)]
-                    if not s_match.empty:
-                        sr = s_match.iloc[0]
-                        seq_w = f"{sr['Whiff%']:.0f}%"
-                        seq_csw = f"{sr['CSW%']:.0f}%"
-                        seq_chase = f"{sr.get('Chase%', np.nan):.0f}%" if not pd.isna(sr.get("Chase%", np.nan)) else "-"
-                pair_tun = "-"
+            # ── Single table: one row per pitch, one composite number ──
+            pitch_rows = []
+            for pt_name, pt_data in sorted_ps:
+                is_hard = pt_name in _hard_pitches
+                their_2k = hd.get("whiff_2k_hard" if is_hard else "whiff_2k_os", np.nan)
+                sw_key = _swing_map.get(pt_name, "")
+                their_sw = hd.get(sw_key, np.nan) if sw_key else np.nan
+                # Best tunnel partner
+                tun_info = "-"
                 if not isinstance(tunnels, pd.DataFrame) or not tunnels.empty:
-                    t_m = tunnels[
-                        ((tunnels["Pitch A"] == lead) & (tunnels["Pitch B"] == putaway)) |
-                        ((tunnels["Pitch A"] == putaway) & (tunnels["Pitch B"] == lead))
-                    ]
+                    t_m = tunnels[(tunnels["Pitch A"]==pt_name)|(tunnels["Pitch B"]==pt_name)]
                     if not t_m.empty:
-                        pair_tun = f"{t_m.iloc[0]['Grade']} ({t_m.iloc[0]['Tunnel Score']:.0f})"
-                st.markdown(
-                    f"**Plan: {lead} → {putaway}** &nbsp;&nbsp; "
-                    f"Seq Whiff {seq_w} &nbsp;|&nbsp; CSW {seq_csw} &nbsp;|&nbsp; "
-                    f"Chase {seq_chase} &nbsp;|&nbsp; Tunnel {pair_tun}"
-                )
+                        bt = t_m.iloc[0]
+                        partner = bt["Pitch B"] if bt["Pitch A"]==pt_name else bt["Pitch A"]
+                        tun_info = f"{bt['Grade']} w/{partner}"
+                pitch_rows.append({
+                    "Pitch": pt_name,
+                    "Composite": int(composites.get(pt_name, 50)),
+                    "S+": _hfmt(pt_data.get("stuff_plus")),
+                    "Whiff%": _hfmt(pt_data.get("our_whiff")),
+                    "CSW%": _hfmt(pt_data.get("our_csw")),
+                    "Their 2K": _hfmt(their_2k),
+                    "Their Sw%": _hfmt(their_sw),
+                    "Chase%": _hfmt(pt_data.get("our_chase")),
+                    "Tunnel": tun_info,
+                })
+            st.dataframe(pd.DataFrame(pitch_rows), use_container_width=True, hide_index=True)
+            # ── 3-Pitch Sequences ──
+            if top_seqs:
+                st.markdown("**3-Pitch Sequences**")
+                seq_rows = []
+                for s in top_seqs:
+                    _, g12 = _lookup_tunnel(s["p1"], s["p2"], tunnels)
+                    _, g23 = _lookup_tunnel(s["p2"], s["p3"], tunnels)
+                    seq_rows.append({
+                        "Sequence": s["seq"],
+                        "Score": int(s["score"]),
+                        "Tunnel 1→2": g12,
+                        "Tunnel 2→3": g23,
+                        "Putaway Whiff": f"{s['sw23']:.0f}%" if not pd.isna(s.get("sw23")) else "-",
+                        "Their 2K on P3": f"{s['their_2k']:.0f}%" if not pd.isna(s.get("their_2k")) else "-",
+                    })
+                st.dataframe(pd.DataFrame(seq_rows), use_container_width=True, hide_index=True)
 
 
 def _hitting_plan_content(tm, team, data, season_filter):
