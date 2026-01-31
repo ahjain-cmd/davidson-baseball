@@ -4549,67 +4549,9 @@ def _pitching_plan_content(tm, team, data, season_filter):
                 if fp_sw_parts:
                     st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;_Swing rates: {', '.join(fp_sw_parts)}_")
 
-                # ── ② PITCH PAIRS — tunnel + sequencing combined ──
-                pair_rows = []
-                seen_pairs = set()
-                if isinstance(sequences, pd.DataFrame) and not sequences.empty:
-                    for _, sr in sequences.sort_values("Whiff%", ascending=False).iterrows():
-                        sp, fp_name = sr["Setup Pitch"], sr["Follow Pitch"]
-                        if sp in real_ps_names and fp_name in real_ps_names:
-                            seen_pairs.add((sp, fp_name))
-                            t_score, t_grade = _lookup_tunnel(sp, fp_name, tunnels)
-                            velo_gap_val, plate_sep_val = np.nan, np.nan
-                            if isinstance(tunnels, pd.DataFrame) and not tunnels.empty:
-                                tm_row = tunnels[((tunnels["Pitch A"]==sp)&(tunnels["Pitch B"]==fp_name))|
-                                                 ((tunnels["Pitch A"]==fp_name)&(tunnels["Pitch B"]==sp))]
-                                if not tm_row.empty:
-                                    velo_gap_val = tm_row.iloc[0].get("Velo Gap (mph)", np.nan)
-                                    plate_sep_val = tm_row.iloc[0].get("Plate Sep (in)", np.nan)
-                            f_ars = arsenal["pitches"].get(fp_name, {})
-                            f_loc, _ = _best_putaway_zone(fp_name, f_ars)
-                            pair_rows.append({
-                                "Setup → Follow": f"{sp} → {fp_name}",
-                                "n": int(sr.get("Count", 0)),
-                                "Whiff%": _hfmt(sr.get("Whiff%")),
-                                "CSW%": _hfmt(sr.get("CSW%")),
-                                "Chase%": _hfmt(sr.get("Chase%")),
-                                "Avg EV": _hfmt(sr.get("Avg EV"), ".1f"),
-                                "Tunnel": f"{t_grade}" if t_grade not in ("-", None) else "-",
-                                "Tun Score": _hfmt(t_score, ".0f") if not pd.isna(t_score) else "-",
-                                "Velo Δ": _hfmt(velo_gap_val, ".0f"),
-                                "Plate Sep": _hfmt(plate_sep_val, ".0f"),
-                                "Location": f_loc or "-",
-                            })
-                # Add tunnel pairs that have no sequence data (low count but good tunnel)
-                if isinstance(tunnels, pd.DataFrame) and not tunnels.empty:
-                    for _, tr in tunnels.sort_values("Tunnel Score", ascending=False).iterrows():
-                        pa, pb = tr["Pitch A"], tr["Pitch B"]
-                        if pa in real_ps_names and pb in real_ps_names:
-                            for sp, fp_name in [(pa, pb), (pb, pa)]:
-                                if (sp, fp_name) not in seen_pairs:
-                                    seen_pairs.add((sp, fp_name))
-                                    f_ars = arsenal["pitches"].get(fp_name, {})
-                                    f_loc, _ = _best_putaway_zone(fp_name, f_ars)
-                                    pair_rows.append({
-                                        "Setup → Follow": f"{sp} → {fp_name}",
-                                        "n": "-",
-                                        "Whiff%": "-",
-                                        "CSW%": "-",
-                                        "Chase%": "-",
-                                        "Avg EV": "-",
-                                        "Tunnel": tr["Grade"],
-                                        "Tun Score": _hfmt(tr["Tunnel Score"], ".0f"),
-                                        "Velo Δ": _hfmt(tr.get("Velo Gap (mph)"), ".0f"),
-                                        "Plate Sep": _hfmt(tr.get("Plate Sep (in)"), ".0f"),
-                                        "Location": f_loc or "-",
-                                    })
-                if pair_rows:
-                    st.markdown("**② PITCH PAIRS** _(tunnel + sequencing)_")
-                    st.dataframe(pd.DataFrame(pair_rows), use_container_width=True, hide_index=True)
-
-                # ── ③ TOP SEQUENCES (hitter-aware 3-pitch paths) ──
+                # ── ② TOP SEQUENCES (hitter-aware 3-pitch paths) ──
                 if top_seqs:
-                    st.markdown("**③ TOP SEQUENCES** _(hitter-aware)_")
+                    st.markdown("**② TOP SEQUENCES** _(hitter-aware)_")
                     for i, s in enumerate(top_seqs):
                         sw23 = s.get("sw23", np.nan)
                         t12 = s.get("t12", np.nan)
@@ -4731,59 +4673,6 @@ def _pitching_plan_content(tm, team, data, season_filter):
                     p1_loc, p1_whiff = _best_putaway_zone(p1_name, p1_ars)
                     p1_loc_str = f" ({p1_loc}, {p1_whiff:.0f}% whiff)" if p1_loc and not pd.isna(p1_whiff) else ""
                     st.markdown(f"**① FIRST PITCH:** {p1_name} — compete{p1_loc_str}")
-                # All pitch pairs — tunnel + sequencing combined
-                pair_rows_fb = []
-                seen_pairs_fb = set()
-                if isinstance(sequences, pd.DataFrame) and not sequences.empty:
-                    for _, sr in sequences.sort_values("Whiff%", ascending=False).iterrows():
-                        sp, fp_name = sr["Setup Pitch"], sr["Follow Pitch"]
-                        if sp in real_ps_names and fp_name in real_ps_names:
-                            seen_pairs_fb.add((sp, fp_name))
-                            t_score, t_grade = _lookup_tunnel(sp, fp_name, tunnels)
-                            velo_gap_val, plate_sep_val = np.nan, np.nan
-                            if isinstance(tunnels, pd.DataFrame) and not tunnels.empty:
-                                tm_row = tunnels[((tunnels["Pitch A"]==sp)&(tunnels["Pitch B"]==fp_name))|
-                                                 ((tunnels["Pitch A"]==fp_name)&(tunnels["Pitch B"]==sp))]
-                                if not tm_row.empty:
-                                    velo_gap_val = tm_row.iloc[0].get("Velo Gap (mph)", np.nan)
-                                    plate_sep_val = tm_row.iloc[0].get("Plate Sep (in)", np.nan)
-                            f_ars = arsenal["pitches"].get(fp_name, {})
-                            f_loc, _ = _best_putaway_zone(fp_name, f_ars)
-                            pair_rows_fb.append({
-                                "Setup → Follow": f"{sp} → {fp_name}",
-                                "n": int(sr.get("Count", 0)),
-                                "Whiff%": _hfmt(sr.get("Whiff%")),
-                                "CSW%": _hfmt(sr.get("CSW%")),
-                                "Chase%": _hfmt(sr.get("Chase%")),
-                                "Avg EV": _hfmt(sr.get("Avg EV"), ".1f"),
-                                "Tunnel": f"{t_grade}" if t_grade not in ("-", None) else "-",
-                                "Tun Score": _hfmt(t_score, ".0f") if not pd.isna(t_score) else "-",
-                                "Velo Δ": _hfmt(velo_gap_val, ".0f"),
-                                "Plate Sep": _hfmt(plate_sep_val, ".0f"),
-                                "Location": f_loc or "-",
-                            })
-                if isinstance(tunnels, pd.DataFrame) and not tunnels.empty:
-                    for _, tr in tunnels.sort_values("Tunnel Score", ascending=False).iterrows():
-                        pa, pb = tr["Pitch A"], tr["Pitch B"]
-                        if pa in real_ps_names and pb in real_ps_names:
-                            for sp, fp_name in [(pa, pb), (pb, pa)]:
-                                if (sp, fp_name) not in seen_pairs_fb:
-                                    seen_pairs_fb.add((sp, fp_name))
-                                    f_ars = arsenal["pitches"].get(fp_name, {})
-                                    f_loc, _ = _best_putaway_zone(fp_name, f_ars)
-                                    pair_rows_fb.append({
-                                        "Setup → Follow": f"{sp} → {fp_name}",
-                                        "n": "-",
-                                        "Whiff%": "-", "CSW%": "-", "Chase%": "-", "Avg EV": "-",
-                                        "Tunnel": tr["Grade"],
-                                        "Tun Score": _hfmt(tr["Tunnel Score"], ".0f"),
-                                        "Velo Δ": _hfmt(tr.get("Velo Gap (mph)"), ".0f"),
-                                        "Plate Sep": _hfmt(tr.get("Plate Sep (in)"), ".0f"),
-                                        "Location": f_loc or "-",
-                                    })
-                if pair_rows_fb:
-                    st.markdown("**② PITCH PAIRS** _(tunnel + sequencing)_")
-                    st.dataframe(pd.DataFrame(pair_rows_fb), use_container_width=True, hide_index=True)
                 if best_hard_p:
                     bh_ars = arsenal["pitches"].get(best_hard_p[0], {})
                     bh_loc, bh_whiff = _best_putaway_zone(best_hard_p[0], bh_ars)
