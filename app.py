@@ -3049,7 +3049,10 @@ def _score_pitcher_vs_hitter(arsenal, hitter_profile):
     throws = "R" if arsenal["throws"] == "Right" else "L"
     bats = hitter_profile["bats"]
     platoon_factor, platoon_label = 1.0, "Neutral"
-    if (throws == "L" and bats == "L") or (throws == "R" and bats == "R"):
+    if bats == "S":
+        # Switch hitters bat from the opposite side — always platoon disadvantage for pitcher
+        platoon_factor, platoon_label = 0.90, "Switch (Disadv)"
+    elif (throws == "L" and bats == "L") or (throws == "R" and bats == "R"):
         platoon_factor, platoon_label = 1.12, "Platoon Adv"
     elif (throws == "L" and bats == "R") or (throws == "R" and bats == "L"):
         platoon_factor, platoon_label = 0.90, "Platoon Disadv"
@@ -3084,9 +3087,26 @@ def _score_pitcher_vs_hitter(arsenal, hitter_profile):
                 reasons.append(f"chaser ({hitter_chase:.0f}%) + our chase gen ({our_chase:.0f}%)")
         hitter_k = hitter_profile.get("k_pct", np.nan)
         if not pd.isna(hitter_k) and hitter_k > 25:
-            score += 4
+            # K-prone bonus scales with how putaway-oriented the pitch is
+            k_bonus = 5 if not is_hard else 2  # offspeed/breaking balls exploit K-prone more
+            score += k_bonus
             if not reasons:
                 reasons.append(f"K-prone ({hitter_k:.0f}% K)")
+        # Penalize pitches that get hit hard against us
+        our_ev_against = pt_data.get("ev_against", np.nan)
+        if not pd.isna(our_ev_against):
+            if our_ev_against > 90:
+                score -= (our_ev_against - 90) * 1.5
+                reasons.append(f"gets hit hard ({our_ev_against:.1f} EV against)")
+            elif our_ev_against < 82:
+                score += 4
+        # Reward low-EV / high-barrel hitter weakness
+        hitter_ev = hitter_profile.get("ev", np.nan)
+        hitter_barrel = hitter_profile.get("barrel_pct", np.nan)
+        if not pd.isna(hitter_ev) and hitter_ev < 84:
+            score += 3
+        if not pd.isna(hitter_barrel) and hitter_barrel < 4:
+            score += 2
         score *= platoon_factor
         pitch_scores[pt_name] = {
             "score": round(score, 1), "reasons": reasons,
@@ -3104,15 +3124,37 @@ def _score_pitcher_vs_hitter(arsenal, hitter_profile):
             recommendations.append(f"Putaway: **{offspeed[0][0]}** ({offspeed[0][1]['score']:.0f})")
         elif len(sorted_pitches) > 1:
             recommendations.append(f"Secondary: **{sorted_pitches[1][0]}** ({sorted_pitches[1][1]['score']:.0f})")
+    # Discipline-based notes
+    hitter_bb = hitter_profile.get("bb_pct", np.nan)
+    hitter_chase_pct = hitter_profile.get("chase_pct", np.nan)
+    if not pd.isna(hitter_bb) and hitter_bb < 5:
+        recommendations.append("Free swinger — attack the zone early")
+    elif not pd.isna(hitter_bb) and hitter_bb > 14:
+        recommendations.append("Patient hitter — don't nibble, pitch to contact")
+    if not pd.isna(hitter_chase_pct) and hitter_chase_pct > 35:
+        recommendations.append(f"Chases aggressively ({hitter_chase_pct:.0f}%) — expand early")
+    # Ground ball tendency
+    gb_pct = hitter_profile.get("gb_pct", np.nan)
+    if not pd.isna(gb_pct) and gb_pct > 55:
+        recommendations.append(f"Ground ball hitter ({gb_pct:.0f}% GB) — pitch up in zone")
     # Woba split warning
     if not pd.isna(woba_split) and woba_split >= 0.380:
-        recommendations.append(f"Danger — .{int(woba_split*1000)} wOBA vs {'LHP' if throws=='L' else 'RHP'}")
+        recommendations.append(f"⚠ Danger — {woba_split:.3f} wOBA vs {'LHP' if throws=='L' else 'RHP'}")
     elif not pd.isna(woba_split) and woba_split <= 0.260:
-        recommendations.append(f"Exploitable — .{int(woba_split*1000)} wOBA vs {'LHP' if throws=='L' else 'RHP'}")
+        recommendations.append(f"Exploitable — {woba_split:.3f} wOBA vs {'LHP' if throws=='L' else 'RHP'}")
+    # Usage-weighted overall score (pitches thrown more matter more)
+    if pitch_scores:
+        total_usage = sum(v["usage"] for v in pitch_scores.values())
+        if total_usage > 0:
+            overall = sum(v["score"] * v["usage"] for v in pitch_scores.values()) / total_usage
+        else:
+            overall = np.mean([v["score"] for v in pitch_scores.values()])
+    else:
+        overall = 50
     return {
         "hitter": hitter_profile["name"], "pitcher": arsenal["name"],
         "bats": bats, "platoon": platoon_label,
-        "overall_score": np.mean([v["score"] for v in pitch_scores.values()]) if pitch_scores else 50,
+        "overall_score": overall,
         "pitch_scores": pitch_scores, "recommendations": recommendations,
     }
 
@@ -3130,6 +3172,14 @@ def _score_hitter_vs_pitcher(hitter_tm, pitcher_profile):
         platoon_factor, platoon_label = 0.90, "Same-Side"
     elif bats == "Switch":
         platoon_factor, platoon_label = 1.05, "Switch"
+    # Pitcher-level bonuses (applied once to baseline, not per-pitch)
+    pitcher_bonus = 0.0
+    opp_ev = pitcher_profile.get("ev_against", np.nan)
+    opp_barrel = pitcher_profile.get("barrel_pct", np.nan)
+    if not pd.isna(opp_ev) and opp_ev > 88:
+        pitcher_bonus += 3
+    if not pd.isna(opp_barrel) and opp_barrel > 8:
+        pitcher_bonus += 3
     weighted_score, total_weight = 0.0, 0.0
     pitch_details = {}
     approach_notes = []
@@ -3137,7 +3187,7 @@ def _score_hitter_vs_pitcher(hitter_tm, pitcher_profile):
         if opp_usage < 3:
             continue
         weight = opp_usage / 100.0
-        score = 50.0
+        score = 50.0 + pitcher_bonus
         notes = []
         our_data = hitter_tm["by_pitch_type"].get(opp_pitch, {})
         if our_data:
@@ -3158,12 +3208,6 @@ def _score_hitter_vs_pitcher(hitter_tm, pitcher_profile):
                 notes.append(f"barrels {opp_pitch}s ({our_barrel:.0f}%)")
             if not pd.isna(our_hh) and our_hh > 40:
                 score += 4
-        opp_ev = pitcher_profile.get("ev_against", np.nan)
-        opp_barrel = pitcher_profile.get("barrel_pct", np.nan)
-        if not pd.isna(opp_ev) and opp_ev > 88:
-            score += 3
-        if not pd.isna(opp_barrel) and opp_barrel > 8:
-            score += 3
         score *= platoon_factor
         weighted_score += score * weight
         total_weight += weight
@@ -3181,6 +3225,10 @@ def _score_hitter_vs_pitcher(hitter_tm, pitcher_profile):
             approach_notes.append(f"Sit on **{best[0]}** ({best[1]['usage']:.0f}% of mix)")
         if worst[1]["score"] < 45 and worst[0] != best[0]:
             approach_notes.append(f"Lay off **{worst[0]}** out of zone")
+        # Flag unknown pitch types where we have no Trackman data
+        unknown = [p for p, d in pitch_details.items() if pd.isna(d.get("our_ev", np.nan)) and d["usage"] > 10]
+        if unknown:
+            approach_notes.append(f"No Trackman data vs {', '.join(unknown)} — be ready")
         opp_swstrk = pitcher_profile.get("swstrk_pct", np.nan)
         if not pd.isna(opp_swstrk) and opp_swstrk < 8:
             approach_notes.append("Low SwStr% — be aggressive, this pitcher can be hit")
@@ -3234,6 +3282,9 @@ def _pitching_plan_content(tm, team, data, season_filter):
     st.caption(f"{arsenal['total_pitches']} pitches tracked")
     # Arsenal summary cards
     pitch_items = sorted(arsenal["pitches"].items(), key=lambda x: x[1]["usage_pct"], reverse=True)
+    if not pitch_items:
+        st.info("No pitch type breakdown available.")
+        return
     cols = st.columns(min(len(pitch_items), 5))
     for i, (pt_name, pt_data) in enumerate(pitch_items[:5]):
         with cols[i]:
@@ -3315,7 +3366,7 @@ def _hitting_plan_content(tm, team, data, season_filter):
     selected_opp = st.selectbox("Select Their Pitcher", opp_pitchers, key="gpl_opp_pitcher")
     opp_profile = _get_opp_pitcher_profile(tm, selected_opp, team)
     # Opponent pitcher summary
-    throws_str = f"{'RHP' if opp_profile['throws'] == 'R' else 'LHP'}"
+    throws_str = "RHP" if opp_profile["throws"] == "R" else ("LHP" if opp_profile["throws"] == "L" else "BHP")
     st.markdown(f"### vs {selected_opp} ({throws_str})")
     col_ars, col_stats = st.columns([3, 1])
     with col_ars:
