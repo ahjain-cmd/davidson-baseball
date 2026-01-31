@@ -3442,39 +3442,81 @@ def _pitching_plan_content(tm, team, data, season_filter):
         m = seq_df[(seq_df["Setup Pitch"]==setup)&(seq_df["Follow Pitch"]==follow)]
         return m.iloc[0]["Whiff%"] if not m.empty else np.nan
 
-    def _pitch_score_composite(pt_name, pt_data, hd, tun_df):
-        """Single composite score (0-100) combining all factors for one pitch vs one hitter."""
+    def _pitch_score_composite(pt_name, pt_data, hd, tun_df, platoon_label="Neutral"):
+        """Unified composite score (0-100) for one pitch vs one hitter.
+        Combines all available pitcher Trackman + hitter TrueMedia factors."""
         components, weights = [], []
+        is_hard = pt_name in _hard_pitches
+
+        # 1. Stuff+ (15%) — raw pitch quality: 70-130 → 0-100
         sp = pt_data.get("stuff_plus", np.nan)
         if not pd.isna(sp):
-            components.append(min(max((sp - 70) / 60 * 100, 0), 100)); weights.append(20)
+            components.append(min(max((sp - 70) / 60 * 100, 0), 100)); weights.append(15)
+
+        # 2. Our Whiff% (12%) — 0-50% → 0-100
         wh = pt_data.get("our_whiff", np.nan)
         if not pd.isna(wh):
-            components.append(min(wh / 50 * 100, 100)); weights.append(15)
+            components.append(min(wh / 50 * 100, 100)); weights.append(12)
+
+        # 3. Our CSW% (8%) — 0-40% → 0-100
         csw = pt_data.get("our_csw", np.nan)
         if not pd.isna(csw):
-            components.append(min(csw / 40 * 100, 100)); weights.append(10)
-        is_hard = pt_name in _hard_pitches
+            components.append(min(csw / 40 * 100, 100)); weights.append(8)
+
+        # 4. Their 2K Whiff Rate (15%) — matched to pitch class (hard/offspeed) + our hand
         their_2k = hd.get("whiff_2k_hard" if is_hard else "whiff_2k_os", np.nan)
         if not pd.isna(their_2k):
-            components.append(min(their_2k / 40 * 100, 100)); weights.append(20)
+            components.append(min(their_2k / 40 * 100, 100)); weights.append(15)
+
+        # 5. Chase Exploitation (12%) — our chase generation × their chase tendency
         our_chase = pt_data.get("our_chase", np.nan)
         their_chase = hd.get("chase_pct", np.nan)
         if not pd.isna(our_chase) and not pd.isna(their_chase):
-            components.append(min((our_chase * their_chase) / (30*30) * 100, 100)); weights.append(15)
+            components.append(min((our_chase * their_chase) / (30 * 30) * 100, 100)); weights.append(12)
+
+        # 6. Their Swing Rate vs Pitch Class (5%) — lower swing = easier called strikes
         sw_key = _swing_map.get(pt_name, "")
         their_sw = hd.get(sw_key, np.nan) if sw_key else np.nan
         if not pd.isna(their_sw):
-            components.append(min(max((70 - their_sw) / 50 * 100, 0), 100)); weights.append(10)
-        if not isinstance(tun_df, pd.DataFrame) or tun_df.empty:
-            pass
-        else:
-            t_m = tun_df[(tun_df["Pitch A"]==pt_name)|(tun_df["Pitch B"]==pt_name)]
+            components.append(min(max((70 - their_sw) / 50 * 100, 0), 100)); weights.append(5)
+
+        # 7. Tunnel Score (8%) — best tunnel pair involving this pitch
+        if isinstance(tun_df, pd.DataFrame) and not tun_df.empty:
+            t_m = tun_df[(tun_df["Pitch A"] == pt_name) | (tun_df["Pitch B"] == pt_name)]
             if not t_m.empty:
-                components.append(t_m.iloc[0]["Tunnel Score"]); weights.append(10)
+                components.append(t_m.iloc[0]["Tunnel Score"]); weights.append(8)
+
+        # 8. EV Against (10%) — penalize pitches we get hit hard on, reward weak contact
+        ev_ag = pt_data.get("our_ev_against", np.nan)
+        if not pd.isna(ev_ag):
+            # 75 mph → 100, 90 mph → 50, 100 mph → 10
+            components.append(min(max((100 - ev_ag) / 25 * 100, 0), 100)); weights.append(10)
+
+        # 9. K-Prone Bonus (5%) — offspeed gets bigger boost vs K-prone hitters
+        k_pct = hd.get("k_pct", np.nan)
+        if not pd.isna(k_pct):
+            k_score = min(k_pct / 35 * 100, 100)  # 35% K → 100
+            if not is_hard:
+                k_score *= 1.3  # offspeed exploits K-prone more
+            components.append(min(k_score, 100)); weights.append(5)
+
+        # 10. Platoon Factor (5%) — advantage/disadvantage adjustment
+        plat_score = 50  # neutral
+        if "Adv" in platoon_label:
+            plat_score = 80
+        elif "Disadv" in platoon_label:
+            plat_score = 25
+        components.append(plat_score); weights.append(5)
+
+        # 11. wOBA Split (5%) — how well hitter performs vs our hand
+        woba_split = hd.get("woba_split", np.nan)
+        if not pd.isna(woba_split):
+            # .200 wOBA → 100 (exploitable), .350 → 50, .450 → 0 (danger)
+            components.append(min(max((0.450 - woba_split) / 0.250 * 100, 0), 100)); weights.append(5)
+
         if not weights:
             return 50
-        return sum(c*w for c,w in zip(components, weights)) / sum(weights)
+        return sum(c * w for c, w in zip(components, weights)) / sum(weights)
 
     def _build_3pitch_sequences(sorted_ps, hd, tun_df, seq_df):
         """Build best 3-pitch sequences: setup → bridge → putaway."""
@@ -3529,31 +3571,46 @@ def _pitching_plan_content(tm, team, data, season_filter):
         ps = m["pitch_scores"]
         hd = m.get("hitter_data", {})
         sorted_ps = sorted(ps.items(), key=lambda x: x[1]["score"], reverse=True)
-        best_pt = sorted_ps[0][0] if sorted_ps else "?"
+        # Use composite score (same as bullpen cards) for Go-To pitch
+        composites_sum = {pt_name: _pitch_score_composite(pt_name, pt_data, hd, tunnels, m["platoon"])
+                         for pt_name, pt_data in sorted_ps}
+        best_pt = max(composites_sum, key=composites_sum.get) if composites_sum else "?"
+        # Usage-weighted composite score (consistent with bullpen cards)
+        total_usage = sum(d.get("usage", 1) for _, d in sorted_ps)
+        if total_usage > 0 and composites_sum:
+            comp_overall = sum(composites_sum[n] * d.get("usage", 1) for n, d in sorted_ps) / total_usage
+        else:
+            comp_overall = np.mean(list(composites_sum.values())) if composites_sum else 50
         # Build top 3-pitch seq for summary
         top_seqs = _build_3pitch_sequences(sorted_ps, hd, tunnels, sequences)
         seq_str = top_seqs[0]["seq"] if top_seqs else (f"{sorted_ps[0][0]}→{sorted_ps[1][0]}" if len(sorted_ps) >= 2 else "-")
         summary_rows.append({
             "Hitter": display_name(m["hitter"]), "B": m["bats"],
             "Platoon": m["platoon"],
-            "Score": round(m["overall_score"], 1),
+            "Score": round(comp_overall, 1),
             "Go-To": best_pt,
             "Best Sequence": seq_str,
         })
-    st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
+    sum_df = pd.DataFrame(summary_rows).sort_values("Score", ascending=False)
+    st.dataframe(sum_df, use_container_width=True, hide_index=True)
     # ── Bullpen Cards ──
     st.markdown("---")
     section_header("Bullpen Cards")
 
     for matchup in all_matchups:
-        score = matchup["overall_score"]
         hd = matchup.get("hitter_data", {})
         ps = matchup["pitch_scores"]
         sorted_ps = sorted(ps.items(), key=lambda x: x[1]["score"], reverse=True)
-        # Compute composite scores per pitch
+        # Compute composite scores per pitch (unified scoring)
         composites = {}
         for pt_name, pt_data in sorted_ps:
-            composites[pt_name] = round(_pitch_score_composite(pt_name, pt_data, hd, tunnels), 0)
+            composites[pt_name] = round(_pitch_score_composite(pt_name, pt_data, hd, tunnels, matchup["platoon"]), 0)
+        # Usage-weighted composite overall (same as summary table)
+        total_usage = sum(d.get("usage", 1) for _, d in sorted_ps)
+        if total_usage > 0 and composites:
+            score = sum(composites[n] * d.get("usage", 1) for n, d in sorted_ps) / total_usage
+        else:
+            score = np.mean(list(composites.values())) if composites else 50
         # Build 3-pitch sequences
         top_seqs = _build_3pitch_sequences(sorted_ps, hd, tunnels, sequences)
         # Expander label: clean and simple
