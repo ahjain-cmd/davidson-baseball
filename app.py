@@ -7230,7 +7230,7 @@ def _compute_pitch_pair_results(pdf, data):
     rows = []
     for (prev, curr), grp in pdf_s.groupby(["PrevPitch", "TaggedPitchType"]):
         n = len(grp)
-        if n < 5:
+        if n < 25:
             continue
         swings = grp[is_swing.reindex(grp.index, fill_value=False)]
         whiffs = grp[is_whiff.reindex(grp.index, fill_value=False)]
@@ -9620,7 +9620,7 @@ def _game_planning_content(data):
             for i, pt_a in enumerate(pitch_types):
                 for j, pt_b in enumerate(pitch_types):
                     pair = pairs[(pairs["TaggedPitchType"] == pt_a) & (pairs["NextPitch"] == pt_b)]
-                    if len(pair) < 3:
+                    if len(pair) < 25:
                         continue
                     sw = pair[pair["NextCall"].isin(SWING_CALLS)]
                     wh = pair[pair["NextCall"] == "StrikeSwinging"]
@@ -9649,7 +9649,7 @@ def _game_planning_content(data):
             for i, pt_a in enumerate(pitch_types):
                 for j, pt_b in enumerate(pitch_types):
                     pair = pairs[(pairs["TaggedPitchType"] == pt_a) & (pairs["NextPitch"] == pt_b)]
-                    if len(pair) < 5:
+                    if len(pair) < 25:
                         continue
                     sw = pair[pair["NextCall"].isin(SWING_CALLS)]
                     wh = pair[pair["NextCall"] == "StrikeSwinging"]
@@ -9916,7 +9916,7 @@ def _game_planning_content(data):
                     # Build 3-pitch sequence stats
                     seq3["Seq3"] = seq3["TaggedPitchType"] + " → " + seq3["Pitch2"] + " → " + seq3["Pitch3"]
                     seq3_counts = seq3["Seq3"].value_counts()
-                    top_seq3 = seq3_counts[seq3_counts >= 3].head(20).index.tolist()
+                    top_seq3 = seq3_counts[seq3_counts >= 25].head(20).index.tolist()
 
                     if top_seq3:
                         seq3_rows = []
@@ -10039,7 +10039,7 @@ def _game_planning_content(data):
                     seq4["Seq4"] = (seq4["TaggedPitchType"] + " → " + seq4["Pitch2"] + " → " +
                                     seq4["Pitch3"] + " → " + seq4["Pitch4"])
                     seq4_counts = seq4["Seq4"].value_counts()
-                    top_seq4 = seq4_counts[seq4_counts >= 3].head(20).index.tolist()
+                    top_seq4 = seq4_counts[seq4_counts >= 25].head(20).index.tolist()
 
                     if top_seq4:
                         seq4_rows = []
