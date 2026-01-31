@@ -3416,6 +3416,12 @@ def _pitch_score_composite(pt_name, pt_data, hd, tun_df, platoon_label="Neutral"
         # 55% → 0, 65% → 50, 75%+ → 100  (high = they swing a lot in zone = exploitable)
         components.append(min(max((iz_swing - 55) / 20 * 100, 0), 100)); weights.append(2)
 
+    # 22. Extension (2%) — longer extension = closer release = more deception
+    ext = ars_pt.get("extension", np.nan)
+    if not pd.isna(ext):
+        # 5.0 ft → 0, 6.0 → 50, 7.0+ → 100
+        components.append(min(max((ext - 5.0) / 2.0 * 100, 0), 100)); weights.append(2)
+
     # 17. Zone Exploitation (5%) — cross our best zone with their zone weakness
     ze = ars_pt.get("zone_eff", {})
     if ze and hd:
@@ -3968,6 +3974,7 @@ def _generate_at_bat_script(hitter_profile, pitcher_profile, matchup_result):
         ("up", "in"): "up_in", ("up", "out"): "up_away",
         ("down", "in"): "down_in", ("down", "out"): "down_away",
     }
+    # First try two-axis matches (e.g., pitcher lives up-and-in)
     for pz_name, pz_pct in pitcher_zones:
         for pz2_name, pz2_pct in pitcher_zones:
             if pz_name == pz2_name:
@@ -3982,6 +3989,24 @@ def _generate_at_bat_script(hitter_profile, pitcher_profile, matchup_result):
                     break
         if fp_zone_note:
             break
+    # Fallback: single-axis check (pitcher lives "up" without strong in/out tendency)
+    if not fp_zone_note:
+        single_axis_map = {
+            "up": ["up_in", "up_away"],
+            "down": ["down_in", "down_away"],
+            "in": ["up_in", "down_in"],
+            "out": ["up_away", "down_away"],
+        }
+        for pz_name, pz_pct in pitcher_zones:
+            candidates = single_axis_map.get(pz_name, [])
+            for quad in candidates:
+                z = zones.get(quad, {})
+                z_ev = z.get("avg_ev", np.nan)
+                if z.get("n", 0) >= 5 and not pd.isna(z_ev) and z_ev > 88:
+                    fp_zone_note = f" — we mash {quad.replace('_','-')} ({z_ev:.0f} EV)"
+                    break
+            if fp_zone_note:
+                break
     # 1P plan logic
     if fp_pitch in _hard_set:
         if not pd.isna(early_ev) and early_ev > 88:
@@ -4204,13 +4229,15 @@ def _pitching_plan_content(tm, team, data, season_filter):
         ars_rows.append({
             "Pitch": pt_name, "Usage": f"{pt['usage_pct']:.0f}%",
             "Velo": f"{pt['avg_velo']:.1f}" if not pd.isna(pt["avg_velo"]) else "-",
-            "Spin": f"{pt['avg_spin']:.0f}" if not pd.isna(pt["avg_spin"]) else "-",
             "IVB": f"{pt['ivb']:.1f}" if not pd.isna(pt.get("ivb", np.nan)) else "-",
             "HB": f"{pt['hb']:.1f}" if not pd.isna(pt.get("hb", np.nan)) else "-",
+            "EffV": f"{pt['eff_velo']:.1f}" if not pd.isna(pt.get("eff_velo", np.nan)) else "-",
+            "Ext": f"{pt['extension']:.1f}" if not pd.isna(pt.get("extension", np.nan)) else "-",
             "Whiff%": f"{pt['whiff_pct']:.0f}" if not pd.isna(pt["whiff_pct"]) else "-",
             "CSW%": f"{pt['csw_pct']:.0f}" if not pd.isna(pt.get("csw_pct", np.nan)) else "-",
             "Chase%": f"{pt['chase_pct']:.0f}" if not pd.isna(pt["chase_pct"]) else "-",
             "EV Ag.": f"{pt['ev_against']:.1f}" if not pd.isna(pt["ev_against"]) else "-",
+            "Brl%Ag": f"{pt['barrel_pct_against']:.1f}" if not pd.isna(pt.get("barrel_pct_against", np.nan)) else "-",
             "S+": f"{pt['stuff_plus']:.0f}" if not pd.isna(pt["stuff_plus"]) else "-",
         })
     st.dataframe(pd.DataFrame(ars_rows), use_container_width=True, hide_index=True)
