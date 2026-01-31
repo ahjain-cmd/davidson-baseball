@@ -3002,6 +3002,11 @@ def _get_our_pitcher_arsenal(data, pitcher_name, season_filter=None):
         if loc_grp["RelSpeed"].notna().any() and len(loc_grp) >= 5:
             loc_adj = (loc_grp["PlateLocHeight"] - 2.5) * 1.5 + loc_grp["PlateLocSide"].abs() * (-0.5)
             eff_velo = (loc_grp["RelSpeed"] + loc_adj).mean()
+        # Barrel% against
+        barrels_against = int(is_barrel_mask(ip).sum()) if len(ip) > 0 else 0
+        barrel_pct_against = barrels_against / max(len(ip), 1) * 100 if len(ip) > 0 else np.nan
+        # Extension
+        ext_val = grp["Extension"].mean() if "Extension" in grp.columns and grp["Extension"].notna().any() else np.nan
         arsenal["pitches"][pt_name] = {
             "usage_pct": len(grp) / len(pdf) * 100,
             "avg_velo": grp["RelSpeed"].mean() if grp["RelSpeed"].notna().any() else np.nan,
@@ -3012,9 +3017,11 @@ def _get_our_pitcher_arsenal(data, pitcher_name, season_filter=None):
             "csw_pct": len(csw) / len(grp) * 100,
             "chase_pct": len(oz_sw) / max(len(oz_grp), 1) * 100 if len(oz_grp) > 0 else np.nan,
             "ev_against": ip["ExitSpeed"].mean() if len(ip) > 0 else np.nan,
+            "barrel_pct_against": barrel_pct_against,
             "stuff_plus": stuff_plus,
             "count": len(grp),
             "eff_velo": eff_velo,
+            "extension": ext_val,
             "zone_eff": zone_eff,
         }
     # Tunnel scores and pitch pair sequencing results
@@ -3259,11 +3266,13 @@ def _lookup_tunnel(a, b, tun_df):
 
 
 def _lookup_seq(setup, follow, seq_df):
-    """Lookup sequence whiff% for a pitch pair."""
+    """Lookup sequence whiff% and chase% for a pitch pair. Returns (whiff%, chase%)."""
     if not isinstance(seq_df, pd.DataFrame) or seq_df.empty:
-        return np.nan
+        return np.nan, np.nan
     m = seq_df[(seq_df["Setup Pitch"]==setup)&(seq_df["Follow Pitch"]==follow)]
-    return m.iloc[0]["Whiff%"] if not m.empty else np.nan
+    if m.empty:
+        return np.nan, np.nan
+    return m.iloc[0]["Whiff%"], m.iloc[0].get("Chase%", np.nan)
 
 
 def _pitch_score_composite(pt_name, pt_data, hd, tun_df, platoon_label="Neutral", arsenal_data=None):
@@ -3378,6 +3387,35 @@ def _pitch_score_composite(pt_name, pt_data, hd, tun_df, platoon_label="Neutral"
         # 0% → 0, 15% → 27, 30% → 55, 50%+ → 91
         components.append(min(max(usage_pct / 55 * 100, 0), 100)); weights.append(12)
 
+    # 18. Raw Velo (3%) — 93 mph FB should score higher than 86 mph; harder to react to
+    raw_velo = ars_pt.get("avg_velo", pt_data.get("velo", np.nan))
+    if not pd.isna(raw_velo):
+        if is_hard:
+            # Hard: 82 → 0, 88 → 50, 94+ → 100
+            components.append(min(max((raw_velo - 82) / 12 * 100, 0), 100)); weights.append(3)
+        else:
+            # Offspeed: big velo diff from hard stuff is good; 70 → 30, 78 → 55, 85+ → 80
+            components.append(min(max((85 - raw_velo) / 15 * 100, 10), 90)); weights.append(2)
+
+    # 19. Barrel% Against (3%) — low barrel rate = effective pitch, penalize hittable pitches
+    brl_ag = ars_pt.get("barrel_pct_against", np.nan)
+    if not pd.isna(brl_ag):
+        # 0% → 100, 5% → 67, 10% → 33, 15%+ → 0
+        components.append(min(max((15 - brl_ag) / 15 * 100, 0), 100)); weights.append(3)
+
+    # 20. Horizontal Break (3%) — offspeed only: more HB = more sweep/run = harder to barrel
+    hb_val = ars_pt.get("hb", pt_data.get("hb", np.nan))
+    if not is_hard and not pd.isna(hb_val):
+        abs_hb = abs(hb_val)
+        # 2" → 0, 8" → 50, 14"+ → 100
+        components.append(min(max((abs_hb - 2) / 12 * 100, 0), 100)); weights.append(3)
+
+    # 21. InZoneSwing% (2%) — aggressive in-zone swingers are more exploitable
+    iz_swing = hd.get("iz_swing_pct", np.nan)
+    if not pd.isna(iz_swing):
+        # 55% → 0, 65% → 50, 75%+ → 100  (high = they swing a lot in zone = exploitable)
+        components.append(min(max((iz_swing - 55) / 20 * 100, 0), 100)); weights.append(2)
+
     # 17. Zone Exploitation (5%) — cross our best zone with their zone weakness
     ze = ars_pt.get("zone_eff", {})
     if ze and hd:
@@ -3419,7 +3457,8 @@ def _pitch_score_composite(pt_name, pt_data, hd, tun_df, platoon_label="Neutral"
 def _build_3pitch_sequences(sorted_ps, hd, tun_df, seq_df):
     """Build best 3-pitch sequences: setup → bridge → putaway.
     Allows same pitch back-to-back only if tunnel score > 70.
-    Excludes pitches thrown fewer than 10 times."""
+    Excludes pitches thrown fewer than 10 times.
+    Enforces minimum tunnel quality gate: both tunnels cannot be F-grade."""
     pitches = [name for name, data in sorted_ps if data.get("count", 0) >= 10]
     pitch_data = {name: data for name, data in sorted_ps if data.get("count", 0) >= 10}
     if len(pitches) < 2:
@@ -3428,64 +3467,82 @@ def _build_3pitch_sequences(sorted_ps, hd, tun_df, seq_df):
     for p1 in pitches:
         for p2 in pitches:
             if p1 == p2:
-                # Allow same pitch only if tunnel score > 70 (self-tunnel not meaningful)
                 continue
             for p3 in pitches:
                 if p2 == p3:
-                    # Allow same pitch back-to-back only if tunnel score with another pitch > 70
                     t_self, _ = _lookup_tunnel(p2, p3, tun_df)
                     if pd.isna(t_self) or t_self <= 70:
                         continue
-                t12, _ = _lookup_tunnel(p1, p2, tun_df)
-                t23, _ = _lookup_tunnel(p2, p3, tun_df)
-                sw12 = _lookup_seq(p1, p2, seq_df)
-                sw23 = _lookup_seq(p2, p3, seq_df)
+                t12, g12 = _lookup_tunnel(p1, p2, tun_df)
+                t23, g23 = _lookup_tunnel(p2, p3, tun_df)
+                # Minimum tunnel gate: skip if BOTH tunnels are F-grade (< 30)
+                t12_bad = pd.isna(t12) or t12 < 30
+                t23_bad = pd.isna(t23) or t23 < 30
+                if t12_bad and t23_bad:
+                    continue
+                sw12, ch12 = _lookup_seq(p1, p2, seq_df)
+                sw23, ch23 = _lookup_seq(p2, p3, seq_df)
                 is_hard_p3 = p3 in _hard_pitches
                 their_2k = hd.get("whiff_2k_hard" if is_hard_p3 else "whiff_2k_os", np.nan)
                 parts, wts = [], []
-                # Tunnel quality between pairs
+                # Tunnel quality between pairs — INCREASED weights (~40% of total)
                 if not pd.isna(t12):
-                    parts.append(t12); wts.append(10)
+                    parts.append(t12); wts.append(18)
                 if not pd.isna(t23):
-                    parts.append(t23); wts.append(16)
+                    parts.append(t23); wts.append(22)
                 # Sequence whiff rates (actual data from our pitch pairs)
                 if not pd.isna(sw12):
-                    parts.append(min(sw12 / 50 * 100, 100)); wts.append(10)
+                    parts.append(min(sw12 / 50 * 100, 100)); wts.append(8)
                 if not pd.isna(sw23):
-                    parts.append(min(sw23 / 50 * 100, 100)); wts.append(20)
+                    parts.append(min(sw23 / 50 * 100, 100)); wts.append(18)
+                # Chase% from sequence data — reward sequences that generate chases
+                if not pd.isna(ch23):
+                    parts.append(min(ch23 / 40 * 100, 100)); wts.append(6)
+                if not pd.isna(ch12):
+                    parts.append(min(ch12 / 40 * 100, 100)); wts.append(3)
                 # Hitter's 2K vulnerability on putaway pitch class
                 if not pd.isna(their_2k):
-                    parts.append(min(their_2k / 40 * 100, 100)); wts.append(18)
+                    parts.append(min(their_2k / 40 * 100, 100)); wts.append(16)
                 # Putaway pitch quality (Stuff+ of P3)
                 p3_stuff = pitch_data.get(p3, {}).get("stuff_plus", np.nan)
                 if not pd.isna(p3_stuff):
-                    parts.append(min(max((p3_stuff - 70) / 60 * 100, 0), 100)); wts.append(7)
+                    parts.append(min(max((p3_stuff - 70) / 60 * 100, 0), 100)); wts.append(6)
                 # Bridge pitch quality (P2 matters for sequencing)
                 p2_stuff = pitch_data.get(p2, {}).get("stuff_plus", np.nan)
                 if not pd.isna(p2_stuff):
-                    parts.append(min(max((p2_stuff - 70) / 60 * 100, 0), 100)); wts.append(4)
+                    parts.append(min(max((p2_stuff - 70) / 60 * 100, 0), 100)); wts.append(3)
                 # Setup pitch quality (Stuff+ of P1)
                 p1_stuff = pitch_data.get(p1, {}).get("stuff_plus", np.nan)
                 if not pd.isna(p1_stuff):
-                    parts.append(min(max((p1_stuff - 70) / 60 * 100, 0), 100)); wts.append(3)
+                    parts.append(min(max((p1_stuff - 70) / 60 * 100, 0), 100)); wts.append(2)
                 # Pitch class variety bonus: reward mixing hard + offspeed
                 classes = set("H" if p in _hard_pitches else "O" for p in (p1, p2, p3))
                 if len(classes) == 2:
-                    parts.append(70); wts.append(4)
-                # Velo sequencing bonus: big velo gap between setup and putaway
-                p1_velo = pitch_data.get(p1, {}).get("velo", np.nan)
-                p3_velo = pitch_data.get(p3, {}).get("velo", np.nan)
-                if not pd.isna(p1_velo) and not pd.isna(p3_velo):
-                    gap = abs(p1_velo - p3_velo)
-                    # 0 mph gap → 30, 5 mph → 50, 10+ mph → 80
-                    parts.append(min(30 + gap * 5, 100)); wts.append(4)
+                    parts.append(70); wts.append(3)
+                # EffVelo sequencing bonus: big perceived velo gap between setup and putaway
+                p1_effv = pitch_data.get(p1, {}).get("eff_velo", np.nan)
+                p3_effv = pitch_data.get(p3, {}).get("eff_velo", np.nan)
+                if not pd.isna(p1_effv) and not pd.isna(p3_effv):
+                    gap = abs(p1_effv - p3_effv)
+                    # 0 mph gap → 25, 5 mph → 50, 10+ mph → 75
+                    parts.append(min(25 + gap * 5, 100)); wts.append(5)
+                else:
+                    # Fallback to raw velo if EffVelo not available
+                    p1_velo = pitch_data.get(p1, {}).get("velo", np.nan)
+                    p3_velo = pitch_data.get(p3, {}).get("velo", np.nan)
+                    if not pd.isna(p1_velo) and not pd.isna(p3_velo):
+                        gap = abs(p1_velo - p3_velo)
+                        parts.append(min(25 + gap * 5, 100)); wts.append(4)
                 if not wts:
                     continue
                 combo = sum(p*w for p,w in zip(parts, wts)) / sum(wts)
+                # Store EffVelo gap for display
+                ev_gap = abs(p1_effv - p3_effv) if not pd.isna(p1_effv) and not pd.isna(p3_effv) else np.nan
                 seqs.append({
                     "seq": f"{p1} → {p2} → {p3}", "p1": p1, "p2": p2, "p3": p3,
                     "score": round(combo, 1),
                     "t12": t12, "t23": t23, "sw23": sw23, "their_2k": their_2k,
+                    "effv_gap": ev_gap,
                 })
     seqs.sort(key=lambda x: x["score"], reverse=True)
     # Dedupe: ensure variety — unique (P3 putaway, P1 setup) pairs
@@ -3594,6 +3651,7 @@ def _score_pitcher_vs_hitter(arsenal, hitter_profile):
             "our_ev_against": pt_data.get("ev_against", np.nan),
             "stuff_plus": stuff, "usage": pt_data["usage_pct"],
             "velo": pt_data["avg_velo"],
+            "eff_velo": pt_data.get("eff_velo", np.nan),
             "spin": pt_data.get("avg_spin", np.nan),
             "ivb": pt_data.get("ivb", np.nan),
             "hb": pt_data.get("hb", np.nan),
@@ -3889,12 +3947,47 @@ def _generate_at_bat_script(hitter_profile, pitcher_profile, matchup_result):
     early_ev = early.get("avg_ev", np.nan)
     early_whiff = early.get("whiff_pct", np.nan)
     callstrk = pitcher_profile.get("callstrk_pct", np.nan)
+    # Cross pitcher location with our hitter zones for 1st pitch
+    fp_zone_note = ""
+    h_pct = pitcher_profile.get("loc_high_pct", np.nan)
+    l_pct = pitcher_profile.get("loc_low_pct", np.nan)
+    i_pct = pitcher_profile.get("loc_inside_pct", np.nan)
+    o_pct = pitcher_profile.get("loc_outside_pct", np.nan)
+    # Identify pitcher's primary zone and cross with our zone performance
+    pitcher_zones = []
+    if not pd.isna(h_pct) and h_pct >= 28:
+        pitcher_zones.append(("up", h_pct))
+    if not pd.isna(l_pct) and l_pct >= 32:
+        pitcher_zones.append(("down", l_pct))
+    if not pd.isna(i_pct) and i_pct >= 28:
+        pitcher_zones.append(("in", i_pct))
+    if not pd.isna(o_pct) and o_pct >= 28:
+        pitcher_zones.append(("out", o_pct))
+    # Map to our zone quadrants and check performance
+    zone_cross_map = {
+        ("up", "in"): "up_in", ("up", "out"): "up_away",
+        ("down", "in"): "down_in", ("down", "out"): "down_away",
+    }
+    for pz_name, pz_pct in pitcher_zones:
+        for pz2_name, pz2_pct in pitcher_zones:
+            if pz_name == pz2_name:
+                continue
+            key = (pz_name, pz2_name)
+            quad = zone_cross_map.get(key)
+            if quad and quad in zones:
+                z = zones[quad]
+                z_ev = z.get("avg_ev", np.nan)
+                if z.get("n", 0) >= 5 and not pd.isna(z_ev) and z_ev > 88:
+                    fp_zone_note = f" — we mash {quad.replace('_','-')} ({z_ev:.0f} EV)"
+                    break
+        if fp_zone_note:
+            break
     # 1P plan logic
     if fp_pitch in _hard_set:
         if not pd.isna(early_ev) and early_ev > 88:
-            fp_plan = "SWING if middle-middle, take if edge"
+            fp_plan = f"SWING if middle-middle, take if edge{fp_zone_note}"
         elif not pd.isna(callstrk) and callstrk > 18:
-            fp_plan = "Be ready — high called-strike rate, swing if in zone"
+            fp_plan = f"Be ready — high called-strike rate, swing if in zone{fp_zone_note}"
         else:
             fp_plan = "Take and see it, swing only if perfect"
     else:
@@ -3970,11 +4063,19 @@ def _generate_at_bat_script(hitter_profile, pitcher_profile, matchup_result):
     our_cls_whiff = by_class.get(cls_key_2k, {}).get("whiff_pct", np.nan)
     our_cls_chase = by_class.get(cls_key_2k, {}).get("chase_pct", np.nan)
 
-    # 2-strike location
+    # 2-strike location — cross pitcher tendency with our zone data
     two_strike_loc = "Below zone" if not putaway_is_hard else "Up in zone"
     low_pct = pitcher_profile.get("loc_low_pct", np.nan)
     if not pd.isna(low_pct) and low_pct > 35:
         two_strike_loc = f"Low ({low_pct:.0f}%)"
+    # Check our chase zone performance to give specific advice
+    chase_zones = ["chase_down", "chase_low"]
+    for cz in chase_zones:
+        z = zones.get(cz, {})
+        cz_whiff = z.get("whiff_pct", np.nan)
+        if z.get("n", 0) >= 5 and not pd.isna(cz_whiff) and cz_whiff > 35:
+            two_strike_loc += f" — we whiff {cz_whiff:.0f}% chase-low"
+            break
 
     vuln_str = ""
     if not pd.isna(our_cls_whiff):
@@ -4244,23 +4345,33 @@ def _pitching_plan_content(tm, team, data, season_filter):
                         bz_whiff = best_z[1].get("whiff_pct", np.nan)
                         if not pd.isna(bz_whiff) and bz_whiff > 0:
                             best_zone_str = f"{best_z[0]} ({bz_whiff:.0f}%)"
-                # Best tunnel partner
+                # Best tunnel partner + count of good tunnel partners (C grade or better)
                 tun_info = "-"
+                tun_partner_count = 0
                 if isinstance(tunnels, pd.DataFrame) and not tunnels.empty:
                     t_m = tunnels[(tunnels["Pitch A"]==pt_name)|(tunnels["Pitch B"]==pt_name)]
                     if not t_m.empty:
                         bt = t_m.iloc[0]
                         partner = bt["Pitch B"] if bt["Pitch A"]==pt_name else bt["Pitch A"]
-                        tun_info = f"{bt['Grade']} w/{partner}"
+                        # Count partners with grade C or better (score >= 45)
+                        tun_partner_count = len(t_m[t_m["Tunnel Score"] >= 45])
+                        tun_info = f"{bt['Grade']} w/{partner} ({tun_partner_count})"
+                # Extension display
+                ext_val = ars_pt.get("extension", np.nan)
+                # Barrel% against
+                brl_ag_val = ars_pt.get("barrel_pct_against", np.nan)
                 pitch_rows.append({
                     "Pitch": pt_name,
                     "Comp": int(composites.get(pt_name, 50)),
                     "S+": _hfmt(pt_data.get("stuff_plus")),
+                    "Velo": _hfmt(ars_pt.get("avg_velo"), ".1f"),
                     "IVB": _hfmt(ivb_val),
                     "EffV": _hfmt(eff_velo_val),
+                    "Ext": _hfmt(ext_val, ".1f"),
                     "Whiff%": _hfmt(pt_data.get("our_whiff")),
                     "CSW%": _hfmt(pt_data.get("our_csw")),
                     "Chase%": _hfmt(pt_data.get("our_chase")),
+                    "Brl%Ag": _hfmt(brl_ag_val, ".1f"),
                     "Best Zone": best_zone_str,
                     "2K Whiff": _hfmt(their_2k),
                     "Sw%": _hfmt(their_sw),
@@ -4288,6 +4399,14 @@ def _pitching_plan_content(tm, team, data, season_filter):
                     fp_lines.append(f"Lead with **{lead_pitch[0]}** ({composites.get(lead_pitch[0], 0):.0f}) in zone")
             if not fp_lines and lead_pitch:
                 fp_lines.append(f"Lead with **{lead_pitch[0]}** ({composites.get(lead_pitch[0], 0):.0f}) in zone")
+            # Add tunnel partner recommendation to 1st pitch
+            if lead_pitch and isinstance(tunnels, pd.DataFrame) and not tunnels.empty:
+                lp_name = lead_pitch[0]
+                t_m = tunnels[(tunnels["Pitch A"]==lp_name)|(tunnels["Pitch B"]==lp_name)]
+                if not t_m.empty:
+                    best_t = t_m.iloc[0]
+                    partner = best_t["Pitch B"] if best_t["Pitch A"]==lp_name else best_t["Pitch A"]
+                    fp_lines.append(f"Follow with **{partner}** ({best_t['Grade']} tunnel)")
             st.markdown("**1st Pitch Plan**")
             for line in fp_lines:
                 st.markdown(f"- {line}")
@@ -4300,6 +4419,13 @@ def _pitching_plan_content(tm, team, data, season_filter):
             # Opposite: "in" = glove-side, "away" = arm-side
             same_side = (our_throws == "Right" and their_bats in ("R", "Right")) or \
                         (our_throws == "Left" and their_bats in ("L", "Left"))
+            # Hitter zone tendency boosts: if hitter sees lots of pitches in a zone,
+            # they may be vulnerable OR comfortable there. Cross with our effectiveness.
+            hitter_high = hd.get("high_pct", np.nan)
+            hitter_low = hd.get("low_pct", np.nan)
+            hitter_in = hd.get("inside_pct", np.nan)
+            hitter_out = hd.get("outside_pct", np.nan)
+            hitter_chase = hd.get("chase_pct", np.nan)
             for pt_name, pt_data in sorted_ps[:4]:  # top 4 pitches
                 is_hard = pt_name in _hard_pitches
                 ze = pt_data.get("zone_eff", {}) if isinstance(pt_data, dict) else {}
@@ -4308,12 +4434,25 @@ def _pitching_plan_content(tm, team, data, season_filter):
                     ars_pt = arsenal["pitches"].get(pt_name, {})
                     ze = ars_pt.get("zone_eff", {})
                 targets = []
-                # Find best zone by whiff% or CSW%
+                # Find best zone by whiff%/CSW%, boosted by hitter zone tendencies
                 best_zone, best_val = None, 0
                 for zn, zd in ze.items():
                     csw = zd.get("csw_pct", 0) or 0
                     wh = zd.get("whiff_pct", 0) or 0
                     combined = csw * 0.6 + wh * 0.4
+                    # Boost if hitter sees many pitches in this zone (exploitable tendency)
+                    h_boost = 1.0
+                    if zn == "up" and not pd.isna(hitter_high) and hitter_high > 30:
+                        h_boost = 1.25
+                    elif zn == "down" and not pd.isna(hitter_low) and hitter_low > 35:
+                        h_boost = 1.2
+                    elif zn == "arm" and not pd.isna(hitter_in) and hitter_in > 28:
+                        h_boost = 1.2
+                    elif zn == "glove" and not pd.isna(hitter_out) and hitter_out > 28:
+                        h_boost = 1.2
+                    elif zn == "chase_low" and not pd.isna(hitter_chase) and hitter_chase > 28:
+                        h_boost = 1.35
+                    combined *= h_boost
                     if combined > best_val and zd.get("n", 0) >= 8:
                         best_val = combined
                         best_zone = zn
@@ -4362,15 +4501,28 @@ def _pitching_plan_content(tm, team, data, season_filter):
             putaway = max(real_ps, key=lambda x: x[1].get("our_whiff", 0) or 0) if real_ps else None
             # Best secondary (different from primary)
             secondary = real_ps[1] if len(real_ps) >= 2 else None
+            # Helper: get best tunnel partner for a pitch
+            def _best_tunnel_partner(pitch_name):
+                if not isinstance(tunnels, pd.DataFrame) or tunnels.empty:
+                    return ""
+                t_m = tunnels[(tunnels["Pitch A"]==pitch_name)|(tunnels["Pitch B"]==pitch_name)]
+                if t_m.empty:
+                    return ""
+                bt = t_m.iloc[0]
+                partner = bt["Pitch B"] if bt["Pitch A"]==pitch_name else bt["Pitch A"]
+                return f" → {partner} ({bt['Grade']})"
             if primary:
-                count_plan_lines.append(f"**0-0 / 1-0**: {primary[0]} zone ({primary[1].get('our_csw', 0):.0f}% CSW)")
+                tun_pair = _best_tunnel_partner(primary[0])
+                count_plan_lines.append(f"**0-0 / 1-0**: {primary[0]} zone ({primary[1].get('our_csw', 0):.0f}% CSW){tun_pair}")
             if secondary:
-                count_plan_lines.append(f"**0-1 / 1-1**: {secondary[0]} expand")
+                tun_pair = _best_tunnel_partner(secondary[0])
+                count_plan_lines.append(f"**0-1 / 1-1**: {secondary[0]} expand{tun_pair}")
             if primary:
                 count_plan_lines.append(f"**2-0 / 3-2**: {primary[0]} compete")
             if putaway:
                 whiff_val = putaway[1].get("our_whiff", 0) or 0
-                count_plan_lines.append(f"**0-2 / 1-2**: {putaway[0]} bury ({whiff_val:.0f}% whiff)")
+                tun_pair = _best_tunnel_partner(putaway[0])
+                count_plan_lines.append(f"**0-2 / 1-2**: {putaway[0]} bury ({whiff_val:.0f}% whiff){tun_pair}")
             # Discipline adaptation
             their_chase = hd.get("chase_pct", np.nan)
             their_bb = hd.get("bb_pct", np.nan)
@@ -4390,10 +4542,12 @@ def _pitching_plan_content(tm, team, data, season_filter):
                 for s in top_seqs:
                     _, g12 = _lookup_tunnel(s["p1"], s["p2"], tunnels)
                     _, g23 = _lookup_tunnel(s["p2"], s["p3"], tunnels)
-                    # Compute EffVelo gap for the sequence
-                    p1_velo = arsenal["pitches"].get(s["p1"], {}).get("avg_velo", np.nan)
-                    p3_velo = arsenal["pitches"].get(s["p3"], {}).get("avg_velo", np.nan)
-                    velo_gap = abs(p1_velo - p3_velo) if not pd.isna(p1_velo) and not pd.isna(p3_velo) else np.nan
+                    # Use EffVelo gap from sequence builder if available, else compute
+                    effv_gap = s.get("effv_gap", np.nan)
+                    if pd.isna(effv_gap):
+                        p1_effv = arsenal["pitches"].get(s["p1"], {}).get("eff_velo", np.nan)
+                        p3_effv = arsenal["pitches"].get(s["p3"], {}).get("eff_velo", np.nan)
+                        effv_gap = abs(p1_effv - p3_effv) if not pd.isna(p1_effv) and not pd.isna(p3_effv) else np.nan
                     seq_rows.append({
                         "Sequence": s["seq"],
                         "Score": int(s["score"]),
@@ -4401,7 +4555,7 @@ def _pitching_plan_content(tm, team, data, season_filter):
                         "Tunnel 2→3": g23,
                         "Putaway Whiff": f"{s['sw23']:.0f}%" if not pd.isna(s.get("sw23")) else "-",
                         "Their 2K on P3": f"{s['their_2k']:.0f}%" if not pd.isna(s.get("their_2k")) else "-",
-                        "Velo Gap": f"{velo_gap:.1f}" if not pd.isna(velo_gap) else "-",
+                        "EffV Gap": f"{effv_gap:.1f}" if not pd.isna(effv_gap) else "-",
                     })
                 st.dataframe(pd.DataFrame(seq_rows), use_container_width=True, hide_index=True)
 
