@@ -4236,65 +4236,66 @@ def _scouting_pitcher_report(tm, team, trackman_data):
     # ══════════════════════════════════════════════════════════
     # SECTION 2: ARSENAL & STUFF (side by side)
     # ══════════════════════════════════════════════════════════
-    section_header("Arsenal & Stuff")
+    if not pt.empty or not mov.empty:
+        section_header("Arsenal & Stuff")
 
-    col_ars, col_stuff = st.columns([3, 2])
+        col_ars, col_stuff = st.columns([3, 2])
 
-    with col_ars:
-        if not pt.empty:
-            pitch_cols = ["4Seam%", "Sink2Seam%", "Cutter%", "Slider%", "Curve%", "Change%", "Split%", "Sweeper%"]
-            pitch_labels = ["4-Seam", "Sinker", "Cutter", "Slider", "Curve", "Change", "Splitter", "Sweeper"]
-            count_cols = ["4Seam#", "Sink2Seam#", "Cutter#", "Slider#", "Curve#", "Change#", "Split#", "Sweeper#"]
-            arsenal_rows = []
-            for pct_col, cnt_col, lbl in zip(pitch_cols, count_cols, pitch_labels):
-                pct_v = pt.iloc[0].get(pct_col) if not pt.empty else None
-                cnt_v = p_ptcounts.iloc[0].get(cnt_col) if not p_ptcounts.empty and cnt_col in p_ptcounts.columns else None
-                if pct_v is not None and not pd.isna(pct_v) and pct_v > 0:
-                    arsenal_rows.append({"Pitch": lbl, "Usage": pct_v,
-                                         "Count": int(cnt_v) if cnt_v is not None and not pd.isna(cnt_v) else None})
-            if arsenal_rows:
-                fig = go.Figure(go.Bar(
-                    x=[r["Pitch"] for r in arsenal_rows],
-                    y=[r["Usage"] for r in arsenal_rows],
-                    marker_color=[PITCH_COLORS.get(r["Pitch"].replace("-", ""), "#888") for r in arsenal_rows],
-                    text=[f"{r['Usage']:.1f}%" for r in arsenal_rows], textposition="outside",
-                    textfont=dict(size=11, color="#1a1a2e"),
-                ))
-                fig.update_layout(**CHART_LAYOUT, height=280, yaxis_title="Usage %", showlegend=False,
-                                  yaxis=dict(range=[0, max(r["Usage"] for r in arsenal_rows) * 1.3]))
-                st.plotly_chart(fig, use_container_width=True)
+        with col_ars:
+            if not pt.empty:
+                pitch_cols = ["4Seam%", "Sink2Seam%", "Cutter%", "Slider%", "Curve%", "Change%", "Split%", "Sweeper%"]
+                pitch_labels = ["4-Seam", "Sinker", "Cutter", "Slider", "Curve", "Change", "Splitter", "Sweeper"]
+                count_cols = ["4Seam#", "Sink2Seam#", "Cutter#", "Slider#", "Curve#", "Change#", "Split#", "Sweeper#"]
+                arsenal_rows = []
+                for pct_col, cnt_col, lbl in zip(pitch_cols, count_cols, pitch_labels):
+                    pct_v = pt.iloc[0].get(pct_col) if not pt.empty else None
+                    cnt_v = p_ptcounts.iloc[0].get(cnt_col) if not p_ptcounts.empty and cnt_col in p_ptcounts.columns else None
+                    if pct_v is not None and not pd.isna(pct_v) and pct_v > 0:
+                        arsenal_rows.append({"Pitch": lbl, "Usage": pct_v,
+                                             "Count": int(cnt_v) if cnt_v is not None and not pd.isna(cnt_v) else None})
+                if arsenal_rows:
+                    fig = go.Figure(go.Bar(
+                        x=[r["Pitch"] for r in arsenal_rows],
+                        y=[r["Usage"] for r in arsenal_rows],
+                        marker_color=[PITCH_COLORS.get(r["Pitch"].replace("-", ""), "#888") for r in arsenal_rows],
+                        text=[f"{r['Usage']:.1f}%" for r in arsenal_rows], textposition="outside",
+                        textfont=dict(size=11, color="#1a1a2e"),
+                    ))
+                    fig.update_layout(**CHART_LAYOUT, height=280, yaxis_title="Usage %", showlegend=False,
+                                      yaxis=dict(range=[0, max(r["Usage"] for r in arsenal_rows) * 1.3]))
+                    st.plotly_chart(fig, use_container_width=True)
 
-                # Arsenal narrative
-                primary = arsenal_rows[0] if arsenal_rows else None
-                secondary = arsenal_rows[1] if len(arsenal_rows) > 1 else None
-                if primary and secondary:
-                    st.caption(
-                        f"Primary: **{primary['Pitch']}** ({primary['Usage']:.1f}%) | "
-                        f"Secondary: **{secondary['Pitch']}** ({secondary['Usage']:.1f}%) | "
-                        f"Arsenal: **{len(arsenal_rows)} pitches**"
-                    )
+                    # Arsenal narrative
+                    primary = arsenal_rows[0] if arsenal_rows else None
+                    secondary = arsenal_rows[1] if len(arsenal_rows) > 1 else None
+                    if primary and secondary:
+                        st.caption(
+                            f"Primary: **{primary['Pitch']}** ({primary['Usage']:.1f}%) | "
+                            f"Secondary: **{secondary['Pitch']}** ({secondary['Usage']:.1f}%) | "
+                            f"Arsenal: **{len(arsenal_rows)} pitches**"
+                        )
 
-    with col_stuff:
-        if not mov.empty:
-            st.markdown("**Stuff Profile**")
-            stuff_data = []
-            for lbl, col, fmt in [
-                ("Avg Velo", "Vel", ".1f"), ("Max Velo", "MxVel", ".1f"),
-                ("Velo Range", "VelRange", ".1f"),
-                ("Spin (rpm)", "Spin", ".0f"),
-                ("Extension", "Extension", ".1f"),
-                ("Eff. Velo", "EffectVel", ".1f"),
-                ("IVB", "IndVertBrk", ".1f"),
-                ("Horz Break", "HorzBrk", ".1f"),
-                ("VAA", "VertApprAngle", ".2f"),
-            ]:
-                v = _safe_num(mov, col)
-                if not pd.isna(v):
-                    pct = _tm_pctile(mov, col, all_p_mov)
-                    pct_str = f"{int(pct)}" if not pd.isna(pct) else "-"
-                    stuff_data.append({"Metric": lbl, "Value": f"{v:{fmt}}", "%ile": pct_str})
-            if stuff_data:
-                st.dataframe(pd.DataFrame(stuff_data), use_container_width=True, hide_index=True)
+        with col_stuff:
+            if not mov.empty:
+                st.markdown("**Stuff Profile**")
+                stuff_data = []
+                for lbl, col, fmt in [
+                    ("Avg Velo", "Vel", ".1f"), ("Max Velo", "MxVel", ".1f"),
+                    ("Velo Range", "VelRange", ".1f"),
+                    ("Spin (rpm)", "Spin", ".0f"),
+                    ("Extension", "Extension", ".1f"),
+                    ("Eff. Velo", "EffectVel", ".1f"),
+                    ("IVB", "IndVertBrk", ".1f"),
+                    ("Horz Break", "HorzBrk", ".1f"),
+                    ("VAA", "VertApprAngle", ".2f"),
+                ]:
+                    v = _safe_num(mov, col)
+                    if not pd.isna(v):
+                        pct = _tm_pctile(mov, col, all_p_mov)
+                        pct_str = f"{int(pct)}" if not pd.isna(pct) else "-"
+                        stuff_data.append({"Metric": lbl, "Value": f"{v:{fmt}}", "%ile": pct_str})
+                if stuff_data:
+                    st.dataframe(pd.DataFrame(stuff_data), use_container_width=True, hide_index=True)
 
     # ══════════════════════════════════════════════════════════
     # SECTION 3: COMMAND PROFILE
