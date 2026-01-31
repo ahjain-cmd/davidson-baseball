@@ -3246,6 +3246,163 @@ def _get_our_hitter_profile(data, batter_name, season_filter=None):
             "chase_pct": len(cls_oz_sw) / max(len(cls_oz), 1) * 100 if len(cls_oz) > 0 else np.nan,
         }
 
+    # ── Swing Path Metrics (from hit lab) ──
+    inplay_full = bdf[bdf["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
+    inplay_la = inplay_full.dropna(subset=["Angle"])
+    sp = {}
+    if len(inplay_la) >= 10:
+        ev_75 = inplay_full["ExitSpeed"].quantile(0.75)
+        hard_hit = inplay_la[inplay_la["ExitSpeed"] >= ev_75]
+        if len(hard_hit) >= 5:
+            sp["attack_angle"] = hard_hit["Angle"].median()
+            sp["avg_la_all"] = inplay_la["Angle"].median()
+            # Swing type classification
+            aa = sp["attack_angle"]
+            if aa > 20:
+                sp["swing_type"] = "Steep Uppercut"
+            elif aa > 14:
+                sp["swing_type"] = "Lift-Oriented"
+            elif aa > 8:
+                sp["swing_type"] = "Slight Uppercut"
+            elif aa > 2:
+                sp["swing_type"] = "Level"
+            else:
+                sp["swing_type"] = "Downward/Chopper"
+            # Bat speed proxy: (EV - COR × PitchSpeed) / (1 + COR)
+            COR = 0.45
+            if "RelSpeed" in hard_hit.columns:
+                hh_sp = hard_hit.dropna(subset=["RelSpeed"])
+                if len(hh_sp) > 0:
+                    bs = (hh_sp["ExitSpeed"] - COR * hh_sp["RelSpeed"]) / (1 + COR)
+                    sp["bat_speed_avg"] = bs.mean()
+                    sp["bat_speed_max"] = bs.max()
+            # Contact depth
+            if "EffectiveVelo" in hard_hit.columns and "RelSpeed" in hard_hit.columns:
+                cd_df = hard_hit.dropna(subset=["EffectiveVelo", "RelSpeed"])
+                if len(cd_df) > 0:
+                    depth_val = (cd_df["EffectiveVelo"] - cd_df["RelSpeed"]).mean()
+                    sp["contact_depth"] = depth_val
+                    sp["depth_label"] = "Out Front" if depth_val > 1.5 else ("Deep Contact" if depth_val < -1.5 else "Neutral")
+            # Path adjust: how LA changes with pitch height
+            hh_loc = hard_hit.dropna(subset=["PlateLocHeight"])
+            if len(hh_loc) >= 8:
+                from scipy import stats as sp_stats
+                slope, _, _, _, _ = sp_stats.linregress(hh_loc["PlateLocHeight"], hh_loc["Angle"])
+                sp["path_adjust"] = slope  # degrees per foot
+            # Per-pitch-type swing path
+            sp_by_pt = {}
+            for pt_name2, ptg in hard_hit.groupby("TaggedPitchType"):
+                if len(ptg) < 3:
+                    continue
+                pt_ip = ptg.dropna(subset=["ExitSpeed"])
+                sp_by_pt[pt_name2] = {
+                    "hard_hit_la": ptg["Angle"].median(),
+                    "hard_hit_ev": pt_ip["ExitSpeed"].mean() if len(pt_ip) > 0 else np.nan,
+                }
+                if "RelSpeed" in ptg.columns:
+                    ptg_sp = ptg.dropna(subset=["RelSpeed"])
+                    if len(ptg_sp) > 0:
+                        sp_by_pt[pt_name2]["bat_speed"] = ((ptg_sp["ExitSpeed"] - COR * ptg_sp["RelSpeed"]) / (1 + COR)).mean()
+            sp["by_pitch_type"] = sp_by_pt
+    profile["swing_path"] = sp if sp else None
+
+    # ── Discipline Metrics ──
+    iz_mask = _iz.reindex(bdf.index, fill_value=False)
+    oz_mask = _oz.reindex(bdf.index, fill_value=False)
+    all_swings = bdf[bdf["PitchCall"].isin(SWING_CALLS)]
+    all_whiffs = bdf[bdf["PitchCall"] == "StrikeSwinging"]
+    iz_pitches = bdf[iz_mask]
+    iz_swings = iz_pitches[iz_pitches["PitchCall"].isin(SWING_CALLS)]
+    iz_contacts = iz_pitches[iz_pitches["PitchCall"].isin(CONTACT_CALLS)]
+    oz_pitches_d = bdf[oz_mask]
+    oz_swings_d = oz_pitches_d[oz_pitches_d["PitchCall"].isin(SWING_CALLS)]
+    # PA-based stats
+    pa_count = bdf["PitchofPA"].eq(1).sum() if "PitchofPA" in bdf.columns else np.nan
+    ks = len(bdf[bdf["KorBB"] == "Strikeout"]) if "KorBB" in bdf.columns else 0
+    bbs = len(bdf[bdf["KorBB"] == "Walk"]) if "KorBB" in bdf.columns else 0
+    profile["discipline"] = {
+        "chase_pct": len(oz_swings_d) / max(len(oz_pitches_d), 1) * 100 if len(oz_pitches_d) > 0 else np.nan,
+        "whiff_pct": len(all_whiffs) / max(len(all_swings), 1) * 100 if len(all_swings) > 0 else np.nan,
+        "swing_pct": len(all_swings) / max(len(bdf), 1) * 100,
+        "z_swing_pct": len(iz_swings) / max(len(iz_pitches), 1) * 100 if len(iz_pitches) > 0 else np.nan,
+        "z_contact_pct": len(iz_contacts) / max(len(iz_swings), 1) * 100 if len(iz_swings) > 0 else np.nan,
+        "k_pct": ks / max(pa_count, 1) * 100 if not pd.isna(pa_count) and pa_count > 0 else np.nan,
+        "bb_pct": bbs / max(pa_count, 1) * 100 if not pd.isna(pa_count) and pa_count > 0 else np.nan,
+    }
+
+    # ── First-Pitch Approach ──
+    if "PitchofPA" in bdf.columns:
+        fp = bdf[bdf["PitchofPA"] == 1]
+        if len(fp) >= 5:
+            fp_sw = fp[fp["PitchCall"].isin(SWING_CALLS)]
+            fp_wh = fp[fp["PitchCall"] == "StrikeSwinging"]
+            fp_ip = fp[fp["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
+            profile["first_pitch"] = {
+                "n": len(fp),
+                "swing_pct": len(fp_sw) / len(fp) * 100,
+                "whiff_pct": len(fp_wh) / max(len(fp_sw), 1) * 100 if len(fp_sw) > 0 else np.nan,
+                "avg_ev": fp_ip["ExitSpeed"].mean() if len(fp_ip) > 0 else np.nan,
+            }
+        else:
+            profile["first_pitch"] = None
+    else:
+        profile["first_pitch"] = None
+
+    # ── 2-Strike Adjustments ──
+    if "Strikes" in bdf.columns:
+        two_k = bdf[bdf["Strikes"].astype(float) >= 2]
+        pre_2k = bdf[bdf["Strikes"].astype(float) < 2]
+        if len(two_k) >= 10:
+            tk_sw = two_k[two_k["PitchCall"].isin(SWING_CALLS)]
+            tk_wh = two_k[two_k["PitchCall"] == "StrikeSwinging"]
+            tk_ip = two_k[two_k["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
+            pre_sw = pre_2k[pre_2k["PitchCall"].isin(SWING_CALLS)]
+            pre_wh = pre_2k[pre_2k["PitchCall"] == "StrikeSwinging"]
+            profile["two_strike"] = {
+                "n": len(two_k),
+                "swing_pct": len(tk_sw) / max(len(two_k), 1) * 100,
+                "whiff_pct": len(tk_wh) / max(len(tk_sw), 1) * 100 if len(tk_sw) > 0 else np.nan,
+                "avg_ev": tk_ip["ExitSpeed"].mean() if len(tk_ip) > 0 else np.nan,
+                "pre_2k_whiff": len(pre_wh) / max(len(pre_sw), 1) * 100 if len(pre_sw) > 0 else np.nan,
+            }
+        else:
+            profile["two_strike"] = None
+    else:
+        profile["two_strike"] = None
+
+    # ── Zone Coverage Grid (5x5) ──
+    zone_grid = {}
+    if len(loc_df) >= 20:
+        bside = {"Right": "Right", "Left": "Left"}.get(bats, "Right")
+        h_edges = [-2, -0.83, -0.28, 0.28, 0.83, 2]
+        v_edges = [0.5, 1.5, 2.17, 2.83, 3.5, 4.5]
+        col_labels = ["Far In", "Inside", "Middle", "Outside", "Far Out"]
+        row_labels = ["Low+", "Low", "Mid", "High", "High+"]
+        if bside == "Left":
+            col_labels = col_labels[::-1]
+        for ri in range(5):
+            for ci in range(5):
+                cell_mask = (
+                    (loc_df["PlateLocSide"] >= h_edges[ci]) &
+                    (loc_df["PlateLocSide"] < h_edges[ci + 1]) &
+                    (loc_df["PlateLocHeight"] >= v_edges[ri]) &
+                    (loc_df["PlateLocHeight"] < v_edges[ri + 1])
+                )
+                cell = loc_df[cell_mask]
+                if len(cell) < 3:
+                    continue
+                cell_sw = cell[cell["PitchCall"].isin(SWING_CALLS)]
+                cell_wh = cell[cell["PitchCall"] == "StrikeSwinging"]
+                cell_ip = cell[cell["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
+                key = f"{row_labels[ri]}_{col_labels[ci]}"
+                zone_grid[key] = {
+                    "n": len(cell),
+                    "swing_pct": len(cell_sw) / len(cell) * 100,
+                    "whiff_pct": len(cell_wh) / max(len(cell_sw), 1) * 100 if len(cell_sw) > 0 else np.nan,
+                    "avg_ev": cell_ip["ExitSpeed"].mean() if len(cell_ip) > 0 else np.nan,
+                }
+    profile["zone_grid"] = zone_grid
+
     return profile
 
 
@@ -4037,28 +4194,112 @@ def _score_hitter_vs_pitcher(hitter_tm, pitcher_profile):
 
 
 def _generate_at_bat_script(hitter_profile, pitcher_profile, matchup_result):
-    """Generate a structured at-bat script: 1st pitch, when ahead, 2-strike, damage zone."""
+    """Generate an enriched at-bat script using swing path, zone coverage, discipline, and approach data."""
     if not matchup_result or not pitcher_profile.get("pitch_mix"):
         return None
     _hard_set = {"Fastball", "Sinker", "Cutter"}
     mix = pitcher_profile["pitch_mix"]
     throws = pitcher_profile.get("throws", "?")
-    hand_label = "RHP" if throws in ("R", "Right") else "LHP"
     zones = hitter_profile.get("zones", {})
     by_count = hitter_profile.get("by_count", {})
     by_class = hitter_profile.get("by_pitch_class", {})
     pitch_details = matchup_result.get("pitch_details", {})
+    sp = hitter_profile.get("swing_path") or {}
+    disc = hitter_profile.get("discipline") or {}
+    fp_data = hitter_profile.get("first_pitch") or {}
+    two_k_data = hitter_profile.get("two_strike") or {}
+    zone_grid = hitter_profile.get("zone_grid") or {}
 
-    # Sort pitches by usage
     sorted_mix = sorted(mix.items(), key=lambda x: x[1], reverse=True)
     primary = sorted_mix[0] if sorted_mix else (None, 0)
     secondaries = [p for p in sorted_mix[1:] if p[1] >= 8]
-
-    # Identify pitch classes
     hard_pitches = [(p, u) for p, u in sorted_mix if p in _hard_set]
     os_pitches = [(p, u) for p, u in sorted_mix if p not in _hard_set and u >= 5]
 
-    # Location tendency strings
+    # ── HITTER SNAPSHOT ──
+    snapshot = {}
+    swing_type = sp.get("swing_type", "Unknown")
+    snapshot["swing_type"] = swing_type
+    aa = sp.get("attack_angle")
+    snapshot["attack_angle"] = f"{aa:.0f}°" if aa is not None else "-"
+    bs = sp.get("bat_speed_avg")
+    snapshot["bat_speed"] = f"{bs:.0f} mph" if bs is not None else "-"
+    depth_lbl = sp.get("depth_label", "-")
+    snapshot["contact_depth"] = depth_lbl
+    # Discipline grade
+    chase = disc.get("chase_pct", np.nan)
+    z_contact = disc.get("z_contact_pct", np.nan)
+    if not pd.isna(chase) and not pd.isna(z_contact):
+        disc_score = (100 - chase) * 0.5 + z_contact * 0.5
+        if disc_score >= 80:
+            snapshot["discipline_grade"] = "A"
+        elif disc_score >= 65:
+            snapshot["discipline_grade"] = "B"
+        elif disc_score >= 50:
+            snapshot["discipline_grade"] = "C"
+        else:
+            snapshot["discipline_grade"] = "D"
+    else:
+        snapshot["discipline_grade"] = "-"
+    snapshot["chase_pct"] = f"{chase:.0f}%" if not pd.isna(chase) else "-"
+    snapshot["whiff_pct"] = f"{disc.get('whiff_pct', np.nan):.0f}%" if not pd.isna(disc.get("whiff_pct", np.nan)) else "-"
+    snapshot["z_contact_pct"] = f"{z_contact:.0f}%" if not pd.isna(z_contact) else "-"
+    k_pct = disc.get("k_pct", np.nan)
+    bb_pct = disc.get("bb_pct", np.nan)
+    snapshot["k_pct"] = f"{k_pct:.0f}%" if not pd.isna(k_pct) else "-"
+    snapshot["bb_pct"] = f"{bb_pct:.0f}%" if not pd.isna(bb_pct) else "-"
+
+    # ── SWING PATH ANALYSIS vs PITCHER ──
+    path_notes = []
+    if swing_type in ("Steep Uppercut", "Lift-Oriented"):
+        if any(p in mix for p in ["Fastball", "Sinker"]):
+            velo = pitcher_profile.get("velo", np.nan)
+            loc_high = pitcher_profile.get("loc_high_pct", np.nan)
+            if not pd.isna(loc_high) and loc_high >= 25:
+                path_notes.append(f"Lift swing + pitcher lives up ({loc_high:.0f}%) — look to elevate FB")
+            else:
+                path_notes.append("Lift swing — look to drive middle-up fastball")
+        for osp, osu in os_pitches:
+            sp_pt = sp.get("by_pitch_type", {}).get(osp, {})
+            pt_la = sp_pt.get("hard_hit_la")
+            if pt_la is not None and pt_la < 5:
+                path_notes.append(f"Steep path struggles on {osp} (LA {pt_la:.0f}°) — don't get under it")
+                break
+    elif swing_type in ("Level", "Downward/Chopper"):
+        path_notes.append("Level/flat bat — line drives and hard grounders, focus on barreling low pitches")
+        loc_low = pitcher_profile.get("loc_low_pct", np.nan)
+        if not pd.isna(loc_low) and loc_low >= 30:
+            path_notes.append(f"Pitcher works low ({loc_low:.0f}%) — matches swing plane, attack low zone")
+    # Contact depth vs pitcher velo
+    depth_val = sp.get("contact_depth")
+    if depth_val is not None:
+        if depth_val > 1.5:
+            path_notes.append("Out-front contact — sits on FB, vulnerable to off-speed late")
+            if os_pitches:
+                path_notes.append(f"Watch for {os_pitches[0][0]} — stay back")
+        elif depth_val < -1.5:
+            path_notes.append("Deep contact — good for breaking ball, may be late on high velo")
+            velo = pitcher_profile.get("velo", np.nan)
+            if not pd.isna(velo) and velo > 92:
+                path_notes.append(f"Pitcher throws {velo:.0f} mph — get ready early")
+
+    # ── ZONE COVERAGE CROSS-REFERENCE ──
+    # Find best and worst zones that overlap with pitcher tendencies
+    damage_zones = []
+    whiff_zones = []
+    for zkey, zdata in zone_grid.items():
+        if zdata.get("n", 0) < 5:
+            continue
+        ev = zdata.get("avg_ev", np.nan)
+        wh = zdata.get("whiff_pct", np.nan)
+        if not pd.isna(ev) and ev >= 88:
+            damage_zones.append((zkey, ev, zdata.get("n", 0)))
+        if not pd.isna(wh) and wh >= 35:
+            whiff_zones.append((zkey, wh, zdata.get("n", 0)))
+    damage_zones.sort(key=lambda x: x[1], reverse=True)
+    whiff_zones.sort(key=lambda x: x[1], reverse=True)
+
+    # Also use quadrant zones for simpler analysis
     def _loc_str():
         parts = []
         h = pitcher_profile.get("loc_high_pct", np.nan)
@@ -4082,73 +4323,31 @@ def _generate_at_bat_script(hitter_profile, pitcher_profile, matchup_result):
     fp_pitch = primary[0]
     fp_usage = primary[1]
     fp_loc = _loc_str()
-    # Determine plan based on early count performance
+    callstrk = pitcher_profile.get("callstrk_pct", np.nan)
+    our_fp_swing = fp_data.get("swing_pct", np.nan) if fp_data else np.nan
+    our_fp_ev = fp_data.get("avg_ev", np.nan) if fp_data else np.nan
     early = by_count.get("early", {})
     early_ev = early.get("avg_ev", np.nan)
-    early_whiff = early.get("whiff_pct", np.nan)
-    callstrk = pitcher_profile.get("callstrk_pct", np.nan)
-    # Cross pitcher location with our hitter zones for 1st pitch
+    # Cross pitcher location with our zone for 1P
     fp_zone_note = ""
-    h_pct = pitcher_profile.get("loc_high_pct", np.nan)
-    l_pct = pitcher_profile.get("loc_low_pct", np.nan)
-    i_pct = pitcher_profile.get("loc_inside_pct", np.nan)
-    o_pct = pitcher_profile.get("loc_outside_pct", np.nan)
-    # Identify pitcher's primary zone and cross with our zone performance
-    pitcher_zones = []
-    if not pd.isna(h_pct) and h_pct >= 28:
-        pitcher_zones.append(("up", h_pct))
-    if not pd.isna(l_pct) and l_pct >= 32:
-        pitcher_zones.append(("down", l_pct))
-    if not pd.isna(i_pct) and i_pct >= 28:
-        pitcher_zones.append(("in", i_pct))
-    if not pd.isna(o_pct) and o_pct >= 28:
-        pitcher_zones.append(("out", o_pct))
-    # Map to our zone quadrants and check performance
-    zone_cross_map = {
-        ("up", "in"): "up_in", ("up", "out"): "up_away",
-        ("down", "in"): "down_in", ("down", "out"): "down_away",
-    }
-    # First try two-axis matches (e.g., pitcher lives up-and-in)
-    for pz_name, pz_pct in pitcher_zones:
-        for pz2_name, pz2_pct in pitcher_zones:
-            if pz_name == pz2_name:
-                continue
-            key = (pz_name, pz2_name)
-            quad = zone_cross_map.get(key)
-            if quad and quad in zones:
-                z = zones[quad]
-                z_ev = z.get("avg_ev", np.nan)
-                if z.get("n", 0) >= 5 and not pd.isna(z_ev) and z_ev > 88:
-                    fp_zone_note = f" — we mash {quad.replace('_','-')} ({z_ev:.0f} EV)"
-                    break
-        if fp_zone_note:
+    for quad_name in ["up_in", "up_away", "down_in", "down_away", "heart"]:
+        z = zones.get(quad_name, {})
+        z_ev = z.get("avg_ev", np.nan)
+        if z.get("n", 0) >= 5 and not pd.isna(z_ev) and z_ev > 88:
+            fp_zone_note = f" — we mash {quad_name.replace('_','-')} ({z_ev:.0f} EV)"
             break
-    # Fallback: single-axis check (pitcher lives "up" without strong in/out tendency)
-    if not fp_zone_note:
-        single_axis_map = {
-            "up": ["up_in", "up_away"],
-            "down": ["down_in", "down_away"],
-            "in": ["up_in", "down_in"],
-            "out": ["up_away", "down_away"],
-        }
-        for pz_name, pz_pct in pitcher_zones:
-            candidates = single_axis_map.get(pz_name, [])
-            for quad in candidates:
-                z = zones.get(quad, {})
-                z_ev = z.get("avg_ev", np.nan)
-                if z.get("n", 0) >= 5 and not pd.isna(z_ev) and z_ev > 88:
-                    fp_zone_note = f" — we mash {quad.replace('_','-')} ({z_ev:.0f} EV)"
-                    break
-            if fp_zone_note:
-                break
-    # 1P plan logic
+    # 1P plan with swing path context
     if fp_pitch in _hard_set:
-        if not pd.isna(early_ev) and early_ev > 88:
+        if not pd.isna(our_fp_swing) and our_fp_swing >= 35 and not pd.isna(our_fp_ev) and our_fp_ev > 87:
+            fp_plan = f"Aggressive 1P hitter ({our_fp_swing:.0f}% swing, {our_fp_ev:.0f} EV) — GREEN LIGHT on FB in zone{fp_zone_note}"
+        elif not pd.isna(early_ev) and early_ev > 88:
             fp_plan = f"SWING if middle-middle, take if edge{fp_zone_note}"
         elif not pd.isna(callstrk) and callstrk > 18:
-            fp_plan = f"Be ready — high called-strike rate, swing if in zone{fp_zone_note}"
+            fp_plan = f"Be ready — high called-strike rate ({callstrk:.0f}%), swing if in zone{fp_zone_note}"
+        elif not pd.isna(our_fp_swing) and our_fp_swing < 20:
+            fp_plan = f"Passive 1P hitter ({our_fp_swing:.0f}% swing) — take and get ahead"
         else:
-            fp_plan = "Take and see it, swing only if perfect"
+            fp_plan = f"Take and see it, swing only if perfect{fp_zone_note}"
     else:
         fp_plan = "Unlikely — take and get ahead"
 
@@ -4156,53 +4355,40 @@ def _generate_at_bat_script(hitter_profile, pitcher_profile, matchup_result):
         "expect": f"{fp_pitch} ({fp_usage:.0f}% usage)",
         "location": fp_loc,
         "plan": fp_plan,
+        "our_swing_pct": f"{our_fp_swing:.0f}%" if not pd.isna(our_fp_swing) else "-",
+        "our_ev": f"{our_fp_ev:.0f}" if not pd.isna(our_fp_ev) else "-",
     }
 
     # ── WHEN AHEAD ──
     ahead_data = by_count.get("ahead", {})
     ahead_ev = ahead_data.get("avg_ev", np.nan)
-    # When hitter is ahead, what secondary does pitcher go to?
     if secondaries:
-        sec = secondaries[0]
-        sec_pitch, sec_usage = sec
+        sec_pitch, sec_usage = secondaries[0]
         sec_is_hard = sec_pitch in _hard_set
-        # Location for secondary pitch
-        sec_loc_parts = []
-        if not sec_is_hard:
-            l = pitcher_profile.get("loc_low_pct", np.nan)
-            o = pitcher_profile.get("loc_outside_pct", np.nan)
-            if not pd.isna(l) and l >= 28:
-                sec_loc_parts.append(f"Low {l:.0f}%")
-            if not pd.isna(o) and o >= 25:
-                sec_loc_parts.append(f"Away {o:.0f}%")
-        else:
-            h = pitcher_profile.get("loc_high_pct", np.nan)
-            if not pd.isna(h) and h >= 25:
-                sec_loc_parts.append(f"High {h:.0f}%")
-        sec_loc = ", ".join(sec_loc_parts) if sec_loc_parts else "varies"
-        # Plan when ahead
         cls_key = "offspeed" if not sec_is_hard else "hard"
         cls_whiff = by_class.get(cls_key, {}).get("whiff_pct", np.nan)
-        if not pd.isna(cls_whiff) and cls_whiff < 20:
-            ahead_plan = f"Sit {sec_pitch}, don't chase — we handle {cls_key}"
+        # Use swing path context
+        sp_pt = sp.get("by_pitch_type", {}).get(sec_pitch, {})
+        sp_ev = sp_pt.get("hard_hit_ev")
+        if sp_ev and not pd.isna(sp_ev) and sp_ev > 90:
+            ahead_plan = f"We crush {sec_pitch} ({sp_ev:.0f} EV on hard hit) — sit on it in zone"
+        elif not pd.isna(cls_whiff) and cls_whiff < 20:
+            ahead_plan = f"Sit {sec_pitch}, don't chase — we handle {cls_key} ({cls_whiff:.0f}% whiff)"
         elif not pd.isna(cls_whiff) and cls_whiff > 35:
             ahead_plan = f"Shorten up vs {sec_pitch} — {cls_whiff:.0f}% whiff vs {cls_key}"
         else:
             ahead_plan = f"Look for {sec_pitch} in zone, lay off out of zone"
     else:
-        sec_pitch, sec_usage, sec_loc = primary[0], primary[1], fp_loc
+        sec_pitch, sec_usage = primary
         ahead_plan = "Sit fastball, same approach"
 
     when_ahead = {
-        "expect": f"{sec_pitch} ({sec_usage:.0f}% secondary)" if secondaries else f"{primary[0]} ({primary[1]:.0f}%)",
-        "location": sec_loc,
+        "expect": f"{sec_pitch} ({sec_usage:.0f}%)" if secondaries else f"{primary[0]} ({primary[1]:.0f}%)",
+        "location": _loc_str(),
         "plan": ahead_plan,
     }
 
     # ── TWO STRIKE ──
-    # Find highest-whiff pitch (putaway candidate)
-    opp_swstrk = pitcher_profile.get("swstrk_pct", np.nan)
-    # Use putaway candidates from pitcher profile
     putaway_cands = pitcher_profile.get("putaway_candidates", {})
     if putaway_cands:
         putaway_pitch = max(putaway_cands, key=putaway_cands.get)
@@ -4213,69 +4399,81 @@ def _generate_at_bat_script(hitter_profile, pitcher_profile, matchup_result):
         putaway_pitch, putaway_usage = sorted_mix[-1] if len(sorted_mix) > 1 else sorted_mix[0]
     else:
         putaway_pitch, putaway_usage = "?", 0
-
     putaway_is_hard = putaway_pitch in _hard_set
-    # Our 2K vulnerability
-    behind_data = by_count.get("behind", {})
-    behind_whiff = behind_data.get("whiff_pct", np.nan)
     cls_key_2k = "offspeed" if not putaway_is_hard else "hard"
     our_cls_whiff = by_class.get(cls_key_2k, {}).get("whiff_pct", np.nan)
     our_cls_chase = by_class.get(cls_key_2k, {}).get("chase_pct", np.nan)
-
-    # 2-strike location — cross pitcher tendency with our zone data
+    # 2K approach with swing path and discipline data
+    two_k_whiff = two_k_data.get("whiff_pct", np.nan) if two_k_data else np.nan
+    two_k_pre = two_k_data.get("pre_2k_whiff", np.nan) if two_k_data else np.nan
     two_strike_loc = "Below zone" if not putaway_is_hard else "Up in zone"
     low_pct = pitcher_profile.get("loc_low_pct", np.nan)
     if not pd.isna(low_pct) and low_pct > 35:
         two_strike_loc = f"Low ({low_pct:.0f}%)"
-    # Check our chase zone performance to give specific advice
-    chase_zones = ["chase_down", "chase_low"]
-    for cz in chase_zones:
-        z = zones.get(cz, {})
-        cz_whiff = z.get("whiff_pct", np.nan)
-        if z.get("n", 0) >= 5 and not pd.isna(cz_whiff) and cz_whiff > 35:
-            two_strike_loc += f" — we whiff {cz_whiff:.0f}% chase-low"
-            break
-
-    vuln_str = ""
-    if not pd.isna(our_cls_whiff):
-        vuln_str = f"{our_cls_whiff:.0f}% whiff vs {cls_key_2k}"
-    if not pd.isna(behind_whiff):
-        vuln_str += f", {behind_whiff:.0f}% whiff when behind" if vuln_str else f"{behind_whiff:.0f}% whiff when behind"
-
-    if not pd.isna(our_cls_whiff) and our_cls_whiff > 30:
-        two_strike_plan = f"Vulnerable — shorten up, protect vs {putaway_pitch}"
+    # Check swing-miss zones from our coverage
+    whiff_zone_note = ""
+    if whiff_zones:
+        top_wz = whiff_zones[0]
+        whiff_zone_note = f" — we whiff {top_wz[1]:.0f}% at {top_wz[0].replace('_',' ')}"
+    # Vulnerability string with 2K adjustment
+    vuln_parts = []
+    if not pd.isna(two_k_whiff):
+        vuln_parts.append(f"{two_k_whiff:.0f}% whiff with 2K")
+        if not pd.isna(two_k_pre):
+            delta = two_k_whiff - two_k_pre
+            if abs(delta) > 5:
+                vuln_parts.append(f"{'+'if delta>0 else ''}{delta:.0f}% vs pre-2K")
+    if not pd.isna(our_cls_chase) and our_cls_chase > 25:
+        vuln_parts.append(f"{our_cls_chase:.0f}% chase on {cls_key_2k}")
+    vuln_str = ", ".join(vuln_parts) if vuln_parts else "N/A"
+    # Plan based on discipline + swing path
+    if not pd.isna(chase) and chase < 22 and not pd.isna(z_contact) and z_contact > 80:
+        two_strike_plan = f"Disciplined — don't expand zone, battle with {putaway_pitch} in zone only"
+    elif not pd.isna(our_cls_whiff) and our_cls_whiff > 30:
+        two_strike_plan = f"Vulnerable to {cls_key_2k} — shorten up, protect vs {putaway_pitch}{whiff_zone_note}"
     elif not pd.isna(our_cls_chase) and our_cls_chase > 30:
-        two_strike_plan = f"Don't chase {putaway_pitch} — {our_cls_chase:.0f}% chase rate on {cls_key_2k}"
+        two_strike_plan = f"Don't chase {putaway_pitch} — {our_cls_chase:.0f}% chase rate{whiff_zone_note}"
     else:
-        two_strike_plan = f"Fight off {putaway_pitch}, don't chase below zone"
+        two_strike_plan = f"Fight off {putaway_pitch}, don't chase below zone{whiff_zone_note}"
 
     two_strike = {
-        "putaway_pitch": f"{putaway_pitch} ({putaway_usage:.0f}% usage)",
+        "putaway_pitch": f"{putaway_pitch} ({putaway_usage:.0f}%)",
         "putaway_location": two_strike_loc,
-        "our_vulnerability": vuln_str if vuln_str else "N/A",
+        "our_vulnerability": vuln_str,
         "plan": two_strike_plan,
     }
 
-    # ── DAMAGE ZONE ──
-    # Find our best pitch-type performance (highest EV or barrel%)
+    # ── DAMAGE ZONE (from zone coverage + pitch type perf) ──
     best_pitch_ev, best_pitch_name = 0, None
     for pt_name, pt_data in hitter_profile.get("by_pitch_type", {}).items():
         if pt_name not in mix:
-            continue  # only pitches this pitcher throws
+            continue
         ev = pt_data.get("avg_ev", 0) if not pd.isna(pt_data.get("avg_ev", np.nan)) else 0
         if ev > best_pitch_ev:
             best_pitch_ev = ev
             best_pitch_name = pt_name
-    # Best zone (highest EV among in-zone quadrants)
-    in_zone_quads = ["up_in", "up_away", "down_in", "down_away", "heart"]
-    best_zone_name, best_zone_ev = None, 0
-    for zn in in_zone_quads:
-        z = zones.get(zn, {})
-        zev = z.get("avg_ev", 0) if not pd.isna(z.get("avg_ev", np.nan)) else 0
-        if zev > best_zone_ev and z.get("n", 0) >= 5:
-            best_zone_ev = zev
-            best_zone_name = zn
-    # Worst pitch type (avoid)
+    # Damage zone from grid
+    best_zone_str = ""
+    if damage_zones:
+        top_dz = damage_zones[:2]
+        best_zone_str = ", ".join(f"{d[0].replace('_',' ')} ({d[1]:.0f} EV)" for d in top_dz)
+    else:
+        in_zone_quads = ["up_in", "up_away", "down_in", "down_away", "heart"]
+        best_zone_name, best_zone_ev2 = None, 0
+        for zn in in_zone_quads:
+            z = zones.get(zn, {})
+            zev = z.get("avg_ev", 0) if not pd.isna(z.get("avg_ev", np.nan)) else 0
+            if zev > best_zone_ev2 and z.get("n", 0) >= 5:
+                best_zone_ev2 = zev
+                best_zone_name = zn
+        if best_zone_name:
+            best_zone_str = f"{best_zone_name.replace('_','-')} ({best_zone_ev2:.0f} EV)"
+    # Whiff zone warning
+    whiff_zone_str = ""
+    if whiff_zones:
+        top_wz = whiff_zones[:2]
+        whiff_zone_str = ", ".join(f"{w[0].replace('_',' ')} ({w[1]:.0f}%)" for w in top_wz)
+    # Worst pitch to face
     worst_pitch_whiff, worst_pitch_name = 0, None
     for pt_name, pt_data in hitter_profile.get("by_pitch_type", {}).items():
         if pt_name not in mix:
@@ -4285,15 +4483,11 @@ def _generate_at_bat_script(hitter_profile, pitcher_profile, matchup_result):
             worst_pitch_whiff = wh
             worst_pitch_name = pt_name
 
-    best_info = f"{best_pitch_name} ({best_pitch_ev:.0f} EV)" if best_pitch_name else "N/A"
-    zone_label = best_zone_name.replace("_", "-").title() if best_zone_name else "N/A"
-    zone_info = f"{zone_label} ({best_zone_ev:.0f} EV)" if best_zone_name else "N/A"
-    avoid_info = f"{worst_pitch_name} ({worst_pitch_whiff:.0f}% whiff)" if worst_pitch_name and worst_pitch_whiff > 20 else "none flagged"
-
     damage_zone = {
-        "best_pitch": best_info,
-        "best_zone": zone_info,
-        "avoid": avoid_info,
+        "best_pitch": f"{best_pitch_name} ({best_pitch_ev:.0f} EV)" if best_pitch_name else "N/A",
+        "best_zone": best_zone_str if best_zone_str else "N/A",
+        "whiff_zones": whiff_zone_str if whiff_zone_str else "none flagged",
+        "avoid": f"{worst_pitch_name} ({worst_pitch_whiff:.0f}% whiff)" if worst_pitch_name and worst_pitch_whiff > 20 else "none flagged",
     }
 
     # ── KEY NUMBERS ──
@@ -4302,12 +4496,17 @@ def _generate_at_bat_script(hitter_profile, pitcher_profile, matchup_result):
         "platoon": matchup_result["platoon"],
         "their_swstr": pitcher_profile.get("swstrk_pct", np.nan),
         "their_chase": pitcher_profile.get("chase_pct", np.nan),
-        "our_chase": hitter_profile.get("overall", {}).get("chase_pct", np.nan),
+        "our_chase": disc.get("chase_pct", np.nan),
         "their_comploc": pitcher_profile.get("comploc_pct", np.nan),
         "their_ev_against": pitcher_profile.get("ev_against", np.nan),
+        "our_z_contact": disc.get("z_contact_pct", np.nan),
+        "our_k_pct": disc.get("k_pct", np.nan),
+        "our_bb_pct": disc.get("bb_pct", np.nan),
     }
 
     return {
+        "snapshot": snapshot,
+        "swing_path_notes": path_notes,
         "first_pitch": first_pitch,
         "when_ahead": when_ahead,
         "two_strike": two_strike,
@@ -4779,12 +4978,11 @@ def _pitching_plan_content(tm, team, data, season_filter):
 
 
 def _hitting_plan_content(tm, team, data, season_filter):
-    """Our Hitting Plan: how to attack their pitching staff — with at-bat scripts."""
+    """Our Hitting Plan: enriched with swing path, zone coverage, discipline, and approach data."""
     p_trad = _tm_team(tm["pitching"]["traditional"], team)
     if p_trad.empty:
         st.info("No opponent pitching data found.")
         return
-    # Sort opponent pitchers by IP
     pitcher_ip = {}
     for name in p_trad["playerFullName"].unique():
         ip = _safe_num(_tm_player(p_trad, name), "IP")
@@ -4792,9 +4990,9 @@ def _hitting_plan_content(tm, team, data, season_filter):
     opp_pitchers = sorted(pitcher_ip.keys(), key=lambda x: pitcher_ip[x], reverse=True)
     selected_opp = st.selectbox("Select Their Pitcher", opp_pitchers, key="gpl_opp_pitcher")
     opp_profile = _get_opp_pitcher_profile(tm, selected_opp, team)
-    # Opponent pitcher summary
     throws_str = "RHP" if opp_profile["throws"] == "R" else ("LHP" if opp_profile["throws"] == "L" else "BHP")
     st.markdown(f"### vs {selected_opp} ({throws_str})")
+    # ── Opponent Pitcher Summary ──
     col_ars, col_stats = st.columns([3, 1])
     with col_ars:
         if opp_profile["pitch_mix"]:
@@ -4817,7 +5015,7 @@ def _hitting_plan_content(tm, team, data, season_filter):
         with c2:
             st.metric("SwStr%", f"{opp_profile['swstrk_pct']:.1f}" if not pd.isna(opp_profile["swstrk_pct"]) else "?")
             st.metric("Chase%", f"{opp_profile['chase_pct']:.1f}" if not pd.isna(opp_profile["chase_pct"]) else "?")
-    # Quick attack notes with location tendency
+    # Attack notes
     attack_notes = []
     loc_tend = opp_profile.get("location_tendency", "")
     if loc_tend and loc_tend not in ("balanced", "unknown"):
@@ -4832,13 +5030,13 @@ def _hitting_plan_content(tm, team, data, season_filter):
     if not pd.isna(comploc) and comploc < 40:
         attack_notes.append(f"Poor command ({comploc:.0f}% CompLoc) — be patient, he'll miss over the plate")
     if opp_profile["pitch_mix"]:
-        primary = max(opp_profile["pitch_mix"].items(), key=lambda x: x[1])
-        if primary[1] > 55:
-            attack_notes.append(f"Relies heavily on {primary[0]} ({primary[1]:.0f}%) — sit on it early")
+        primary_p = max(opp_profile["pitch_mix"].items(), key=lambda x: x[1])
+        if primary_p[1] > 55:
+            attack_notes.append(f"Relies heavily on {primary_p[0]} ({primary_p[1]:.0f}%) — sit on it early")
     for note in attack_notes:
         st.markdown(f"- {note}")
     st.markdown("---")
-    # Score all our hitters and generate at-bat scripts
+    # ── Score all hitters ──
     dav_hitting = filter_davidson(data, role="batter")
     if season_filter:
         dav_hitting = dav_hitting[dav_hitting["Season"].isin(season_filter)]
@@ -4859,26 +5057,27 @@ def _hitting_plan_content(tm, team, data, season_filter):
         st.warning("No matchup data available.")
         return
     all_matchups.sort(key=lambda x: x["overall_score"], reverse=True)
-    # Lineup rankings with 1st pitch and 2-strike columns
+
+    # ── Lineup Rankings ──
     section_header("Lineup Rankings")
     summary_rows = []
     for i, m in enumerate(all_matchups):
-        best_pt = max(m["pitch_details"].items(), key=lambda x: x[1]["score"]) if m["pitch_details"] else ("?", {"score": 0})
-        worst_pt = min(m["pitch_details"].items(), key=lambda x: x[1]["score"]) if m["pitch_details"] else ("?", {"score": 0})
         script = m.get("script")
-        fp_plan = script["first_pitch"]["plan"] if script else "-"
-        ts_plan = script["two_strike"]["plan"] if script else "-"
+        snap = script.get("snapshot", {}) if script else {}
+        best_pt = max(m["pitch_details"].items(), key=lambda x: x[1]["score"]) if m["pitch_details"] else ("?", {"score": 0})
         summary_rows.append({
             "Rank": i + 1,
             "Hitter": display_name(m["hitter"]),
             "Platoon": m["platoon"],
-            "Score": m["overall_score"],
+            "Score": f"{m['overall_score']:.0f}",
+            "Swing": snap.get("swing_type", "-"),
+            "Bat Spd": snap.get("bat_speed", "-"),
+            "Disc": snap.get("discipline_grade", "-"),
             "Strength": f"{best_pt[0]} ({best_pt[1]['score']:.0f})",
-            "1st Pitch": fp_plan,
-            "2-Strike": ts_plan,
         })
     st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
-    # Top 9 lineup cards
+
+    # ── Top 9 Cards ──
     section_header("Recommended Top 9")
     top9 = all_matchups[:9]
     for row_start in range(0, len(top9), 3):
@@ -4891,7 +5090,10 @@ def _hitting_plan_content(tm, team, data, season_filter):
             with col:
                 clr = "#2ca02c" if m["overall_score"] > 60 else "#f7c631" if m["overall_score"] > 48 else "#d22d49"
                 script = m.get("script")
+                snap = script.get("snapshot", {}) if script else {}
                 fp = script["first_pitch"]["expect"] if script else ""
+                swing_lbl = snap.get("swing_type", "")
+                disc_lbl = snap.get("discipline_grade", "")
                 st.markdown(
                     f'<div style="padding:10px;background:white;border-radius:8px;border:1px solid #eee;'
                     f'border-left:4px solid {clr};margin:4px 0;">'
@@ -4899,59 +5101,95 @@ def _hitting_plan_content(tm, team, data, season_filter):
                     f'<div style="font-size:14px;font-weight:700;color:#1a1a2e;">'
                     f'{display_name(m["hitter"])}</div>'
                     f'<div style="font-size:11px;color:#666;">{m["platoon"]} | '
-                    f'Score: {m["overall_score"]:.0f}</div>'
+                    f'Score: {m["overall_score"]:.0f} | {swing_lbl} | Disc: {disc_lbl}</div>'
                     f'<div style="font-size:11px;color:#333;margin-top:4px;">1P: {fp}</div>'
                     f'</div>', unsafe_allow_html=True)
-    # Individual At-Bat Script Cards
+
+    # ── Individual At-Bat Script Cards ──
     st.markdown("---")
     section_header("At-Bat Scripts")
     _hfmt = lambda v, fmt=".1f": f"{v:{fmt}}" if not pd.isna(v) else "-"
     for m in all_matchups:
         script = m.get("script")
-        clr = "#2ca02c" if m["overall_score"] > 60 else "#f7c631" if m["overall_score"] > 48 else "#d22d49"
         with st.expander(
             f"{'🟢' if m['overall_score'] > 60 else '🟡' if m['overall_score'] > 48 else '🔴'} "
             f"{display_name(m['hitter'])} ({m['bats']}) — Score: {m['overall_score']:.0f} | {m['platoon']}"
         ):
-            if script:
-                # 4-section at-bat script card
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.markdown(f"**1st Pitch**")
-                    st.markdown(f"Expect: **{script['first_pitch']['expect']}**")
-                    st.markdown(f"Location: {script['first_pitch']['location']}")
-                    st.markdown(f"Plan: {script['first_pitch']['plan']}")
-                    st.markdown("")
-                    st.markdown(f"**2-Strike**")
-                    st.markdown(f"Putaway: **{script['two_strike']['putaway_pitch']}**")
-                    st.markdown(f"Location: {script['two_strike']['putaway_location']}")
-                    if script['two_strike']['our_vulnerability'] != "N/A":
-                        st.markdown(f"Vulnerability: {script['two_strike']['our_vulnerability']}")
-                    st.markdown(f"Plan: {script['two_strike']['plan']}")
-                with c2:
-                    st.markdown(f"**When Ahead**")
-                    st.markdown(f"Expect: **{script['when_ahead']['expect']}**")
-                    st.markdown(f"Location: {script['when_ahead']['location']}")
-                    st.markdown(f"Plan: {script['when_ahead']['plan']}")
-                    st.markdown("")
-                    st.markdown(f"**Damage Zone**")
-                    st.markdown(f"Best pitch: **{script['damage_zone']['best_pitch']}**")
-                    st.markdown(f"Best zone: {script['damage_zone']['best_zone']}")
-                    st.markdown(f"Avoid: {script['damage_zone']['avoid']}")
-                # Key numbers row
-                kn = script["key_numbers"]
-                kc1, kc2, kc3, kc4, kc5 = st.columns(5)
-                with kc1:
-                    st.metric("Score", f"{kn['matchup_score']:.0f}")
-                with kc2:
-                    st.metric("Their SwStr", _hfmt(kn["their_swstr"]))
-                with kc3:
-                    st.metric("Their Chase", _hfmt(kn["their_chase"]))
-                with kc4:
-                    st.metric("Our Chase", _hfmt(kn["our_chase"]))
-                with kc5:
-                    st.metric("CompLoc", _hfmt(kn["their_comploc"]))
-            # Pitch-by-pitch table
+            if not script:
+                st.caption("Insufficient data for at-bat script.")
+                continue
+            snap = script.get("snapshot", {})
+            path_notes = script.get("swing_path_notes", [])
+
+            # ── Hitter Snapshot ──
+            st.markdown("**Hitter Profile**")
+            sc1, sc2, sc3, sc4, sc5, sc6 = st.columns(6)
+            with sc1:
+                st.metric("Swing", snap.get("swing_type", "-"))
+            with sc2:
+                st.metric("AA", snap.get("attack_angle", "-"))
+            with sc3:
+                st.metric("Bat Spd", snap.get("bat_speed", "-"))
+            with sc4:
+                st.metric("Depth", snap.get("contact_depth", "-"))
+            with sc5:
+                st.metric("Disc", snap.get("discipline_grade", "-"))
+            with sc6:
+                st.metric("Chase", snap.get("chase_pct", "-"))
+
+            # ── Swing Path Notes (matchup-specific) ──
+            if path_notes:
+                st.markdown("**Swing Path vs Pitcher**")
+                for note in path_notes:
+                    st.markdown(f"- {note}")
+
+            # ── At-Bat Script ──
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("**1st Pitch**")
+                st.markdown(f"Expect: **{script['first_pitch']['expect']}**")
+                st.markdown(f"Location: {script['first_pitch']['location']}")
+                fp_ev = script['first_pitch'].get('our_ev', '-')
+                fp_sw = script['first_pitch'].get('our_swing_pct', '-')
+                st.markdown(f"Our 1P: {fp_sw} swing, {fp_ev} EV")
+                st.markdown(f"Plan: {script['first_pitch']['plan']}")
+                st.markdown("")
+                st.markdown("**2-Strike**")
+                st.markdown(f"Putaway: **{script['two_strike']['putaway_pitch']}**")
+                st.markdown(f"Location: {script['two_strike']['putaway_location']}")
+                if script['two_strike']['our_vulnerability'] != "N/A":
+                    st.markdown(f"Vulnerability: {script['two_strike']['our_vulnerability']}")
+                st.markdown(f"Plan: {script['two_strike']['plan']}")
+            with c2:
+                st.markdown("**When Ahead**")
+                st.markdown(f"Expect: **{script['when_ahead']['expect']}**")
+                st.markdown(f"Location: {script['when_ahead']['location']}")
+                st.markdown(f"Plan: {script['when_ahead']['plan']}")
+                st.markdown("")
+                st.markdown("**Damage Zone**")
+                st.markdown(f"Best pitch: **{script['damage_zone']['best_pitch']}**")
+                st.markdown(f"Best zone: {script['damage_zone']['best_zone']}")
+                wz = script['damage_zone'].get('whiff_zones', 'none flagged')
+                st.markdown(f"Whiff zones: {wz}")
+                st.markdown(f"Avoid: {script['damage_zone']['avoid']}")
+
+            # ── Key Numbers ──
+            kn = script["key_numbers"]
+            kc1, kc2, kc3, kc4, kc5, kc6 = st.columns(6)
+            with kc1:
+                st.metric("Score", f"{kn['matchup_score']:.0f}")
+            with kc2:
+                st.metric("Their SwStr", _hfmt(kn["their_swstr"]))
+            with kc3:
+                st.metric("Their Chase", _hfmt(kn["their_chase"]))
+            with kc4:
+                st.metric("Our Chase", _hfmt(kn["our_chase"]))
+            with kc5:
+                st.metric("Z-Contact", _hfmt(kn.get("our_z_contact", np.nan)))
+            with kc6:
+                st.metric("K%/BB%", f"{_hfmt(kn.get('our_k_pct', np.nan))}/{_hfmt(kn.get('our_bb_pct', np.nan))}")
+
+            # ── Pitch Matchup Table ──
             rows = []
             for pt_name, pt_data in sorted(m["pitch_details"].items(),
                                              key=lambda x: x[1]["usage"], reverse=True):
