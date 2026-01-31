@@ -4441,33 +4441,13 @@ def _pitching_plan_content(tm, team, data, season_filter):
     # ── Helper for bullpen cards ──
     _hfmt = lambda v, fmt=".0f": f"{v:{fmt}}" if not pd.isna(v) else "-"
 
-    # Summary table — scores are already composite (from _score_pitcher_vs_hitter)
-    summary_rows = []
+    # Pre-compute and cache sequences for each matchup (used by bullpen cards)
     for m in all_matchups:
         ps = m["pitch_scores"]
         hd = m.get("hitter_data", {})
         sorted_ps = sorted(ps.items(), key=lambda x: x[1]["score"], reverse=True)
-        # Build top 3-pitch seq for summary (cache on matchup for bullpen card reuse)
         top_seqs = _build_3pitch_sequences(sorted_ps, hd, tunnels, sequences)
         m["_cached_seqs"] = top_seqs
-        seq_str = top_seqs[0]["seq"] if top_seqs else (f"{sorted_ps[0][0]}→{sorted_ps[1][0]}" if len(sorted_ps) >= 2 else "-")
-        # Putaway pitch reasoning
-        putaway_note = ""
-        if top_seqs:
-            p3 = top_seqs[0]["p3"]
-            is_hard_p3 = p3 in _hard_pitches
-            t2k = hd.get("whiff_2k_hard" if is_hard_p3 else "whiff_2k_os", np.nan)
-            if not pd.isna(t2k):
-                putaway_note = f" ({t2k:.0f}% 2K {'hard' if is_hard_p3 else 'OS'})"
-        summary_rows.append({
-            "Hitter": display_name(m["hitter"]), "B": m["bats"],
-            "Platoon": m["platoon"],
-            "Score": round(m["overall_score"], 1),
-            "Best Sequence": seq_str,
-            "Putaway Why": putaway_note,
-        })
-    sum_df = pd.DataFrame(summary_rows).sort_values("Score", ascending=False)
-    st.dataframe(sum_df, use_container_width=True, hide_index=True)
     # ── Bullpen Cards ──
     st.markdown("---")
     section_header("Bullpen Cards")
