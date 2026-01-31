@@ -3096,21 +3096,6 @@ def page_pitch_design_lab(data):
                             "Velo Gap (mph)", "Move Diff (in)"]
             st.dataframe(tunnel_df[display_cols], use_container_width=True, hide_index=True)
 
-            # Diagnosis & Fix cards for each pair
-            section_header("Diagnosis & Recommendations")
-            for _, row in tunnel_df.iterrows():
-                gc = grade_colors.get(row["Grade"], "#888")
-                border_color = gc
-                st.markdown(
-                    f'<div style="border-left:5px solid {border_color};padding:12px 16px;'
-                    f'border-radius:4px;margin:8px 0;background:{gc}10;">'
-                    f'<span style="font-size:18px;font-weight:bold;color:{gc};">{row["Grade"]}</span> '
-                    f'<b>{row["Pitch A"]} + {row["Pitch B"]}</b> '
-                    f'<span style="color:#666;">(Score: {row["Tunnel Score"]})</span><br>'
-                    f'<span style="font-size:13px;"><b>Analysis:</b> {row["Diagnosis"]}</span><br>'
-                    f'<span style="color:{gc};font-size:13px;"><b>Action:</b> {row["Fix"]}</span>'
-                    f'</div>', unsafe_allow_html=True)
-
             # Tunnel visualization — release point overlay + plate location
             section_header("Release Point Overlay")
             st.caption("Pitches that release from the same spot but end up in different locations = great tunnel")
