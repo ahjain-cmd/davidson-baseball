@@ -3850,57 +3850,6 @@ def _scouting_hitter_report(tm, team, trackman_data):
             st.dataframe(pd.DataFrame(diff_rows), use_container_width=True, hide_index=True)
 
     # ── Feature #5: Pitch Count Discipline Breakdown ──
-    if not h_pcounts.empty:
-        section_header("Plate Discipline Breakdown")
-        st.caption("Raw pitch counts showing how this hitter handles at-bats")
-        disc_data = []
-        total_p = _safe_num(h_pcounts, "P")
-        for lbl, col in [("Total Pitches", "P"), ("Swings", "Swing#"), ("Misses", "Miss#"),
-                          ("Strikes", "Strike#"), ("In Play", "InPlay#"), ("Fouls", "Foul#"),
-                          ("In Zone", "InZone#"), ("Chases", "Chase#"), ("Called Strikes", "CallStrk#")]:
-            v = _safe_num(h_pcounts, col)
-            if not pd.isna(v):
-                rate_str = ""
-                if not pd.isna(total_p) and total_p > 0 and col != "P":
-                    rate_str = f"{v / total_p * 100:.1f}%"
-                disc_data.append({"Metric": lbl, "Count": f"{int(v)}", "% of Pitches": rate_str})
-        if disc_data:
-            st.dataframe(pd.DataFrame(disc_data), use_container_width=True, hide_index=True)
-        # P/PA and max pitch PA
-        ppa = _safe_num(pr, "P/PA")
-        mxppa = _safe_num(pr, "MxPPA")
-        parts = []
-        if not pd.isna(ppa):
-            parts.append(f"P/PA: {ppa:.2f}")
-        if not pd.isna(mxppa):
-            parts.append(f"Max P/PA: {int(mxppa)}")
-        if parts:
-            st.caption(" | ".join(parts))
-
-    # ── Feature #3: Run Expectancy by Outs ──
-    if not h_re.empty:
-        section_header("Run Expectancy by Outs")
-        st.caption("How productive this hitter is in each out situation (higher = more valuable)")
-        re_data = []
-        for lbl, col in [("No Outs", "RE_NoOut"), ("1 Out", "RE_1Out"), ("2 Outs", "RE_2Out")]:
-            v = _safe_num(h_re, col)
-            if not pd.isna(v):
-                pct = _tm_pctile(h_re, col, all_h_re)
-                re_data.append({
-                    "Situation": lbl, "RE": f"{v:.3f}",
-                    "D1 Pctile": f"{int(pct)}" if not pd.isna(pct) else "-",
-                })
-        if re_data:
-            st.dataframe(pd.DataFrame(re_data), use_container_width=True, hide_index=True)
-            # Clutch narrative
-            re_2out = _safe_num(h_re, "RE_2Out")
-            re_0out = _safe_num(h_re, "RE_NoOut")
-            if not pd.isna(re_2out) and not pd.isna(re_0out):
-                re_2out_pct = _tm_pctile(h_re, "RE_2Out", all_h_re)
-                if not pd.isna(re_2out_pct) and re_2out_pct >= 75:
-                    st.caption(f"⚠️ Dangerous with 2 outs ({int(re_2out_pct)}th percentile) — don't let him beat you late in innings.")
-                elif not pd.isna(re_2out_pct) and re_2out_pct <= 25:
-                    st.caption(f"✅ Less productive with 2 outs ({int(re_2out_pct)}th percentile) — can be aggressive in 2-out situations.")
 
     # ── Swing Tendencies by Pitch Type ──
     has_swing_data = not h_swpct.empty or not h_swstats.empty
