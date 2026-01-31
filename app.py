@@ -3371,7 +3371,14 @@ def _pitch_score_composite(pt_name, pt_data, hd, tun_df, platoon_label="Neutral"
         # 82 → 0, 88 → 50, 94+ → 100
         components.append(min(max((eff_velo - 82) / 12 * 100, 0), 100)); weights.append(3)
 
-    # 16. Zone Exploitation (5%) — cross our best zone with their zone weakness
+    # 16. Our Usage (8%) — pitches we actually throw should rank higher; low-usage pitches
+    #     have small samples and shouldn't be recommended as go-to options
+    usage_pct = ars_pt.get("usage_pct", pt_data.get("usage", np.nan))
+    if not pd.isna(usage_pct):
+        # 0% → 0, 15% → 40, 30% → 65, 50%+ → 90
+        components.append(min(max(usage_pct / 55 * 100, 0), 100)); weights.append(8)
+
+    # 17. Zone Exploitation (5%) — cross our best zone with their zone weakness
     ze = ars_pt.get("zone_eff", {})
     if ze and hd:
         # Find our best zone for this pitch and check if hitter has weakness there
@@ -4109,14 +4116,14 @@ def _pitching_plan_content(tm, team, data, season_filter):
     # ── Tunnel Grades + Best Sequences ──
     tunnels = arsenal.get("tunnels", pd.DataFrame())
     sequences = arsenal.get("sequences", pd.DataFrame())
-    # Filter sequences: pitches thrown >= 10 times AND sequence n >= 20
+    # Filter sequences: pitches thrown >= 10 times AND sequence n >= 25
     if isinstance(sequences, pd.DataFrame) and not sequences.empty:
         valid_pitches = {name for name, pt in arsenal["pitches"].items() if pt.get("count", 0) >= 10}
         sequences = sequences[
             sequences["Setup Pitch"].isin(valid_pitches) & sequences["Follow Pitch"].isin(valid_pitches)
         ]
         if "Count" in sequences.columns:
-            sequences = sequences[sequences["Count"] >= 20]
+            sequences = sequences[sequences["Count"] >= 25]
     col_tun, col_seq = st.columns(2)
     with col_tun:
         st.markdown("**Tunnel Grades**")
