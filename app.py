@@ -88,6 +88,73 @@ PITCH_TYPE_MAP = {
 }
 PITCH_TYPES_TO_DROP = {"Other", "Undefined"}
 
+# ── Strike zone constants ────────────────────
+ZONE_SIDE = 0.83          # feet from center (17-inch plate / 2 in ft)
+ZONE_HEIGHT_BOT = 1.5     # default bottom (ft)
+ZONE_HEIGHT_TOP = 3.5     # default top (ft)
+MIN_CALLED_STRIKES_FOR_ADAPTIVE_ZONE = 20
+
+
+def is_barrel(ev, la):
+    """Statcast barrel definition: EV >= 98 with LA range that widens as EV rises.
+
+    At 98 mph the sweet spot is 26-30 deg.  For every 1 mph above 98 the
+    acceptable LA range expands by 2-3 deg on each side, capped at 8-50 deg.
+    """
+    if pd.isna(ev) or pd.isna(la):
+        return False
+    if ev < 98:
+        return False
+    # At exactly 98 mph the window is 26-30
+    la_min = max(26 - 1.5 * (ev - 98), 8)
+    la_max = min(30 + 1.5 * (ev - 98), 50)
+    return la_min <= la <= la_max
+
+
+def is_barrel_mask(df):
+    """Vectorised Statcast barrel mask for a DataFrame with ExitSpeed & Angle."""
+    ev = pd.to_numeric(df["ExitSpeed"], errors="coerce")
+    la = pd.to_numeric(df["Angle"], errors="coerce")
+    la_min = (26 - 1.5 * (ev - 98)).clip(lower=8)
+    la_max = (30 + 1.5 * (ev - 98)).clip(upper=50)
+    return (ev >= 98) & (la >= la_min) & (la <= la_max)
+
+
+@st.cache_data(show_spinner=False)
+def _build_batter_zones(data):
+    """Build per-batter strike zone boundaries from called-strike distributions.
+
+    Returns dict  batter_name -> (zone_bot, zone_top).
+    Falls back to fixed zone (1.5-3.5) when fewer than MIN samples exist.
+    """
+    zones = {}
+    called = data[data["PitchCall"] == "StrikeCalled"].dropna(subset=["PlateLocHeight"])
+    if called.empty:
+        return zones
+    for batter, grp in called.groupby("Batter"):
+        if len(grp) >= MIN_CALLED_STRIKES_FOR_ADAPTIVE_ZONE:
+            zones[batter] = (
+                round(grp["PlateLocHeight"].quantile(0.05), 3),
+                round(grp["PlateLocHeight"].quantile(0.95), 3),
+            )
+    return zones
+
+
+def in_zone_mask(df, batter_zones=None, batter_col="Batter"):
+    """Per-pitch boolean mask: True if pitch is inside the batter's strike zone.
+
+    Uses adaptive per-batter zone height when available, otherwise fixed defaults.
+    Width always uses the fixed ±ZONE_SIDE (plate width doesn't change by batter).
+    """
+    side_ok = df["PlateLocSide"].abs() <= ZONE_SIDE
+    if batter_zones and batter_col in df.columns:
+        bot = df[batter_col].map(lambda b: batter_zones.get(b, (ZONE_HEIGHT_BOT, ZONE_HEIGHT_TOP))[0])
+        top = df[batter_col].map(lambda b: batter_zones.get(b, (ZONE_HEIGHT_BOT, ZONE_HEIGHT_TOP))[1])
+        height_ok = (df["PlateLocHeight"] >= bot) & (df["PlateLocHeight"] <= top)
+    else:
+        height_ok = df["PlateLocHeight"].between(ZONE_HEIGHT_BOT, ZONE_HEIGHT_TOP)
+    return side_ok & height_ok
+
 
 def normalize_pitch_types(df):
     """Normalize pitch type names and drop junk/undefined."""
@@ -303,8 +370,9 @@ def compute_batter_stats(data, season_filter=None):
     df = data.copy()
     if season_filter:
         df = df[df["Season"].isin(season_filter)]
-    in_zone = (df["PlateLocSide"].abs() <= 0.83) & (df["PlateLocHeight"].between(1.5, 3.5))
-    out_zone = ~in_zone & df["PlateLocSide"].notna() & df["PlateLocHeight"].notna()
+    batter_zones = _build_batter_zones(df)
+    _in_zone = in_zone_mask(df, batter_zones, batter_col="Batter")
+    out_zone = ~_in_zone & df["PlateLocSide"].notna() & df["PlateLocHeight"].notna()
     is_swing = df["PitchCall"].isin(SWING_CALLS)
     is_whiff = df["PitchCall"] == "StrikeSwinging"
     is_contact = df["PitchCall"].isin(CONTACT_CALLS)
@@ -318,7 +386,7 @@ def compute_batter_stats(data, season_filter=None):
         swings = grp[is_swing.reindex(grp.index, fill_value=False)]
         whiffs = grp[is_whiff.reindex(grp.index, fill_value=False)]
         contacts = grp[is_contact.reindex(grp.index, fill_value=False)]
-        grp_in_zone = grp[in_zone.reindex(grp.index, fill_value=False)]
+        grp_in_zone = grp[_in_zone.reindex(grp.index, fill_value=False)]
         grp_out_zone = grp[out_zone.reindex(grp.index, fill_value=False)]
         swings_out = grp_out_zone[grp_out_zone["PitchCall"].isin(SWING_CALLS)]
         swings_in = grp_in_zone[grp_in_zone["PitchCall"].isin(SWING_CALLS)]
@@ -326,7 +394,7 @@ def compute_batter_stats(data, season_filter=None):
         contacts_out = grp_out_zone[grp_out_zone["PitchCall"].isin(CONTACT_CALLS)]
         n = len(batted)
         hard = len(batted[batted["ExitSpeed"] >= 95]) if n > 0 else 0
-        barrels = len(batted[(batted["ExitSpeed"] >= 98) & (batted["Angle"].between(8, 32))]) if n > 0 else 0
+        barrels = int(is_barrel_mask(batted).sum()) if n > 0 else 0
         la_sweet = len(batted[batted["Angle"].between(8, 32)]) if n > 0 else 0
         ks = len(grp[grp["KorBB"] == "Strikeout"])
         bbs = len(grp[grp["KorBB"] == "Walk"])
@@ -388,8 +456,9 @@ def compute_pitcher_stats(data, season_filter=None):
     df = data.copy()
     if season_filter:
         df = df[df["Season"].isin(season_filter)]
-    in_zone = (df["PlateLocSide"].abs() <= 0.83) & (df["PlateLocHeight"].between(1.5, 3.5))
-    out_zone = ~in_zone & df["PlateLocSide"].notna() & df["PlateLocHeight"].notna()
+    batter_zones = _build_batter_zones(df)
+    _in_zone = in_zone_mask(df, batter_zones, batter_col="Batter")
+    out_zone = ~_in_zone & df["PlateLocSide"].notna() & df["PlateLocHeight"].notna()
     is_swing = df["PitchCall"].isin(SWING_CALLS)
     is_contact = df["PitchCall"].isin(CONTACT_CALLS)
     rows = []
@@ -400,7 +469,7 @@ def compute_pitcher_stats(data, season_filter=None):
         fb = grp[grp["TaggedPitchType"].isin(["Fastball", "Sinker", "Cutter"])]
         swings = grp[is_swing.reindex(grp.index, fill_value=False)]
         whiffs = grp[grp["PitchCall"] == "StrikeSwinging"]
-        grp_in_zone = grp[in_zone.reindex(grp.index, fill_value=False)]
+        grp_in_zone = grp[_in_zone.reindex(grp.index, fill_value=False)]
         grp_out_zone = grp[out_zone.reindex(grp.index, fill_value=False)]
         swings_out = grp_out_zone[grp_out_zone["PitchCall"].isin(SWING_CALLS)]
         contacts_in = grp_in_zone[grp_in_zone["PitchCall"].isin(CONTACT_CALLS)]
@@ -412,7 +481,7 @@ def compute_pitcher_stats(data, season_filter=None):
         n_batted = len(batted)
         gb = len(ip[ip["TaggedHitType"] == "GroundBall"]) if len(ip) > 0 else 0
         hard = len(batted[batted["ExitSpeed"] >= 95]) if n_batted > 0 else 0
-        barrels = len(batted[(batted["ExitSpeed"] >= 98) & (batted["Angle"].between(8, 32))]) if n_batted > 0 else 0
+        barrels = int(is_barrel_mask(batted).sum()) if n_batted > 0 else 0
         rows.append({
             "Pitcher": pitcher, "PitcherTeam": team, "Pitches": len(grp), "PA": pa,
             "AvgFBVelo": fb["RelSpeed"].mean() if len(fb) > 0 and fb["RelSpeed"].notna().any() else np.nan,
@@ -515,7 +584,7 @@ def render_savant_percentile_section(metrics_data, title=None):
 # CHART HELPERS
 # ──────────────────────────────────────────────
 def strike_zone_rect():
-    return dict(type="rect", x0=-0.83, x1=0.83, y0=1.5, y1=3.5,
+    return dict(type="rect", x0=-ZONE_SIDE, x1=ZONE_SIDE, y0=ZONE_HEIGHT_BOT, y1=ZONE_HEIGHT_TOP,
                 line=dict(color="#333", width=2), fillcolor="rgba(0,0,0,0)")
 
 
@@ -1104,7 +1173,7 @@ def page_hitter_card(data):
             batter_rows.append({
                 "whiff": len(wh) / max(len(sw), 1) * 100 if len(sw) > 0 else np.nan,
                 "ev": ip["ExitSpeed"].mean() if len(ip) > 0 else np.nan,
-                "chase": len(grp[(~((grp["PlateLocSide"].abs() <= 0.83) & grp["PlateLocHeight"].between(1.5, 3.5))) & grp["PlateLocSide"].notna()][grp["PitchCall"].isin(SWING_CALLS)]) / max(len(grp[~((grp["PlateLocSide"].abs() <= 0.83) & grp["PlateLocHeight"].between(1.5, 3.5)) & grp["PlateLocSide"].notna()]), 1) * 100 if grp["PlateLocSide"].notna().any() else np.nan,
+                "chase": (lambda _iz=in_zone_mask(grp): len(grp[(~_iz) & grp["PlateLocSide"].notna()][grp["PitchCall"].isin(SWING_CALLS)]) / max(len(grp[(~_iz) & grp["PlateLocSide"].notna()]), 1) * 100)() if grp["PlateLocSide"].notna().any() else np.nan,
             })
         all_df = pd.DataFrame(batter_rows)
 
@@ -1252,7 +1321,7 @@ def make_pitch_location_heatmap(pitch_data, title, color, height=380):
     ))
 
     # Strike zone outer box
-    fig.add_shape(type="rect", x0=-0.83, x1=0.83, y0=1.5, y1=3.5,
+    fig.add_shape(type="rect", x0=-ZONE_SIDE, x1=ZONE_SIDE, y0=ZONE_HEIGHT_BOT, y1=ZONE_HEIGHT_TOP,
                   line=dict(color="#333", width=2), fillcolor="rgba(0,0,0,0)")
 
     # Home plate
@@ -1779,7 +1848,7 @@ def page_pitcher_card(data):
                     fp_pitcher_stats.append(len(stks) / max(len(grp), 1) * 100)
                 fp_pct = get_percentile(fp_strike_pct, pd.Series(fp_pitcher_stats)) if fp_pitcher_stats else 50
                 render_savant_percentile_section(
-                    [("1st Pitch K%", fp_strike_pct, fp_pct, ".1f", True)], None,
+                    [("1st Pitch Strike%", fp_strike_pct, fp_pct, ".1f", True)], None,
                 )
 
             with col_s2:
@@ -1899,15 +1968,15 @@ def page_catcher(data):
         # Called strikes on pitches outside the zone
         loc_data = cdf.dropna(subset=["PlateLocSide", "PlateLocHeight"])
         if len(loc_data) > 0:
-            in_zone = (loc_data["PlateLocSide"].abs() <= 0.83) & (loc_data["PlateLocHeight"].between(1.5, 3.5))
-            out_zone_pitches = loc_data[~in_zone]
+            _iz = in_zone_mask(loc_data)
+            out_zone_pitches = loc_data[~_iz]
             called_strikes_out = out_zone_pitches[out_zone_pitches["PitchCall"] == "StrikeCalled"]
             frame_rate = len(called_strikes_out) / max(len(out_zone_pitches), 1) * 100
 
             # Context: all catchers' framing rate
             all_loc = data.dropna(subset=["PlateLocSide", "PlateLocHeight"])
             if "Catcher" in all_loc.columns:
-                all_in_zone = (all_loc["PlateLocSide"].abs() <= 0.83) & (all_loc["PlateLocHeight"].between(1.5, 3.5))
+                all_in_zone = in_zone_mask(all_loc)
                 all_out = all_loc[~all_in_zone]
                 catcher_frame_rates = []
                 for c, grp in all_out.groupby("Catcher"):
@@ -1942,7 +2011,7 @@ def page_catcher(data):
         sw = grp[grp["PitchCall"].isin(SWING_CALLS)]
         wh = grp[grp["PitchCall"] == "StrikeSwinging"]
         loc = grp.dropna(subset=["PlateLocSide", "PlateLocHeight"])
-        in_z = (loc["PlateLocSide"].abs() <= 0.83) & (loc["PlateLocHeight"].between(1.5, 3.5))
+        in_z = in_zone_mask(loc)
         out_z = loc[~in_z]
         cs_out = out_z[out_z["PitchCall"] == "StrikeCalled"]
         pitcher_rows.append({
@@ -2089,7 +2158,7 @@ def page_team(data):
                 _showed_barrel = False
                 if "Angle" in week_inplay.columns:
                     wb = week_inplay.copy()
-                    wb["is_barrel"] = (wb["ExitSpeed"] >= 98) & (wb["Angle"].between(8, 32))
+                    wb["is_barrel"] = is_barrel_mask(wb)
                     barrel_ct = wb.groupby("Batter")["is_barrel"].agg(["sum", "count"]).reset_index()
                     barrel_ct = barrel_ct[(barrel_ct["count"] >= 3) & (barrel_ct["sum"] > 0)].copy()
                     if len(barrel_ct) > 0:
@@ -2559,9 +2628,7 @@ def _compute_tunnel_score(pdf):
         gravity_drop = 0.5 * 32.17 * t**2
         ivb_lift = (row.ivb / 12.0) * frac**2
         y = row.rel_h + (row.loc_h - row.rel_h) * frac - gravity_drop + ivb_lift
-        y_correction = row.loc_h - (row.rel_h + (row.loc_h - row.rel_h) - 0.5 * 32.17 * t_total**2 + (row.ivb / 12.0))
-        y = row.rel_h + (row.loc_h - row.rel_h) * frac - gravity_drop + ivb_lift
-        # Apply endpoint correction
+        # Endpoint correction: ensure trajectory passes through actual plate location
         y_at_1 = row.rel_h + (row.loc_h - row.rel_h) - 0.5 * 32.17 * t_total**2 + (row.ivb / 12.0)
         y += (row.loc_h - y_at_1) * frac
 
@@ -2615,7 +2682,7 @@ def _compute_tunnel_score(pdf):
 
             # Weights proportional to regression coefficients:
             # |0.192| + |0.101| + |0.030| + |0.015| = 0.338
-            # → plate 57%, commit 30%, div 9%, rel 4%
+            # → plate 55%, commit 30%, div 10%, rel 5%
             raw = (plate_reward * 0.55 + commit_deception * 0.30 +
                    divergence_score * 0.10 + rel_bonus * 0.05) * 100
             tunnel = round(min(raw, 100), 1)
@@ -2705,9 +2772,8 @@ def _compute_pitch_pair_results(pdf, data):
             "CSW%": round(len(csws) / n * 100, 1),
             "Avg EV": round(batted["ExitSpeed"].mean(), 1) if len(batted) > 0 else np.nan,
             "Chase%": round(
-                len(grp[(~((grp["PlateLocSide"].abs() <= 0.83) & grp["PlateLocHeight"].between(1.5, 3.5))) &
-                         grp["PitchCall"].isin(SWING_CALLS)]) /
-                max(len(grp[~((grp["PlateLocSide"].abs() <= 0.83) & grp["PlateLocHeight"].between(1.5, 3.5))]), 1) * 100, 1),
+                (lambda _iz=in_zone_mask(grp): len(grp[(~_iz) & grp["PitchCall"].isin(SWING_CALLS)]) /
+                max(len(grp[~_iz]), 1) * 100)(), 1),
         })
     return pd.DataFrame(rows).sort_values("Whiff%", ascending=False).reset_index(drop=True)
 
@@ -3361,10 +3427,10 @@ def page_pitch_design_lab(data):
                     st.dataframe(zone_df, use_container_width=True, hide_index=True)
 
                     # AI insight for location
-                    if not zone_df.empty:
+                    if not zone_df.empty and zone_df["Whiff%"].notna().any():
                         best_zone = zone_df.loc[zone_df["Whiff%"].idxmax()]
                         worst_zone = zone_df.dropna(subset=["Avg EV"])
-                        if not worst_zone.empty:
+                        if not worst_zone.empty and worst_zone["Avg EV"].notna().any():
                             worst_zone = worst_zone.loc[worst_zone["Avg EV"].idxmax()]
                             st.markdown(
                                 f'<div style="background:#f0f7ff;border-left:4px solid #2d7fc1;padding:12px 16px;'
@@ -3540,7 +3606,7 @@ def page_pitch_design_lab(data):
 
                     # Strike zone
                     fig_front.add_shape(
-                        type="rect", x0=-0.83, x1=0.83, y0=1.5, y1=3.5,
+                        type="rect", x0=-ZONE_SIDE, x1=ZONE_SIDE, y0=ZONE_HEIGHT_BOT, y1=ZONE_HEIGHT_TOP,
                         line=dict(color="#333", width=2.5),
                         fillcolor="rgba(0,0,0,0.03)",
                     )
@@ -3668,8 +3734,7 @@ def page_pitch_design_lab(data):
             loc_spread = np.sqrt(loc_std_h**2 + loc_std_s**2)
 
             # Zone rate
-            in_zone = ((ptd["PlateLocSide"].abs() <= 0.83) &
-                       ptd["PlateLocHeight"].between(1.5, 3.5))
+            in_zone = in_zone_mask(ptd)
             zone_pct = in_zone.mean() * 100
 
             # Edge rate (borderline pitches — the best location)
@@ -3898,7 +3963,12 @@ def _create_zone_grid_data(df, metric="swing_rate"):
 
 
 def _compute_expected_outcomes(batted_df):
-    """Compute expected outcomes based on EV/LA buckets."""
+    """Compute expected outcomes based on EV/LA buckets.
+
+    Probabilities calibrated for D1 college baseball (lower HR rates,
+    more singles than MLB).  wOBA weights use 2024 NCAA run-environment
+    scaling (slightly lower than MLB linear weights).
+    """
     if batted_df.empty:
         return {}
     outcomes = []
@@ -3906,24 +3976,33 @@ def _compute_expected_outcomes(batted_df):
         ev, la = row.get("ExitSpeed", 0), row.get("Angle", 0)
         if pd.isna(ev) or pd.isna(la):
             continue
-        if ev >= 98 and 8 <= la <= 32:
-            outcomes.append({"xOut": 0.25, "x1B": 0.10, "x2B": 0.20, "x3B": 0.05, "xHR": 0.40})
+        # Barrel zone — college HR rate ~30% vs MLB ~40%
+        if is_barrel(ev, la):
+            outcomes.append({"xOut": 0.30, "x1B": 0.10, "x2B": 0.22, "x3B": 0.05, "xHR": 0.33})
+        # High-EV fly ball
         elif ev >= 95 and 25 <= la <= 45:
-            outcomes.append({"xOut": 0.40, "x1B": 0.05, "x2B": 0.15, "x3B": 0.05, "xHR": 0.35})
+            outcomes.append({"xOut": 0.45, "x1B": 0.05, "x2B": 0.18, "x3B": 0.05, "xHR": 0.27})
+        # Line drive / hard-hit
         elif 10 <= la <= 25 and ev >= 85:
-            outcomes.append({"xOut": 0.30, "x1B": 0.45, "x2B": 0.20, "x3B": 0.03, "xHR": 0.02})
+            outcomes.append({"xOut": 0.28, "x1B": 0.47, "x2B": 0.20, "x3B": 0.03, "xHR": 0.02})
+        # Ground ball
         elif la < 10:
-            outcomes.append({"xOut": 0.75, "x1B": 0.23, "x2B": 0.02, "x3B": 0.00, "xHR": 0.00})
+            outcomes.append({"xOut": 0.76, "x1B": 0.22, "x2B": 0.02, "x3B": 0.00, "xHR": 0.00})
+        # Pop-up / extreme fly ball
         elif la > 45:
             outcomes.append({"xOut": 0.95, "x1B": 0.03, "x2B": 0.01, "x3B": 0.00, "xHR": 0.01})
+        # Soft contact
         elif ev < 70:
             outcomes.append({"xOut": 0.90, "x1B": 0.08, "x2B": 0.02, "x3B": 0.00, "xHR": 0.00})
+        # Medium contact catchall
         else:
-            outcomes.append({"xOut": 0.70, "x1B": 0.20, "x2B": 0.08, "x3B": 0.01, "xHR": 0.01})
+            outcomes.append({"xOut": 0.68, "x1B": 0.22, "x2B": 0.07, "x3B": 0.01, "xHR": 0.02})
     if not outcomes:
         return {}
     odf = pd.DataFrame(outcomes)
-    odf["xwOBA"] = 0.9 * odf["x1B"] + 1.25 * odf["x2B"] + 1.6 * odf["x3B"] + 2.0 * odf["xHR"]
+    # NCAA-adjusted wOBA weights (lower run environment than MLB)
+    odf["xwOBA"] = (0.0 * odf["xOut"] + 0.88 * odf["x1B"] + 1.24 * odf["x2B"]
+                    + 1.56 * odf["x3B"] + 2.0 * odf["xHR"])
     return odf.mean().to_dict()
 
 
@@ -4136,8 +4215,8 @@ def page_hitters_lab(data):
 
     # Pre-compute common data
     batted = bdf[bdf["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
-    in_zone_mask = (bdf["PlateLocSide"].abs() <= 0.83) & (bdf["PlateLocHeight"].between(1.5, 3.5))
-    out_zone_mask = ~in_zone_mask & bdf["PlateLocSide"].notna() & bdf["PlateLocHeight"].notna()
+    _iz_mask = in_zone_mask(bdf)
+    out_zone_mask = ~_iz_mask & bdf["PlateLocSide"].notna() & bdf["PlateLocHeight"].notna()
 
     all_batter_stats = compute_batter_stats(data, season_filter=season_filter)
     player_row = all_batter_stats[all_batter_stats["Batter"] == batter]
@@ -4175,7 +4254,7 @@ def page_hitters_lab(data):
                 section_header("Exit Velocity vs Launch Angle")
                 bp = batted.copy()
                 conditions = [
-                    (bp["ExitSpeed"] >= 98) & (bp["Angle"].between(8, 32)),
+                    is_barrel_mask(bp),
                     bp["ExitSpeed"] >= 95,
                     bp["ExitSpeed"].between(80, 95),
                 ]
@@ -4319,7 +4398,7 @@ def page_hitters_lab(data):
             pt_sw = pt_df[pt_df["PitchCall"].isin(SWING_CALLS)]
             pt_wh = pt_df[pt_df["PitchCall"] == "StrikeSwinging"]
             pt_ct = pt_df[pt_df["PitchCall"].isin(CONTACT_CALLS)]
-            pt_oz = pt_df[~((pt_df["PlateLocSide"].abs() <= 0.83) & (pt_df["PlateLocHeight"].between(1.5, 3.5))) & pt_df["PlateLocSide"].notna()]
+            pt_oz = pt_df[(~in_zone_mask(pt_df)) & pt_df["PlateLocSide"].notna()]
             pt_ch = pt_oz[pt_oz["PitchCall"].isin(SWING_CALLS)]
             pt_disc_rows.append({
                 "Pitch Type": pt, "Seen": len(pt_df),
@@ -4368,7 +4447,7 @@ def page_hitters_lab(data):
                         colorscale=[[0, "#1f77b4"], [0.5, "#f7f7f7"], [1, "#d22d49"]],
                         contours=dict(showlines=False), ncontours=12, showscale=True,
                         colorbar=dict(title="Avg EV", len=0.8)))
-                    barrel_loc = batted_loc[(batted_loc["ExitSpeed"] >= 98) & (batted_loc["Angle"].between(8, 32))]
+                    barrel_loc = batted_loc[is_barrel_mask(batted_loc)]
                     if not barrel_loc.empty:
                         fig_damage.add_trace(go.Scatter(
                             x=barrel_loc["PlateLocSide"], y=barrel_loc["PlateLocHeight"],
@@ -4554,7 +4633,7 @@ def page_hitters_lab(data):
             pt_wh = ptd[ptd["PitchCall"] == "StrikeSwinging"]
             pt_ct = ptd[ptd["PitchCall"].isin(CONTACT_CALLS)]
             pt_bt = ptd[ptd["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
-            pt_br = pt_bt[(pt_bt["ExitSpeed"] >= 98) & (pt_bt["Angle"].between(8, 32))] if len(pt_bt) > 0 else pd.DataFrame()
+            pt_br = pt_bt[is_barrel_mask(pt_bt)] if len(pt_bt) > 0 else pd.DataFrame()
             pt_rows.append({
                 "Pitch Type": pt, "Seen": len(ptd),
                 "Seen%": len(ptd)/len(bdf)*100,
@@ -4683,7 +4762,7 @@ def page_hitters_lab(data):
                         gb_n = len(sub[sub["TaggedHitType"] == "GroundBall"])
                         ld_n = len(sub[sub["TaggedHitType"] == "LineDrive"])
                         fb_n = len(sub[sub["TaggedHitType"] == "FlyBall"])
-                        brr = len(sub[(sub["ExitSpeed"] >= 98) & (sub["Angle"].between(8, 32))]) if sub["Angle"].notna().any() else 0
+                        brr = int(is_barrel_mask(sub).sum()) if sub["Angle"].notna().any() else 0
                         dir_rows.append({
                             "Dir": lbl, "BBE": ns,
                             "%": f"{ns/len(bd)*100:.0f}%",
@@ -4928,7 +5007,7 @@ def page_hitters_lab(data):
                         "Attack Angle": f"{pt_hh['Angle'].median():+.1f}°",
                         "All LA": f"{pt_all['Angle'].median():+.1f}°",
                         "Hard-Hit EV": f"{pt_hh['ExitSpeed'].mean():.1f}",
-                        "Barrel%": f"{len(pt_all[(pt_all['ExitSpeed'] >= 98) & (pt_all['Angle'].between(8, 32))]) / max(len(pt_all), 1) * 100:.0f}%",
+                        "Barrel%": f"{int(is_barrel_mask(pt_all).sum()) / max(len(pt_all), 1) * 100:.0f}%",
                     }
                     if "BatSpeedProxy" in pt_hh.columns and pt_hh["BatSpeedProxy"].notna().any():
                         row["Bat Speed"] = f"{pt_hh['BatSpeedProxy'].mean():.1f}"
@@ -5032,7 +5111,10 @@ def page_hitters_lab(data):
                     section_header("Bat Speed by Pitch Height")
                     if "BatSpeedProxy" in hard_hit.columns and hard_hit["BatSpeedProxy"].notna().sum() >= 5:
                         # Bin by pitch height thirds
-                        height_bins = pd.qcut(hard_hit["PlateLocHeight"], q=3, labels=["Low", "Mid", "High"])
+                        try:
+                            height_bins = pd.qcut(hard_hit["PlateLocHeight"], q=3, labels=["Low", "Mid", "High"], duplicates="drop")
+                        except ValueError:
+                            height_bins = pd.cut(hard_hit["PlateLocHeight"], bins=3, labels=["Low", "Mid", "High"])
                         bs_by_h = hard_hit.groupby(height_bins, observed=True)["BatSpeedProxy"].agg(["mean", "count"]).reset_index()
                         bs_by_h.columns = ["Zone", "Avg Bat Speed", "n"]
                         fig_bs = go.Figure()
@@ -5130,7 +5212,7 @@ def page_hitters_lab(data):
                         showscale=True,
                         colorbar=dict(title="Avg EV", len=0.8),
                     ))
-                    barrels = inplay_ev[(inplay_ev["ExitSpeed"] >= 98) & (inplay_ev["Angle"].between(8, 32))] if "Angle" in inplay_ev.columns else pd.DataFrame()
+                    barrels = inplay_ev[is_barrel_mask(inplay_ev)] if "Angle" in inplay_ev.columns else pd.DataFrame()
                     if len(barrels) > 0:
                         fig_barrel.add_trace(go.Scatter(
                             x=barrels["PlateLocSide"], y=barrels["PlateLocHeight"],
@@ -5348,7 +5430,7 @@ def page_matchup_optimizer(data):
             sw = pt_bdf[pt_bdf["PitchCall"].isin(SWING_CALLS)]
             wh = pt_bdf[pt_bdf["PitchCall"] == "StrikeSwinging"]
             bt = pt_bdf[pt_bdf["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
-            oz = pt_bdf[~((pt_bdf["PlateLocSide"].abs() <= 0.83) & (pt_bdf["PlateLocHeight"].between(1.5, 3.5))) & pt_bdf["PlateLocSide"].notna()]
+            oz = pt_bdf[(~in_zone_mask(pt_bdf)) & pt_bdf["PlateLocSide"].notna()]
             ch = oz[oz["PitchCall"].isin(SWING_CALLS)]
 
             avg_ev = bt["ExitSpeed"].mean() if len(bt) > 0 else 75
@@ -5436,7 +5518,7 @@ def page_matchup_optimizer(data):
             sw = pt_bdf[pt_bdf["PitchCall"].isin(SWING_CALLS)]
             wh = pt_bdf[pt_bdf["PitchCall"] == "StrikeSwinging"]
             bt = pt_bdf[pt_bdf["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
-            br = bt[(bt["ExitSpeed"] >= 98) & (bt["Angle"].between(8, 32))] if len(bt) > 0 else pd.DataFrame()
+            br = bt[is_barrel_mask(bt)] if len(bt) > 0 else pd.DataFrame()
             detail_rows.append({
                 "Pitch": pt,
                 "Opp Usage": f"{pt_usage:.0f}%",
@@ -5781,8 +5863,8 @@ def page_game_planning(data):
                         disp_seq[c] = disp_seq[c].map(lambda x: f"{x:.1f}%")
                     disp_seq["Avg EV"] = disp_seq["Avg EV"].map(lambda x: f"{x:.1f}" if not pd.isna(x) else "-")
                     disp_seq["Tunnel Score"] = disp_seq["Tunnel Score"].map(lambda x: f"{x:.0f}" if not pd.isna(x) else "-")
-                    disp_seq["Combo Score"] = disp_seq["Combo Score"].map(lambda x: f"{x:.0f}")
                     disp_seq = disp_seq.sort_values("Combo Score", ascending=False)
+                    disp_seq["Combo Score"] = disp_seq["Combo Score"].map(lambda x: f"{x:.0f}")
                     st.dataframe(disp_seq.set_index("Sequence"), use_container_width=True)
 
             # ── 3-PITCH & 4-PITCH SEQUENCE ANALYSIS ──────────────
@@ -5862,6 +5944,8 @@ def page_game_planning(data):
 
                             # Tunnel data for the pair transitions
                             pitches = s3.split(" → ")
+                            if len(pitches) < 3:
+                                continue
                             tn_12 = tunnel_lookup.get((pitches[0], pitches[1]))
                             tn_23 = tunnel_lookup.get((pitches[1], pitches[2]))
                             tunnel_avg = np.nanmean([
@@ -6314,7 +6398,7 @@ def page_game_planning(data):
                 "Situation": sit,
                 "Pitches": len(sit_df),
                 "Top Pitch": top_pt,
-                "Zone%": f"{len(sit_df[(sit_df['PlateLocSide'].abs() <= 0.83) & (sit_df['PlateLocHeight'].between(1.5, 3.5))])/max(len(sit_df[sit_df['PlateLocSide'].notna()]),1)*100:.1f}%",
+                "Zone%": f"{in_zone_mask(sit_df).sum()/max(len(sit_df[sit_df['PlateLocSide'].notna()]),1)*100:.1f}%",
                 "Whiff%": f"{len(wh)/max(len(sw),1)*100:.1f}%",
                 "CSW%": f"{len(csw)/len(sit_df)*100:.1f}%",
                 "Avg EV": f"{bt['ExitSpeed'].mean():.1f}" if len(bt) > 0 else "-",
