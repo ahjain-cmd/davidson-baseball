@@ -4555,14 +4555,17 @@ def _pitching_plan_content(tm, team, data, season_filter):
                 return f" → {partner} ({bt['Grade']})"
             if primary:
                 tun_pair = _best_tunnel_partner(primary[0])
-                count_plan_lines.append(f"**0-0 / 1-0**: {primary[0]} zone ({primary[1].get('our_csw', 0):.0f}% CSW){tun_pair}")
+                csw_val = primary[1].get("our_csw", 0)
+                csw_val = csw_val if not pd.isna(csw_val) else 0
+                count_plan_lines.append(f"**0-0 / 1-0**: {primary[0]} zone ({csw_val:.0f}% CSW){tun_pair}")
             if secondary:
                 tun_pair = _best_tunnel_partner(secondary[0])
                 count_plan_lines.append(f"**0-1 / 1-1**: {secondary[0]} expand{tun_pair}")
             if primary:
                 count_plan_lines.append(f"**2-0 / 3-2**: {primary[0]} compete")
             if putaway:
-                whiff_val = putaway[1].get("our_whiff", 0) or 0
+                whiff_val = putaway[1].get("our_whiff", 0)
+                whiff_val = whiff_val if not pd.isna(whiff_val) else 0
                 tun_pair = _best_tunnel_partner(putaway[0])
                 count_plan_lines.append(f"**0-2 / 1-2**: {putaway[0]} bury ({whiff_val:.0f}% whiff){tun_pair}")
             # Discipline adaptation
@@ -4592,9 +4595,9 @@ def _pitching_plan_content(tm, team, data, season_filter):
                         effv_gap = abs(p1_effv - p3_effv) if not pd.isna(p1_effv) and not pd.isna(p3_effv) else np.nan
                     seq_rows.append({
                         "Sequence": s["seq"],
-                        "Score": int(s["score"]),
-                        "Tunnel 1→2": g12,
-                        "Tunnel 2→3": g23,
+                        "Score": int(s["score"]) if not pd.isna(s.get("score", 0)) else 0,
+                        "Tunnel 1→2": str(g12) if g12 else "-",
+                        "Tunnel 2→3": str(g23) if g23 else "-",
                         "Putaway Whiff": f"{s['sw23']:.0f}%" if not pd.isna(s.get("sw23")) else "-",
                         "Their 2K on P3": f"{s['their_2k']:.0f}%" if not pd.isna(s.get("their_2k")) else "-",
                         "EffV Gap": f"{effv_gap:.1f}" if not pd.isna(effv_gap) else "-",
