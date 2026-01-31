@@ -1,0 +1,696 @@
+﻿Rank,playerId,abbrevName,playerFullName,player,playerFirstName,pos,newestTeamName,newestTeamAbbrevName,newestTeamId,newestTeamLocation,newestTeamLevel,batsHand,throwsHand,G,BF,P,4Seam%,Sink2Seam%,Cutter%,Slider%,Curve%,Change%,Split%,Sweeper%,Unknown%,FastSink%,Soft%,Break%
+1,1230206464,J. Rizzo,John Rizzo,Rizzo,John,P,Stony Brook University,STON,730249984,Stony Brook,BBC,R,R,13,261,897,83.3%,1.7%,0.5%,13.0%,0.0%,1.5%,0.0%,0.0%,13.2%,85.0%,14.5%,13.0%
+2,1192860928,J. Phipps,Jackson Phipps,Phipps,Jackson,P,Jacksonville State University,JVST,730225408,Jacksonville State,BBC,L,L,15,326,1257,79.2%,2.1%,0.3%,8.7%,1.5%,8.2%,0.0%,0.0%,0.0%,81.3%,18.4%,10.2%
+3,1142126848,R. Ojeda,Ricky Ojeda,Ojeda,Ricky,P,UC Irvine,UCI,3031,UC Irvine,BBC,L,L,29,279,1151,79.1%,0.0%,0.0%,5.9%,9.3%,3.9%,1.7%,0.1%,1.4%,79.1%,20.9%,15.3%
+4,1084482817,K. Deverman,Kenton Deverman,Deverman,Kenton,P,University of Evansville,EVAN,730327808,Evansville,BBC,L,L,12,300,1018,78.3%,0.1%,0.0%,18.5%,0.9%,2.2%,0.0%,0.0%,8.0%,78.4%,21.6%,19.3%
+5,1643596490,N. Mertens,Nathan Mertens,Mertens,Nathan,P,Southeast Missouri State University,SEMO,730168576,Southeast Missouri State,BBC,R,R,15,315,1085,76.6%,0.0%,0.0%,0.7%,0.7%,6.1%,15.9%,0.0%,4.5%,76.6%,23.4%,1.4%
+6,1795608420,T. Carey,Tate Carey,Carey,Tate,P,University of Michigan,MICH,2290,Michigan,BBC,R,R,18,241,898,76.6%,0.6%,0.4%,9.2%,0.1%,11.1%,0.0%,0.0%,0.6%,77.2%,22.4%,11.3%
+7,1220541184,H. Cain,Harry Cain,Cain,Harry,P,Kennesaw State University,KENN,730197504,Kennesaw State,BBC,R,R,19,277,1075,76.6%,0.0%,0.0%,10.8%,6.2%,6.4%,0.0%,0.0%,1.4%,76.6%,23.4%,17.0%
+8,1143021312,G. Gambradella,Gianni Gambradella,Gambradella,Gianni,P,University of Maine,ME,730275840,Maine,BBC,R,R,15,278,986,75.7%,2.3%,0.0%,15.5%,0.0%,6.5%,0.0%,0.0%,32.8%,78.0%,22.0%,15.5%
+9,1434544801,V. Loa,Victor Loa,Loa,Victor,P,University of Texas Rio Grande Valley,UTRGV,730192128,UT Rio Grande Valley,BBC,L,L,14,248,994,75.2%,0.5%,0.2%,17.8%,2.2%,4.0%,0.0%,0.0%,5.5%,75.7%,24.1%,20.0%
+10,1378876660,R. King,Ryan King,King,Ryan,P,CSU Bakersfield,CSB,730283008,CSU Bakersfield,BBC,R,R,14,323,1224,74.9%,0.0%,0.0%,8.7%,15.8%,0.1%,0.2%,0.4%,6.9%,74.9%,25.1%,24.8%
+11,1306838784,S. Seid,Spencer Seid,Seid,Spencer,P,UC San Diego,UCSD,730348032,UC San Diego,BBC,L,L,16,243,980,74.3%,0.4%,4.7%,8.9%,0.4%,7.7%,3.1%,0.5%,3.5%,74.7%,20.6%,9.8%
+12,1158279680,B. Frederick,Brady Frederick,Frederick,Brady,P,East Tennessee State University,ETSU,4844,East Tennessee State,BBC,R,R,24,305,1147,74.3%,8.6%,0.0%,16.6%,0.3%,0.3%,0.0%,0.0%,0.6%,82.9%,17.1%,16.8%
+13,1139726080,C. Book,Colton Book,Book,Colton,P,Saint Joseph's University,JOES,730332416,Saint Joseph's,BBC,R,L,14,349,1312,73.7%,0.2%,0.0%,16.7%,0.0%,9.5%,0.0%,0.0%,11.7%,73.8%,26.2%,16.7%
+14,1191087360,M. Alduino,Matt Alduino,Alduino,Matt,P,Quinnipiac University,QUIN,730386688,Quinnipiac,BBC,L,L,20,284,1004,71.9%,0.0%,1.1%,3.2%,0.0%,23.8%,0.0%,0.0%,72.0%,71.9%,27.0%,3.2%
+15,1257460992,T. Grenn,Tyler Grenn,Grenn,Tyler,P,U.S. Naval Academy,NAVY,508,Navy,BBC,L,R,13,326,1144,71.8%,0.1%,0.1%,9.4%,17.4%,1.1%,0.0%,0.0%,8.3%,71.9%,28.0%,26.9%
+16,1187051520,G. Barrett,Gabriel Barrett,Barrett,Gabriel,P,University of San Francisco,SF,730365696,San Francisco,BBC,R,R,19,269,988,71.7%,3.1%,0.0%,18.8%,1.0%,5.4%,0.0%,0.0%,5.2%,74.8%,25.2%,19.7%
+17,1172966144,P. Hampton,Parker Hampton,Hampton,Parker,P,Norfolk State University,NORF,3904,Norfolk State,BBC,R,R,13,283,700,71.7%,0.0%,0.0%,15.0%,0.0%,13.3%,0.0%,0.0%,91.4%,71.7%,28.3%,15.0%
+18,1342168677,C. Scolari,Cal Scolari,Scolari,Cal,P,University of San Diego,USD,5320,San Diego,BBC,R,R,15,306,1305,71.6%,0.1%,2.1%,21.1%,0.2%,4.9%,0.0%,0.0%,0.0%,71.7%,26.2%,21.3%
+19,1446535769,E. Pena,Esaid Pena,Pena,Esaid,P,Alabama State University,ALST,4765,Alabama State,BBC,R,R,16,326,1176,71.4%,0.3%,5.3%,9.1%,7.3%,6.7%,0.0%,0.0%,36.1%,71.6%,23.0%,16.4%
+20,1226973184,N. Vidmar,Nathan Vidmar,Vidmar,Nathan,P,Delaware State University,DSU,730217984,Delaware State,BBC,R,R,12,323,901,71.3%,0.0%,0.0%,23.8%,0.0%,5.0%,0.0%,0.0%,88.8%,71.3%,28.7%,23.8%
+21,1112928512,S. Gonzalez,Sebastian Gonzalez,Gonzalez,Sebastian,P,"University of Hawaii, Manoa",HAW,730158848,Hawaii,BBC,L,L,18,249,895,71.2%,0.0%,0.4%,12.0%,3.9%,9.3%,0.0%,3.3%,42.1%,71.2%,28.4%,19.1%
+22,1162573312,A. Payamps,Andrelys Payamps,Payamps,Andrelys,P,Iona College,IONA,730242048,Iona,BBC,R,R,12,275,1012,70.4%,0.0%,0.0%,1.4%,21.1%,7.0%,0.0%,0.0%,93.0%,70.4%,29.6%,22.5%
+23,1155642112,N. Deschryver,Nate Deschryver,Deschryver,Nathan,P,New Jersey Institute of Technology,NJIT,730313216,NJIT,BBC,R,R,16,282,1155,70.3%,0.0%,17.3%,10.7%,1.5%,0.0%,0.2%,0.0%,47.5%,70.3%,12.4%,12.2%
+24,1804936858,M. Blasche,Mason Blasche,Blasche,Mason,P,Samford University,SAM,730386432,Samford,BBC,R,R,16,300,1099,70.2%,0.2%,0.0%,12.7%,5.4%,11.3%,0.0%,0.1%,9.3%,70.4%,29.6%,18.3%
+25,1310641921,G. Jones,Gavin Jones,Jones,Gavin,P,Kent State University,KENT,730315008,Kent State,BBC,R,R,15,331,1160,69.5%,0.8%,0.4%,19.6%,4.4%,5.2%,0.0%,0.0%,58.7%,70.4%,29.2%,24.0%
+26,1309474816,C. Leys,Caleb Leys,Leys,Caleb,P,University of Maine,ME,730275840,Maine,BBC,R,L,14,279,1115,69.4%,0.1%,0.0%,22.0%,1.4%,7.0%,0.0%,0.0%,19.0%,69.5%,30.5%,23.5%
+27,1693525648,C. Hunter,Caden Hunter,Hunter,Caden,P,University of Southern California,USC,5047,USC,BBC,R,L,16,316,1307,69.3%,0.0%,2.2%,12.6%,0.3%,15.1%,0.6%,0.0%,0.2%,69.3%,28.6%,12.9%
+28,1201847438,K. Hawks,Kamden Hawks,Hawks,Kamden,P,Morehead State University,MORE,730158080,Morehead State,BBC,L,L,14,291,1108,69.1%,2.2%,0.0%,20.4%,2.8%,3.0%,2.5%,0.0%,22.8%,71.3%,28.7%,23.2%
+29,1301147904,B. Owens,Braylon Owens,Owens,Braylon,P,UTSA,UTSA,730373120,UTSA,BBC,R,R,21,393,1535,69.1%,0.3%,4.2%,15.9%,5.0%,5.4%,0.1%,0.0%,0.3%,69.3%,26.4%,20.9%
+30,1092635904,C. Cosper,Colton Cosper,Cosper,Colton,P,Mercer University,MER,730240512,Mercer,BBC,L,L,16,362,1435,68.4%,0.1%,0.0%,21.7%,2.1%,7.7%,0.0%,0.0%,0.3%,68.5%,31.5%,23.8%
+31,1192664576,R. DeSanto,Ryan DeSanto,DeSanto,Ryan,P,Penn State University,PSU,5326,Penn State,BBC,L,L,15,313,1229,68.3%,0.9%,0.0%,10.3%,9.0%,11.6%,0.0%,0.0%,0.0%,69.2%,30.8%,19.3%
+32,1186273280,L. Bravo,Leonardo Bravo,Bravo,Leonardo,P,Prairie View A&M University,PV,4766,Prairie View A&M,BBC,R,R,24,326,1014,68.1%,0.0%,0.0%,14.5%,5.8%,11.6%,0.0%,0.0%,86.4%,68.1%,31.9%,20.3%
+33,1090996736,J. Guardado,Jakob Guardado,Guardado,Jakob,TWP,University of the Pacific,PAC,730386944,Pacific,BBC,L,R,17,266,984,67.9%,0.0%,0.0%,14.0%,9.0%,9.0%,0.0%,0.0%,10.2%,67.9%,32.1%,23.1%
+34,1505049816,J. Sitton,Jacob Sitton,Sitton,Jacob,P,University of Tennessee at Martin,UTM,730238976,UT Martin,BBC,R,R,15,359,1282,67.7%,0.0%,0.0%,19.2%,6.8%,6.4%,0.0%,0.0%,43.5%,67.7%,32.3%,26.0%
+35,1153707520,M. McEwen,Max McEwen,McEwen,Max,P,Indiana State University,INST,730350080,Indiana State,BBC,R,R,13,268,985,67.7%,3.2%,4.1%,14.0%,2.3%,8.5%,0.0%,0.2%,11.5%,70.9%,25.0%,16.5%
+36,1336116224,J. Cunningham,Josh Cunningham,Cunningham,Josh,P,Saint Louis University,SLU,2291,St. Louis,BBC,R,R,16,293,998,67.5%,0.1%,0.4%,17.0%,10.5%,4.5%,0.0%,0.0%,7.3%,67.6%,32.0%,27.5%
+37,1643908365,A. Phillips,Amp Phillips,Phillips,Amp,P,University of South Carolina Upstate,SCUS,730317312,South Carolina Upstate,BBC,R,R,20,340,1279,67.5%,0.0%,0.0%,26.0%,5.4%,0.8%,0.3%,0.0%,0.5%,67.5%,32.5%,31.4%
+38,1911168487,W. Paxton,Will Paxton,Paxton,Will,P,Saint Peter's University,SPC,730149888,Saint Peter's,BBC,R,R,16,281,883,67.2%,0.0%,0.0%,30.2%,0.0%,2.6%,0.0%,0.0%,86.9%,67.2%,32.8%,30.2%
+39,1885727262,M. Vallone,Michael Vallone,Vallone,Michael,P,Purdue University,PUR,730353152,Purdue,BBC,L,L,21,254,927,67.2%,0.1%,0.0%,24.3%,0.8%,7.6%,0.0%,0.0%,5.9%,67.3%,32.7%,25.1%
+40,1163548928,R. Orloski,Robert Orloski,Orloski,Robert,P,UTSA,UTSA,730373120,UTSA,BBC,R,R,27,296,1214,66.9%,0.1%,11.3%,8.5%,10.3%,2.9%,0.1%,0.0%,1.2%,67.0%,21.8%,18.8%
+41,1279513344,A. Rubayo,Andrew Rubayo,Rubayo,Andrew,P,Quinnipiac University,QUIN,730386688,Quinnipiac,BBC,R,R,23,276,891,66.8%,3.4%,0.0%,19.3%,0.4%,10.1%,0.0%,0.0%,73.3%,70.2%,29.8%,19.7%
+42,1239129600,D. Thompson,Danny Thompson,Thompson,Danny,P,UNC Greensboro,UNCG,730238720,UNC Greensboro,BBC,R,R,23,264,1134,66.7%,0.0%,0.0%,28.3%,0.0%,4.9%,0.2%,0.0%,2.6%,66.7%,33.3%,28.3%
+43,1323373824,J. Story,Jake Storey,Story,Jake,P,University of Northern Colorado,UNCO,730286592,Northern Colorado,BBC,R,R,14,320,1125,66.6%,0.7%,1.3%,23.9%,4.8%,2.7%,0.0%,0.0%,50.2%,67.3%,31.4%,28.7%
+44,1204946432,P. Forbes,Patrick Forbes,Forbes,Patrick,P,University of Louisville,LOU,5467,Louisville,BBC,R,R,15,319,1376,66.6%,3.1%,2.5%,26.4%,0.0%,1.5%,0.0%,0.0%,0.0%,69.7%,27.8%,26.4%
+45,1297538560,S. Lopez,Sergio Lopez,Lopez,Sergio,P,McNeese State University,MCNS,730285056,McNeese State,BBC,R,R,15,223,797,66.4%,4.9%,0.0%,17.8%,0.0%,10.9%,0.0%,0.0%,7.7%,71.3%,28.7%,17.8%
+46,1128102459,D. Whitney,Dax Whitney,Whitney,Dax,P,Oregon State University,ORST,3111,Oregon State,BBC,R,R,17,330,1403,66.1%,0.1%,0.1%,11.9%,14.9%,6.9%,0.0%,0.0%,5.9%,66.2%,33.7%,26.8%
+47,1490865642,K. Dove,Kamar Dove,Dove,Kamar,P,Prairie View A&M University,PV,4766,Prairie View A&M,BBC,R,R,16,272,778,66.0%,0.0%,0.0%,0.0%,18.0%,16.0%,0.0%,0.0%,87.1%,66.0%,34.0%,18.0%
+48,1232886784,M. Parker,Max Parker,Parker,Max,P,Le Moyne College,LMC,730202880,Le Moyne,BBC,L,L,14,373,1240,66.0%,0.0%,0.0%,7.2%,10.2%,16.6%,0.0%,0.0%,69.9%,66.0%,34.0%,17.4%
+49,1909941695,O. Pudvar,Oliver Pudvar,Pudvar,Oliver,P,University of Connecticut,CONN,5486,Connecticut,BBC,L,L,14,302,1221,65.9%,0.0%,0.0%,18.8%,0.2%,15.0%,0.0%,0.0%,0.7%,65.9%,34.1%,19.1%
+50,1185610753,D. Fritton,Dom Fritton,Fritton,Dom,P,North Carolina State University,NCST,730216448,North Carolina State,BBC,L,L,17,389,1589,65.5%,0.0%,0.0%,26.0%,4.3%,2.5%,1.8%,0.0%,0.1%,65.5%,34.5%,30.3%
+51,1827768225,L. Grant,Landyn Grant,Grant,Landyn,P,Prairie View A&M University,PV,4766,Prairie View A&M,BBC,R,L,13,317,938,65.4%,0.0%,0.0%,10.5%,14.2%,9.7%,0.0%,0.3%,60.2%,65.4%,34.6%,24.9%
+52,1313524992,E. Marmie,Ethan Marmie,Marmie,Ethan,P,Cal Poly,CP,5487,Cal Poly,BBC,R,R,16,319,1098,65.2%,1.1%,17.0%,1.9%,0.0%,14.8%,0.0%,0.0%,0.0%,66.3%,16.7%,1.9%
+53,1326983680,K. Echeman,Kaden Echeman,Echeman,Kaden,P,Northern Kentucky University,NKU,730230272,Northern Kentucky,BBC,R,R,12,244,1034,65.0%,0.4%,12.3%,2.7%,16.6%,3.0%,0.0%,0.0%,32.3%,65.4%,22.3%,19.3%
+54,1317943808,R. Ramos,Rigo Ramos,Ramos,Rigo,P,Lipscomb University,LIP,730307072,Lipscomb,BBC,L,L,15,288,1108,64.8%,0.0%,0.1%,20.2%,12.4%,0.7%,1.8%,0.0%,14.5%,64.8%,35.1%,32.5%
+55,1263499264,B. Green,Bryan Green,Green,Bryan,P,UC Davis,UCD,730153984,UC Davis,BBC,L,L,15,341,1311,64.7%,0.2%,4.4%,11.1%,11.8%,6.2%,0.0%,1.5%,0.7%,64.9%,30.7%,24.5%
+56,1709079320,E. Kleinschmit,Ethan Kleinschmit,Kleinschmit,Ethan,P,Oregon State University,ORST,3111,Oregon State,BBC,L,L,17,376,1548,64.4%,4.4%,0.0%,22.3%,0.7%,6.1%,0.0%,2.2%,4.3%,68.8%,31.2%,25.1%
+57,1153300736,J. Anker,Jack Anker,Anker,Jack,P,Fresno State,FRES,730384384,Fresno State,BBC,R,R,16,432,1678,64.3%,0.0%,8.6%,2.8%,12.1%,12.2%,0.1%,0.0%,0.2%,64.3%,27.1%,14.9%
+58,1187057664,T. Scavone,Tommy Scavone,Scavone,Tommy,P,Pepperdine University,PEPP,730338304,Pepperdine,BBC,R,R,12,251,955,64.3%,0.0%,2.5%,13.4%,6.6%,13.2%,0.0%,0.0%,19.4%,64.3%,33.2%,20.0%
+59,1290248192,J. Knapp,Jake Knapp,Knapp,Jake,P,University of North Carolina,UNC,730181888,North Carolina,BBC,R,R,16,397,1587,64.3%,0.1%,0.8%,15.1%,0.3%,19.2%,0.1%,0.0%,0.0%,64.4%,34.8%,15.5%
+60,1243275008,R. Kelly,Riley Kelly,Kelly,Riley,P,UC Irvine,UCI,3031,UC Irvine,BBC,R,R,17,294,1215,64.2%,0.0%,0.1%,3.9%,18.7%,13.1%,0.0%,0.0%,2.5%,64.2%,35.7%,22.6%
+61,1266982912,C. Lane,Carson Lane,Lane,Carson,P,UNLV,UNLV,730161664,UNLV,BBC,R,R,15,347,1388,64.2%,0.1%,17.9%,7.5%,4.0%,3.7%,2.6%,0.0%,0.7%,64.4%,17.8%,11.5%
+62,1408559031,L. Kinneen,Liam Kinneen,Kinneen,Liam,P,Princeton University,PRIN,730198784,Princeton,BBC,R,R,11,238,939,64.0%,0.1%,0.0%,2.6%,29.8%,3.5%,0.0%,0.0%,0.2%,64.1%,35.9%,32.3%
+63,1275960320,F. OBrien,Finbar O'Brien,OBrien,Finbar,P,Gonzaga University,GONZ,730200832,Gonzaga,BBC,L,R,16,331,1347,63.9%,0.1%,0.1%,28.8%,0.1%,7.1%,0.0%,0.0%,0.1%,64.0%,36.0%,28.9%
+64,1296162560,S. McAlinden,Shane McAlinden,McAlinden,Shane,P,CSU Bakersfield,CSB,730283008,CSU Bakersfield,BBC,R,R,14,286,1002,63.8%,0.0%,1.6%,4.9%,29.0%,0.7%,0.0%,0.0%,16.4%,63.8%,34.6%,33.9%
+65,1276142592,B. Alekson,Ben Alekson,Alekson,Ben,P,Fairfield University,FAIR,730380544,Fairfield,BBC,R,R,16,393,1390,63.8%,0.3%,0.0%,18.0%,0.0%,18.0%,0.0%,0.0%,71.6%,64.1%,35.9%,18.0%
+66,1306683393,C. Alderman,Chandler Alderman,Alderman,Chandler,P,Middle Tennessee State University,MTU,730158336,Middle Tennessee State,BBC,R,L,14,329,1265,63.8%,0.0%,0.5%,27.9%,0.4%,7.4%,0.0%,0.0%,0.2%,63.8%,35.7%,28.3%
+67,1334328832,J. Hartlaub,Jacob Hartlaub,Hartlaub,Jacob,P,Ball State University,BALL,730195456,Ball State,BBC,R,R,15,358,1347,63.6%,0.0%,0.3%,25.2%,2.4%,8.4%,0.1%,0.0%,15.9%,63.6%,36.1%,27.6%
+68,1911067757,J. Savinon,Jordan Savinon,Savinon,Jordan,P,Fairleigh Dickinson University,FDU,730355200,Fairleigh Dickinson,BBC,L,L,18,278,936,63.5%,0.0%,4.7%,2.6%,23.4%,5.7%,0.0%,0.0%,79.5%,63.5%,31.8%,26.0%
+69,1135887872,J. Martinez,Joshua Martinez,Martinez,Joshua,P,UC Riverside,UCRV,730281728,UC Riverside,BBC,L,L,24,288,1069,63.5%,2.5%,0.0%,21.8%,3.5%,8.8%,0.0%,0.0%,25.3%,66.0%,34.0%,25.3%
+70,1342169627,R. Piech,Ryan Piech,Piech,Ryan,P,Xavier University,XAV,5464,Xavier,BBC,R,R,14,270,1170,63.4%,0.0%,1.7%,16.5%,10.3%,8.1%,0.0%,0.0%,0.0%,63.4%,34.9%,26.8%
+71,1334270720,N. Johnson,Nolan Johnson,Johnson,Nolan,P,North Dakota State University,NDSU,730343168,North Dakota State,BBC,L,L,16,373,1456,63.3%,1.0%,1.0%,11.6%,0.6%,22.6%,0.0%,0.0%,14.8%,64.2%,34.8%,12.2%
+72,1142967552,J. DeCastro,Justin DeCastro,DeCastro,Justin,P,Long Island University-Brooklyn,LIU,730352896,LIU Brooklyn,BBC,R,R,15,405,1266,63.2%,5.5%,0.5%,7.0%,0.0%,23.7%,0.0%,0.0%,16.8%,68.8%,30.8%,7.0%
+73,1079520512,E. Garcia,EJ Garcia,Garcia,EJ,P,University of the Incarnate Word,IW,730225152,Incarnate Word,BBC,R,R,21,324,1039,63.2%,3.6%,1.4%,18.1%,5.0%,8.7%,0.0%,0.0%,22.4%,66.8%,31.8%,23.1%
+74,1163175424,C. Kennedy,Colton Kennedy,Kennedy,Colton,P,Utah Valley University,UVU,730263552,Utah Valley,BBC,R,R,16,327,1203,63.0%,0.2%,13.4%,9.0%,8.2%,6.3%,0.0%,0.0%,8.6%,63.2%,23.5%,17.2%
+75,1239591168,T. Kapraun,Tyler Kapraun,Kapraun,Tyler,P,Eastern Illinois University,EIU,730271744,Eastern Illinois,BBC,L,L,15,350,1123,63.0%,5.0%,0.0%,17.4%,4.0%,10.6%,0.0%,0.0%,26.9%,68.0%,32.0%,21.4%
+76,1263546112,K. Braziel,Kewan Braziel,Braziel,Kewan,P,Texas Southern University,TXSO,4768,Texas Southern,BBC,L,L,18,306,852,62.9%,0.0%,0.0%,15.2%,15.2%,6.6%,0.0%,0.0%,64.4%,62.9%,37.1%,30.5%
+77,1238148096,C. Flukey,Cameron Flukey,Flukey,Cameron,P,Coastal Carolina University,CCAR,4104,Coastal Carolina,BBC,R,R,18,414,1520,62.8%,0.0%,5.2%,8.0%,19.9%,4.1%,0.0%,0.0%,0.0%,62.8%,32.0%,27.9%
+78,1085416704,L. Doyle,Liam Doyle,Doyle,Liam,P,University of Tennessee,TENN,730153728,Tennessee,BBC,R,L,19,385,1601,62.8%,0.0%,11.5%,11.5%,1.1%,1.6%,11.5%,0.0%,0.2%,62.8%,25.7%,12.6%
+79,1302428416,J. McCoy,Jake McCoy,McCoy,Jake,P,University of South Carolina,SCAR,730348544,South Carolina,BBC,L,L,14,291,1167,62.8%,1.7%,1.7%,26.8%,0.2%,6.9%,0.0%,0.0%,0.1%,64.5%,33.8%,26.9%
+80,1859897718,A. Walsh,Alex Walsh,Walsh,Alex,P,Jacksonville University,JAC,730335488,Jacksonville,BBC,L,L,16,290,1083,62.7%,1.7%,0.0%,29.0%,0.2%,6.4%,0.0%,0.0%,49.8%,64.3%,35.7%,29.2%
+81,1255332608,G. Ahern,Garrett Ahern,Ahern,Garrett,P,Grand Canyon University,GC,5310,Grand Canyon,BBC,R,R,15,360,1340,62.6%,6.0%,0.2%,9.3%,0.0%,21.9%,0.0%,0.0%,7.3%,68.6%,31.2%,9.3%
+82,1310590208,M. Heuer,Mac Heuer,Heuer,Mac,P,Texas Tech University,TTU,2350,Texas Tech,BBC,R,R,14,243,1034,62.6%,7.2%,0.9%,18.0%,3.1%,8.3%,0.0%,0.0%,0.0%,69.7%,29.4%,21.1%
+83,1207768064,B. Mikos,Brandon Mikos,Mikos,Brandon,P,Youngstown State University,YSU,730284544,Youngstown State,BBC,R,R,14,271,1023,62.1%,0.0%,0.0%,27.6%,3.6%,6.7%,0.0%,0.0%,43.0%,62.1%,37.9%,31.2%
+84,1279297536,J. Brink,Jake Brink,Brink,Jake,P,College of Charleston,COFC,730177792,College of Charleston,BBC,R,R,16,407,1410,62.1%,0.1%,0.2%,12.1%,1.6%,23.9%,0.1%,0.0%,8.6%,62.1%,37.6%,13.7%
+85,1357310320,J. Marciano,Jake Marciano,Marciano,Jake,P,Virginia Tech,VT,2293,Virginia Tech,BBC,L,L,15,278,1085,62.0%,4.5%,6.9%,14.6%,0.8%,11.0%,0.0%,0.0%,0.4%,66.5%,26.5%,15.5%
+86,1937598904,D. Boruff,Dalton Boruff,Boruff,Dalton,P,Eastern Illinois University,EIU,730271744,Eastern Illinois,BBC,R,R,22,254,935,61.9%,0.0%,3.4%,19.2%,7.2%,8.3%,0.0%,0.0%,21.1%,61.9%,34.7%,26.4%
+87,1984231284,A. Kelly,Aiden Kelly,Kelly,Aiden,P,Mercyhurst College,MCYH,730196224,Mercyhurst,BBC,R,R,14,346,1255,61.9%,0.2%,0.0%,35.6%,1.1%,1.1%,0.0%,0.0%,64.9%,62.1%,37.9%,36.7%
+88,1202396160,M. Gosztola,Miles Gosztola,Gosztola,Miles,P,Gonzaga University,GONZ,730200832,Gonzaga,BBC,L,L,16,368,1360,61.8%,0.0%,0.1%,17.9%,1.0%,19.2%,0.0%,0.0%,0.6%,61.8%,38.1%,18.9%
+89,1114455808,J. Toporek,Jake Toporek,Toporek,Jake,P,Wagner College,WAG,730192640,Wagner,BBC,S,L,15,359,1063,61.8%,0.0%,0.0%,16.7%,0.0%,21.5%,0.0%,0.0%,82.5%,61.8%,38.2%,16.7%
+90,1085395712,E. Smink,Eddie Smink,Smink,Eddie,P,Stony Brook University,STON,730249984,Stony Brook,BBC,R,R,14,296,1044,61.8%,1.9%,0.6%,19.1%,9.3%,7.4%,0.0%,0.0%,13.2%,63.7%,35.8%,28.4%
+91,1180787200,A. Roblez,Albert Roblez,Roblez,Albert,P,Long Beach State University,LBSU,730224128,Long Beach State,BBC,R,R,19,243,980,61.8%,0.0%,0.1%,32.3%,2.6%,3.2%,0.0%,0.0%,5.1%,61.8%,38.1%,34.9%
+92,1132708864,N. Edders,Noah Edders,Edders,Noah,P,Troy University,TROY,730378496,Troy,BBC,R,R,14,283,1019,61.7%,0.9%,0.0%,29.7%,0.9%,6.9%,0.0%,0.0%,0.1%,62.6%,37.4%,30.6%
+93,1196329728,A. Perez,Adan Perez,Perez,Adan,P,University of the Pacific,PAC,730386944,Pacific,BBC,R,R,14,332,1251,61.7%,0.0%,0.6%,27.3%,0.7%,9.8%,0.0%,0.0%,27.4%,61.7%,37.8%,28.0%
+94,1184444416,D. Brooks,Daniel Brooks,Brooks,Daniel,P,College of Charleston,COFC,730177792,College of Charleston,BBC,R,R,17,322,1165,61.5%,0.4%,3.0%,17.6%,2.6%,14.9%,0.0%,0.0%,0.9%,61.9%,35.1%,20.2%
+95,1311044608,M. Riggins,Miller Riggins,Riggins,Miller,P,Samford University,SAM,730386432,Samford,BBC,L,L,15,354,1326,61.3%,0.4%,0.4%,21.5%,1.4%,11.9%,3.0%,0.0%,7.5%,61.7%,37.8%,22.9%
+96,1383375719,B. Shea,Bryson Shea,Shea,Bryson,P,Texas A&M-Corpus Christi,AMCC,4764,Texas A&M-Corpus Christi,BBC,R,R,17,237,853,61.3%,0.9%,0.1%,0.0%,20.6%,17.2%,0.0%,0.0%,17.4%,62.1%,37.7%,20.6%
+97,1211070976,B. Grable,Ben Grable,Grable,Ben,P,"Indiana University, Bloomington",IND,4866,Indiana,BBC,R,R,17,244,991,61.3%,0.0%,0.0%,30.3%,0.2%,1.4%,6.9%,0.0%,0.0%,61.3%,38.7%,30.5%
+98,1142669377,J. Murray,Jake Murray,Murray,Jake,P,Campbell University,CAMP,730187776,Campbell,BBC,L,L,15,284,1165,61.2%,0.0%,2.8%,5.3%,23.0%,7.8%,0.0%,0.0%,0.5%,61.2%,36.0%,28.2%
+99,1231225856,J. Salinas,Josh Salinas,Salinas,Josh,P,University of the Incarnate Word,IW,730225152,Incarnate Word,BBC,L,L,13,311,1108,61.1%,1.8%,0.7%,23.3%,3.4%,9.8%,0.0%,0.0%,33.4%,62.9%,36.4%,26.7%
+100,1087364096,B. Lanman,Brett Lanman,Lanman,Brett,P,Abilene Christian University,AC,730375936,Abilene Christian,BBC,L,L,15,336,1278,61.1%,0.7%,23.3%,4.8%,7.8%,2.3%,0.0%,0.0%,11.2%,61.8%,14.9%,12.6%
+101,1279708672,A. Boster,Aaron Boster,Boster,Aaron,P,Northern Kentucky University,NKU,730230272,Northern Kentucky,BBC,L,L,15,303,1158,61.0%,0.0%,1.9%,16.7%,3.5%,16.9%,0.0%,0.0%,41.1%,61.0%,37.1%,20.2%
+102,1278775808,C. Montgomery,Cade Montgomery,Montgomery,Cade,P,Utah Tech University,UTU,730318592,Utah Tech,BBC,R,R,10,238,906,60.9%,0.0%,17.6%,11.0%,0.2%,10.3%,0.0%,0.0%,0.1%,60.9%,21.5%,11.3%
+103,1299957248,J. Ackerman,Jess Ackerman,Ackerman,Jess,P,Mercer University,MER,730240512,Mercer,BBC,L,L,18,315,1270,60.8%,0.9%,1.7%,13.2%,0.0%,23.3%,0.0%,0.0%,0.5%,61.7%,36.6%,13.2%
+104,1210662144,M. Mariano,Matthew Mariano,Mariano,Matthew,P,University at Albany,ALBY,730280448,Albany,BBC,R,R,20,293,1063,60.7%,0.0%,6.3%,22.6%,3.7%,6.7%,0.0%,0.0%,56.6%,60.7%,33.0%,26.2%
+105,1244431523,T. Kapa,Tyler Kapa,Kapa,Tyler,P,Eastern Michigan University,EMU,5385,Eastern Michigan,BBC,R,R,17,323,1321,60.7%,0.0%,0.1%,24.7%,7.1%,3.2%,4.2%,0.0%,23.5%,60.7%,39.2%,31.8%
+106,1227043072,D. West,Dakoda West,West,Dakoda,P,Utah Tech University,UTU,730318592,Utah Tech,BBC,R,R,14,278,1028,60.7%,0.0%,0.0%,14.8%,19.2%,5.4%,0.0%,0.0%,16.4%,60.7%,39.3%,34.0%
+107,1084690944,Z. Wager,Zach Wager,Wager,Zach,P,University of Tennessee at Martin,UTM,730238976,UT Martin,BBC,R,L,17,299,995,60.5%,0.0%,0.0%,21.0%,1.5%,16.9%,0.0%,0.0%,53.7%,60.5%,39.5%,22.6%
+108,1169302528,G. Grinsell,Grayson Grinsell,Grinsell,Grayson,P,University of Oregon,ORE,4807,Oregon,BBC,L,L,16,393,1586,60.5%,0.0%,0.2%,0.9%,6.6%,31.7%,0.0%,0.0%,0.0%,60.5%,39.3%,7.6%
+109,1090284544,P. Edwards,Parker Edwards,Edwards,Parker,P,Houston Christian University,HCU,730157824,Houston Christian,BBC,R,R,17,389,1347,60.3%,0.0%,5.8%,13.5%,2.3%,11.5%,6.5%,0.0%,22.2%,60.3%,33.9%,15.8%
+110,1747080880,G. Smith,Griffin Smith,Smith,Griffin,P,Washington State University,WSU,4505,Washington State,BBC,R,R,16,363,1338,60.2%,0.1%,3.2%,13.4%,0.6%,22.6%,0.0%,0.0%,8.7%,60.2%,36.6%,13.9%
+111,1235307520,E. Foster,Elijah Foster,Foster,Elijah,P,Sacred Heart University,SHU,730194944,Sacred Heart,BBC,R,R,15,340,1292,60.1%,1.8%,0.0%,27.3%,0.4%,10.3%,0.0%,0.0%,79.0%,62.0%,38.0%,27.7%
+112,1311176448,J. Ruzicka,Joe Ruzicka,Ruzicka,Joe,P,Belmont University,BEL,730190336,Belmont,BBC,R,R,15,345,1375,60.1%,0.6%,19.3%,5.0%,8.1%,6.8%,0.0%,0.0%,1.9%,60.7%,19.9%,13.1%
+113,1094692864,A. Lyon,Alex Lyon,Lyon,Alex,P,College of Charleston,COFC,730177792,College of Charleston,BBC,R,R,31,258,855,60.1%,4.0%,0.0%,33.9%,0.4%,1.7%,0.0%,0.0%,0.9%,64.1%,35.9%,34.2%
+114,1201255936,T. Conklin,Tyler Conklin,Conklin,Tyler,P,Eastern Illinois University,EIU,730271744,Eastern Illinois,BBC,R,R,11,268,991,60.1%,10.5%,0.0%,21.7%,1.9%,5.7%,0.0%,0.1%,13.5%,70.6%,29.4%,23.7%
+115,1263117312,C. Kirk,Corbin Kirk,Kirk,Corbin,P,Utah Valley University,UVU,730263552,Utah Valley,BBC,L,L,16,376,1421,60.0%,0.6%,12.3%,7.2%,1.7%,18.1%,0.0%,0.0%,6.8%,60.6%,27.1%,9.0%
+116,1129425152,N. Higgins,Nolan Higgins,Higgins,Nolan,P,Michigan State University,MSU,1551,Michigan State,BBC,R,R,15,297,1097,59.9%,0.0%,0.0%,16.1%,13.9%,10.1%,0.0%,0.0%,0.5%,59.9%,40.1%,30.0%
+116,1003021622,H. Hayashi,Heitaro Hayashi,Hayashi,Heitaro,P,Wagner College,WAG,730192640,Wagner,BBC,L,L,16,242,736,59.9%,0.0%,0.0%,17.0%,15.4%,7.7%,0.0%,0.0%,75.3%,59.9%,40.1%,32.4%
+118,1172425216,O. Kelly,Owen Kelly,Kelly,Owen,P,Saint Louis University,SLU,2291,St. Louis,BBC,R,R,15,356,1233,59.7%,6.1%,0.3%,26.1%,0.0%,7.8%,0.0%,0.0%,14.2%,65.9%,33.8%,26.1%
+119,1264174592,E. Elliott,Eric Elliott,Elliott,Eric,P,Jackson State University,JKST,730378240,Jackson State,BBC,L,L,18,322,1263,59.6%,0.0%,0.0%,17.0%,11.7%,11.5%,0.1%,0.0%,41.7%,59.6%,40.4%,28.7%
+120,1195551232,C. Myles,Conor Myles,Myles,Conor,P,UTSA,UTSA,730373120,UTSA,BBC,L,L,17,336,1189,59.6%,0.0%,0.4%,11.3%,4.8%,23.9%,0.0%,0.0%,0.0%,59.6%,39.9%,16.1%
+121,1204043008,P. Kohn,Pico Kohn,Kohn,Pico,P,Mississippi State University,MSST,5080,Mississippi State,BBC,L,L,15,350,1364,59.6%,0.6%,0.3%,28.4%,6.3%,4.8%,0.0%,0.0%,0.0%,60.2%,39.5%,34.8%
+122,1105483008,R. Norman,Ross Norman,Norman,Ross,P,Georgia State University,GAST,730239744,Georgia State,BBC,R,R,16,330,1231,59.6%,0.0%,1.1%,34.1%,3.3%,1.8%,0.1%,0.0%,0.1%,59.6%,39.3%,37.5%
+123,1192787200,J. Caravalho,Joshua Caravalho,Caravalho,Joshua,P,Houston Christian University,HCU,730157824,Houston Christian,BBC,R,R,18,399,1412,59.6%,1.6%,5.2%,19.1%,7.8%,6.6%,0.1%,0.0%,29.2%,61.2%,33.6%,26.9%
+124,1191447040,J. Shineflew,Jaxon Shineflew,Shineflew,Jaxon,P,University of South Alabama,USA,730298880,South Alabama,BBC,L,L,15,247,1011,59.5%,1.7%,0.0%,8.1%,11.2%,19.5%,0.0%,0.0%,0.0%,61.2%,38.8%,19.3%
+125,1929502555,A. King,Aidan King,King,Aidan,P,University of Florida,FLA,730168320,Florida,BBC,L,R,17,304,1188,59.5%,0.0%,0.0%,21.9%,0.0%,8.1%,10.5%,0.0%,0.4%,59.5%,40.5%,21.9%
+126,1351611079,R. Brown,Ryan Brown,Brown,Ryan,P,Queens University of Charlotte,QUC,754315264,Queens University of Charlotte,BBC,R,R,20,274,982,59.4%,0.6%,0.1%,27.0%,0.0%,4.6%,8.1%,0.1%,27.2%,60.0%,39.9%,27.1%
+127,1263546624,D. Thomas,David Thomas,Thomas,David,P,San Jose State University,SJSU,730206720,San Jose State,BBC,R,R,14,343,1158,59.2%,0.0%,0.0%,20.4%,14.7%,5.6%,0.0%,0.0%,19.7%,59.2%,40.8%,35.2%
+128,1198512384,J. Wells,Jackson Wells,Wells,Jackson,P,Little Rock,UALR,730217472,Little Rock,BBC,R,R,17,390,1546,58.9%,0.0%,2.5%,18.4%,4.9%,13.3%,2.0%,0.0%,12.0%,58.9%,38.6%,23.4%
+129,1238171904,A. Cremarosa,Aidan Cremarosa,Cremarosa,Aidan,P,Fresno State,FRES,730384384,Fresno State,BBC,R,R,17,409,1584,58.8%,0.1%,8.8%,7.1%,13.9%,11.3%,0.0%,0.0%,0.1%,58.9%,32.3%,21.0%
+130,1313502976,G. Edwards,Grant Edwards,Edwards,Grant,P,University of New Orleans,UNO,5380,New Orleans,BBC,R,R,15,339,1278,58.8%,9.9%,0.1%,17.1%,3.4%,10.7%,0.0%,0.0%,11.1%,68.8%,31.2%,20.5%
+131,1611658868,M. Rabayda,Mike Rabayda,Rabayda,Mike,P,Fordham University,FOR,730324992,Fordham,BBC,R,R,15,382,1382,58.8%,0.1%,0.2%,29.8%,10.4%,0.8%,0.0%,0.0%,7.5%,58.9%,41.0%,40.2%
+132,1243499776,N. Isler,Nate Isler,Isler,Nate,P,Dartmouth College,DART,730216192,Dartmouth,BBC,R,R,10,258,929,58.7%,0.0%,5.7%,15.6%,13.3%,5.8%,0.9%,0.0%,0.4%,58.7%,35.6%,28.9%
+133,1371725069,M. Tripure,Max Tripure,Tripure,Max,P,Western Illinois University,WIU,730370560,Western Illinois,BBC,R,R,14,332,1118,58.7%,0.0%,3.5%,17.3%,19.1%,1.4%,0.0%,0.0%,56.1%,58.7%,37.9%,36.5%
+134,1332852737,D. Revis,Dustin Revis,Revis,Dustin,P,Western Carolina University,WCU,730278144,Western Carolina,BBC,R,R,15,354,1296,58.7%,4.2%,0.4%,27.7%,0.0%,9.0%,0.0%,0.0%,2.8%,62.9%,36.7%,27.7%
+135,1160908544,O. Serrano,Omar Serrano,Serrano,Omar,P,San Diego State University,SDSU,730218496,San Diego State,BBC,R,R,15,418,1576,58.6%,0.1%,2.4%,18.0%,12.1%,8.8%,0.0%,0.0%,0.1%,58.7%,38.9%,30.1%
+136,1187058176,D. Stewart,Dylan Stewart,Stewart,Dylan,P,Pepperdine University,PEPP,730338304,Pepperdine,BBC,R,R,14,256,994,58.5%,0.0%,0.0%,5.9%,17.1%,18.5%,0.0%,0.0%,21.6%,58.5%,41.5%,23.0%
+137,1254189056,N. Rizzo,Nicholas Rizzo,Rizzo,Nicholas,P,Stony Brook University,STON,730249984,Stony Brook,BBC,L,L,19,259,953,58.5%,4.1%,0.0%,12.8%,14.8%,9.7%,0.0%,0.0%,15.7%,62.6%,37.4%,27.6%
+138,1908498512,I. Koosman,Ian Koosman,Koosman,Ian,P,Creighton University,CREI,730243840,Creighton,BBC,R,R,19,261,968,58.4%,0.3%,0.0%,13.4%,13.7%,14.1%,0.0%,0.0%,10.5%,58.8%,41.2%,27.1%
+139,1778873426,C. Duerr,Caleb Duerr,Duerr,Caleb,P,South Dakota State University,SDST,730323200,South Dakota State,BBC,R,R,13,277,1011,58.4%,0.0%,5.3%,22.6%,1.8%,11.9%,0.0%,0.0%,77.6%,58.4%,36.3%,24.3%
+140,1156597504,B. Stuprich,Brennan Stuprich,Stuprich,Brennan,P,Southeastern Louisiana University,SELA,730209280,Southeastern Louisiana,BBC,R,R,14,367,1355,58.3%,0.1%,0.2%,21.3%,12.5%,5.5%,2.0%,0.0%,4.5%,58.4%,41.3%,33.8%
+141,1197348608,R. Marohn,Ryan Marohn,Marohn,Ryan,P,North Carolina State University,NCST,730216448,North Carolina State,BBC,L,L,14,350,1361,58.3%,0.0%,1.5%,5.6%,18.4%,16.2%,0.0%,0.0%,0.0%,58.3%,40.2%,24.0%
+142,1311169792,D. Hickson,Davion Hickson,Hickson,Davion,P,Rice University,RICE,2352,Rice,BBC,R,R,13,325,1268,58.3%,0.0%,0.9%,29.2%,0.0%,11.7%,0.0%,0.0%,0.0%,58.3%,40.9%,29.2%
+143,1098310656,J. Bean,Jacob Bean,Bean,Jacob,P,Kent State University,KENT,730315008,Kent State,BBC,R,R,15,328,1179,58.1%,0.0%,0.0%,16.9%,16.6%,8.2%,0.2%,0.0%,43.9%,58.1%,41.9%,33.6%
+144,1107750912,C. Cross,Caleb Cross,Cross,Caleb,P,Appalachian State University,APP,730240256,Appalachian State,BBC,R,R,14,347,1279,58.1%,6.2%,1.0%,20.4%,8.4%,3.4%,2.4%,0.0%,0.0%,64.3%,34.7%,28.9%
+145,1142660352,N. Straniero,Nolan Straniero,Straniero,Nolan,P,Elon University,ELON,730252544,Elon,BBC,R,R,16,334,1203,58.1%,0.0%,3.7%,27.0%,7.0%,2.3%,2.0%,0.0%,0.7%,58.1%,38.2%,33.9%
+146,1212300033,N. George,Nolan George,George,Nolan,P,San Jose State University,SJSU,730206720,San Jose State,BBC,R,R,21,306,1049,58.0%,0.0%,0.3%,22.5%,16.8%,2.3%,0.0%,0.0%,6.4%,58.0%,41.6%,39.3%
+147,1120472520,J. Romero,Jorge Romero,Romero,Jorge,P,Western Illinois University,WIU,730370560,Western Illinois,BBC,R,R,19,243,718,58.0%,7.9%,1.4%,21.6%,7.2%,3.9%,0.0%,0.0%,40.0%,65.9%,32.7%,28.8%
+148,1296196608,M. Harpster,Michael Harpster,Harpster,Michael,P,East Tennessee State University,ETSU,4844,East Tennessee State,BBC,R,R,16,320,1146,57.9%,4.1%,14.8%,12.7%,0.0%,10.4%,0.1%,0.0%,0.0%,62.0%,23.1%,12.7%
+149,1336080896,C. Carver,Chase Carver,Carver,Chase,P,Bellarmine University,BU,730167552,Bellarmine,BBC,R,R,16,364,1168,57.8%,0.0%,0.0%,28.2%,0.2%,13.8%,0.0%,0.0%,28.3%,57.8%,42.2%,28.5%
+150,1227047936,T. Kent,Tommy Kent,Kent,Tommy,P,Monmouth University,MONM,4164,Monmouth,BBC,L,L,14,294,1044,57.8%,3.5%,4.5%,16.1%,0.0%,6.3%,11.7%,0.1%,5.0%,61.3%,34.2%,16.2%
+151,1571813435,C. Templeton,Cody Templeton,Templeton,Cody,P,Stephen F. Austin State University,SFA,730227200,Stephen F. Austin State,BBC,R,L,13,385,1184,57.7%,2.5%,0.7%,12.1%,4.7%,22.3%,0.0%,0.0%,22.0%,60.2%,39.1%,16.8%
+152,1337608237,M. OBrien,Matthew OBrien,OBrien,Matthew,P,UC Riverside,UCRV,730281728,UC Riverside,BBC,L,L,20,292,1080,57.7%,0.0%,0.0%,6.9%,18.4%,17.0%,0.0%,0.0%,13.2%,57.7%,42.3%,25.3%
+153,1300599553,J. Feld,Justin Feld,Feld,Justin,P,Gonzaga University,GONZ,730200832,Gonzaga,BBC,R,R,14,252,953,57.7%,0.0%,15.2%,15.3%,0.3%,11.3%,0.1%,0.0%,2.8%,57.7%,27.1%,15.7%
+154,1318761728,G. Yawn,Garrett Yawn,Yawn,Garrett,P,Long Island University-Brooklyn,LIU,730352896,LIU Brooklyn,BBC,R,R,16,459,1738,57.6%,0.8%,0.7%,6.7%,14.4%,19.8%,0.0%,0.0%,31.7%,58.4%,40.9%,21.1%
+155,1097588224,J. Dzierwa,Joseph Dzierwa,Dzierwa,Joseph,P,Michigan State University,MSU,1551,Michigan State,BBC,L,L,15,372,1407,57.5%,0.1%,6.3%,6.8%,2.7%,26.5%,0.0%,0.0%,1.4%,57.6%,36.1%,9.6%
+156,1281908992,A. Nigut,Alec Nigut,Nigut,Alec,P,Southern Illinois University,SIU,730349824,Southern Illinois,BBC,L,L,14,269,1021,57.4%,0.0%,0.0%,26.4%,3.5%,8.9%,0.0%,3.7%,47.3%,57.4%,42.6%,33.6%
+157,1663471732,A. Valentin,Alex Valentin,Valentin,Alex,P,Texas State University,TXST,5420,Texas State,BBC,L,L,16,318,1178,57.4%,3.5%,0.3%,32.5%,2.7%,3.5%,0.0%,0.0%,0.1%,60.9%,38.7%,35.3%
+158,1332975104,D. Cohen,Daniel Cohen,Cohen,Daniel,P,Yale University,YALE,730334464,Yale,BBC,R,R,13,271,1019,57.4%,0.1%,1.9%,31.8%,3.3%,5.4%,0.1%,0.0%,10.6%,57.5%,40.6%,35.1%
+159,1105311232,B. Bendik,Brady Bendik,Bendik,Brady,P,U.S. Naval Academy,NAVY,508,Navy,BBC,R,R,13,318,1169,57.4%,0.4%,4.4%,8.2%,26.3%,3.3%,0.0%,0.0%,7.7%,57.7%,37.8%,34.5%
+160,1191770880,T. Ellisen,Thomas Ellisen,Ellisen,Thomas,P,University of Connecticut,CONN,5486,Connecticut,BBC,R,R,16,328,1169,57.3%,0.3%,0.0%,39.6%,0.1%,2.7%,0.1%,0.0%,0.4%,57.6%,42.4%,39.7%
+161,1157400064,D. Mathiesen,Dylan Mathiesen,Mathiesen,Dylan,P,Liberty University,LIB,730156288,Liberty,BBC,R,R,17,295,1157,57.3%,1.7%,17.3%,18.3%,0.1%,3.9%,0.0%,1.5%,6.5%,59.0%,23.8%,19.9%
+162,1277834240,K. Opanel,Kevin Opanel,Opanel,Kevin,P,Monmouth University,MONM,4164,Monmouth,BBC,R,R,14,267,904,57.3%,0.1%,4.7%,26.1%,9.3%,2.0%,0.0%,0.6%,5.8%,57.4%,37.9%,35.9%
+163,1623538787,C. Burke,Clayton Burke,Burke,Clayton,P,Miami University (Ohio),M-OH,730379264,Miami (OH),BBC,R,R,17,311,1213,57.3%,4.0%,4.5%,23.5%,0.2%,10.4%,0.0%,0.1%,7.6%,61.3%,34.2%,23.7%
+164,1283339776,E. Gibbons,Evan Gibbons,Gibbons,Evan,P,Sacramento State University,SAC,730293760,Sacramento State,BBC,R,R,15,380,1338,57.2%,9.3%,0.5%,9.0%,8.1%,15.8%,0.0%,0.0%,0.0%,66.6%,32.9%,17.1%
+165,1334000896,C. Allen,Cam Allen,Allen,Cam,P,Wright State University,WRST,5390,Wright State,BBC,R,R,16,303,1245,57.2%,0.2%,8.6%,19.3%,10.4%,2.5%,0.0%,1.7%,12.7%,57.4%,33.9%,31.5%
+166,1327579136,R. Halamicek,Ryan Halamicek,Halamicek,Ryan,P,Cal State-Northridge,CSN,730380032,CSU Northridge,BBC,L,R,17,328,1238,57.2%,0.0%,2.9%,23.3%,0.5%,16.1%,0.0%,0.0%,1.0%,57.2%,39.9%,23.8%
+167,1099900160,A. Cabral,Aiven Cabral,Cabral,Aiven,P,Northeastern University,NE,343,Northeastern,BBC,R,R,16,360,1252,57.2%,1.5%,1.0%,25.2%,2.3%,12.8%,0.0%,0.0%,6.8%,58.7%,40.3%,27.5%
+168,1084034304,E. Rodriguez,Esteban Rodriguez,Rodriguez,Esteban,P,University of Richmond,RICH,730171904,Richmond,BBC,R,R,14,265,1044,57.1%,0.4%,2.0%,18.7%,16.6%,5.2%,0.0%,0.0%,0.1%,57.5%,40.5%,35.3%
+169,1336664320,J. Gilleran,James Gilleran,Gilleran,Jimmy,P,Stonehill College,SC,730238464,Stonehill,BBC,R,R,14,352,1201,57.1%,0.0%,0.0%,17.8%,19.8%,2.4%,2.9%,0.0%,65.4%,57.1%,42.9%,37.6%
+170,1099879680,D. Banner,Dylan Banner,Banner,Dylan,P,University at Albany,ALBY,730280448,Albany,BBC,R,R,14,388,1309,57.0%,7.8%,0.0%,18.6%,3.0%,13.7%,0.0%,0.0%,50.8%,64.8%,35.2%,21.6%
+171,1310369536,B. Peterson,Brandon Peterson,Peterson,Brandon,P,New Jersey Institute of Technology,NJIT,730313216,NJIT,BBC,L,R,15,286,1078,57.0%,3.9%,3.2%,24.7%,0.0%,11.2%,0.0%,0.0%,59.5%,60.9%,35.9%,24.7%
+172,1918576916,H. Bailey,Hayden Bailey,Bailey,Hayden,P,Central Michigan University,CMU,5342,Central Michigan,BBC,R,R,14,266,988,57.0%,3.7%,1.2%,27.8%,1.8%,7.0%,0.7%,0.0%,22.4%,60.6%,38.2%,30.5%
+173,1062087691,W. Walton,Wade Walton,Walton,Wade,P,High Point University,HP,730321152,High Point,BBC,R,R,15,365,1426,56.8%,0.8%,0.1%,4.9%,12.7%,24.7%,0.1%,0.0%,0.3%,57.6%,42.3%,17.6%
+174,1263800064,J. Volmerding,Josh Volmerding,Volmerding,Josh,P,Cal Poly,CP,5487,Cal Poly,BBC,L,L,17,393,1481,56.8%,0.1%,19.0%,14.6%,1.4%,7.1%,0.0%,1.0%,0.0%,56.9%,24.0%,16.9%
+175,1271054080,J. Frost,Jacob Frost,Frost,Jacob,P,Kansas State University,KSU,730270464,Kansas State,BBC,L,L,18,316,1193,56.8%,2.4%,0.8%,19.9%,3.8%,16.3%,0.0%,0.0%,0.5%,59.2%,39.9%,23.7%
+176,1323961600,A. Mucciarone,Alfred Mucciarone,Mucciarone,Alfred,P,UMass Lowell,MASSL,730371584,UMass Lowell,BBC,R,R,14,348,1229,56.8%,5.2%,0.0%,24.1%,0.7%,13.2%,0.0%,0.0%,56.1%,62.0%,38.0%,24.9%
+177,1237056000,T. Boccabello,Tanner Boccabello,Boccabello,Tanner,P,Bethune-Cookman University,COOK,730152960,Bethune-Cookman,BBC,R,R,11,296,1053,56.6%,1.0%,3.5%,20.8%,0.3%,17.8%,0.0%,0.0%,62.1%,57.6%,38.8%,21.1%
+178,1318951936,B. Cleaver,Ben Cleaver,Cleaver,Ben,P,University of Kentucky,UK,5362,Kentucky,BBC,L,L,15,337,1361,56.6%,0.1%,4.3%,8.5%,22.9%,7.6%,0.0%,0.0%,0.0%,56.7%,38.9%,31.4%
+179,1196801792,G. Hugus,Griffin Hugus,Hugus,Griffin,P,University of Miami,MIA,236,Miami,BBC,L,R,17,400,1552,56.5%,0.0%,0.4%,31.5%,6.8%,4.8%,0.0%,0.1%,0.3%,56.5%,43.1%,38.3%
+180,1286103552,C. Williams,Cody Williams,Williams,Cody,P,Florida A&M University,FAMU,5416,Florida A&M,BBC,R,R,30,284,740,56.5%,0.0%,0.0%,20.6%,8.2%,14.7%,0.0%,0.0%,77.0%,56.5%,43.5%,28.8%
+181,1254299136,J. Flora,Jackson Flora,Flora,Jackson,P,UC Santa Barbara,UCSB,730364160,UC Santa Barbara,BBC,R,R,13,309,1204,56.5%,0.0%,0.2%,27.7%,0.4%,2.9%,0.0%,12.4%,5.3%,56.5%,43.4%,40.5%
+182,1279505152,A. Petraitis,AJ Petraitis,Petraitis,AJ,P,Le Moyne College,LMC,730202880,Le Moyne,BBC,R,R,14,347,1060,56.4%,1.3%,11.5%,12.8%,1.3%,16.7%,0.0%,0.0%,78.6%,57.7%,30.8%,14.1%
+183,1342168577,J. Shadek,Justin Shadek,Shadek,Justin,P,Rutgers University,RUTG,730229248,Rutgers,BBC,R,R,15,292,1184,56.4%,0.0%,17.8%,11.0%,9.1%,4.7%,0.0%,0.9%,0.1%,56.4%,25.8%,21.0%
+184,1218298624,H. Pidek,Hunter Pidek,Pidek,Hunter,P,Oakland University,OAK,5386,Oakland,BBC,R,R,15,362,1382,56.4%,0.4%,0.5%,20.2%,11.6%,11.0%,0.0%,0.0%,4.3%,56.7%,42.7%,31.8%
+185,1296205056,M. Kruzan,Marcus Kruzan,Kruzan,Marcus,P,University of St. Thomas (Minn.),UOST,730200320,University of St. Thomas (Minn.),BBC,R,R,13,334,1256,56.3%,0.0%,2.3%,30.1%,8.6%,1.0%,1.7%,0.0%,76.0%,56.3%,41.4%,38.7%
+186,1656682756,N. Finarelli,Nick Finarelli,Finarelli,Nick,P,Long Island University-Brooklyn,LIU,730352896,LIU Brooklyn,BBC,R,R,16,397,1419,56.3%,0.1%,1.6%,27.9%,4.6%,9.5%,0.0%,0.0%,35.4%,56.4%,42.0%,32.5%
+187,1195514368,J. Cline,Jack Cline,Cline,Jack,P,Little Rock,UALR,730217472,Little Rock,BBC,R,R,17,372,1368,56.2%,0.5%,3.6%,13.0%,15.0%,11.4%,0.3%,0.0%,2.1%,56.8%,39.7%,28.0%
+188,1239155712,D. Schueler,Dillon Schueler,Schueler,Dillon,P,University of Illinois-Chicago,UIC,5379,Illinois-Chicago,BBC,R,R,15,382,1446,56.2%,0.0%,2.9%,17.7%,0.1%,23.1%,0.0%,0.0%,8.0%,56.2%,40.9%,17.8%
+189,1099692544,G. Floyd,George Derrick Floyd,Floyd,George Derrick,P,The Citadel,CIT,730366720,The Citadel,BBC,L,L,14,317,1095,56.2%,0.3%,0.0%,35.0%,1.4%,7.2%,0.0%,0.0%,0.0%,56.4%,43.6%,36.3%
+190,1108493568,T. Nemjo,Tristan Nemjo,Nemjo,Tristan,P,Hofstra University,HOF,730245120,Hofstra,BBC,R,R,15,347,1218,56.2%,0.0%,0.3%,25.6%,6.6%,11.4%,0.0%,0.0%,13.3%,56.2%,43.6%,32.2%
+191,1292501760,R. Grace,Ranard Grace,Grace,Ranard,P,Southern University,SOU,4767,Southern,BBC,L,L,12,301,1005,56.0%,0.0%,0.0%,25.7%,4.8%,13.4%,0.0%,0.0%,62.9%,56.0%,44.0%,30.6%
+192,1276589824,M. Adams,Matthew Adams,Adams,Matthew,P,The University of Southern Mississippi,USM,730246656,Southern Miss,BBC,R,R,18,341,1297,56.0%,0.0%,18.6%,8.9%,13.3%,3.1%,0.0%,0.0%,0.9%,56.0%,25.4%,22.3%
+193,1200305920,R. Peterson,Ryan Peterson,Peterson,Ryan,P,Sam Houston State University,SHSU,5363,Sam Houston State,BBC,R,R,14,351,1298,55.9%,4.7%,3.1%,15.9%,15.0%,5.4%,0.0%,0.0%,52.6%,60.7%,36.3%,30.9%
+194,1303346688,A. Solis,Anthony Solis,Solis,Anthony,P,Eastern Illinois University,EIU,730271744,Eastern Illinois,BBC,R,R,15,297,1038,55.9%,16.3%,0.0%,15.1%,2.6%,10.1%,0.0%,0.0%,26.6%,72.2%,27.8%,17.7%
+195,1324687616,J. Skapinetz,Joe Skapinetz,Skapinetz,Joe,P,Lafayette College,LAF,730217728,Lafayette,BBC,R,R,12,296,1121,55.9%,0.3%,17.6%,21.2%,0.1%,5.0%,0.0%,0.0%,0.5%,56.1%,26.3%,21.3%
+196,1210146816,J. Brockett,Jackson Brockett,Brockett,Jackson,P,University of Nebraska,NEB,4865,Nebraska,BBC,L,L,16,288,1057,55.9%,0.1%,0.9%,28.0%,0.7%,14.4%,0.0%,0.0%,0.1%,56.0%,43.1%,28.7%
+197,1568741560,S. Cole,Sam Cole,Cole,Sam,P,University of West Georgia,UOWG,730308864,West Georgia,BBC,R,R,14,292,983,55.9%,0.0%,15.5%,23.1%,0.7%,4.8%,0.0%,0.0%,70.5%,55.9%,28.6%,23.8%
+198,1286256640,G. Rumary,Garvey Rumary,Rumary,Garvey,P,San Diego State University,SDSU,730218496,San Diego State,BBC,L,L,16,304,1191,55.8%,0.0%,0.2%,13.6%,17.5%,12.9%,0.0%,0.0%,0.0%,55.8%,44.0%,31.1%
+199,1564722927,A. Sparks,Alec Sparks,Sparks,Alec,P,Nicholls State University,NICH,730284032,Nicholls State,BBC,R,R,12,305,1122,55.8%,0.0%,0.4%,25.0%,10.2%,8.6%,0.0%,0.0%,0.8%,55.8%,43.8%,35.2%
+200,1139728640,B. Holland,Brendan Holland,Holland,Brendan,P,UMass Lowell,MASSL,730371584,UMass Lowell,BBC,R,L,14,331,1219,55.8%,0.2%,0.7%,5.3%,6.0%,32.0%,0.0%,0.0%,55.1%,55.9%,43.3%,11.3%
+201,1436932267,C. White,Carter White,White,Carter,P,Northwestern State University,NWST,730255872,Northwestern State,BBC,L,L,19,249,861,55.8%,3.3%,0.0%,16.0%,1.9%,23.0%,0.0%,0.0%,15.2%,59.0%,41.0%,17.9%
+202,1342166619,A. Castro,Alessandro Castro,Castro,Alessandro,P,University of Nevada,NEV,4784,Nevada,BBC,L,L,15,324,1216,55.4%,4.8%,0.0%,16.7%,0.5%,22.5%,0.1%,0.0%,1.2%,60.2%,39.8%,17.2%
+203,1185097984,C. Braun,Corey Braun,Braun,Corey,P,University of South Florida,USF,2292,South Florida,BBC,L,L,16,402,1505,55.4%,0.1%,8.3%,23.7%,2.1%,10.3%,0.1%,0.0%,0.1%,55.5%,36.2%,25.8%
+204,1238291968,T. Murphy,Tyler Murphy,Murphy,Tyler,P,Florida Atlantic University,FAU,339,Florida Atlantic,BBC,R,R,13,285,1023,55.4%,0.0%,0.0%,34.4%,0.1%,10.1%,0.0%,0.0%,1.7%,55.4%,44.6%,34.5%
+205,1133388800,R. Packard,Ryan Packard,Packard,Ryan,P,Binghamton University,BING,730155776,Binghamton,BBC,R,R,17,287,1077,55.4%,0.0%,0.1%,17.3%,9.2%,17.1%,0.0%,1.0%,15.1%,55.4%,44.5%,27.5%
+206,1162031104,W. Mendes,Wes Mendes,Mendes,Wes,P,Florida State University,FSU,101,Florida State,BBC,L,L,16,342,1350,55.3%,0.2%,0.0%,19.0%,11.6%,13.9%,0.0%,0.0%,0.0%,55.5%,44.5%,30.6%
+207,1162317568,K. Johnson,Keegan Johnson,Johnson,Keegan,P,Ball State University,BALL,730195456,Ball State,BBC,L,L,14,317,1289,55.3%,0.0%,1.8%,32.0%,6.5%,4.5%,0.0%,0.0%,20.2%,55.3%,43.0%,38.5%
+208,1130372096,C. Harris,Connor Harris,Harris,Connor,P,Winthrop University,WIN,730294784,Winthrop,BBC,R,R,15,327,1161,55.2%,0.0%,1.4%,6.6%,28.3%,8.5%,0.0%,0.0%,0.2%,55.2%,43.4%,34.9%
+209,1292523520,W. Tobin,Will Tobin,Tobin,Will,P,University of Pennsylvania,PENN,730292224,Pennsylvania,BBC,L,L,12,213,864,55.2%,13.2%,0.0%,6.0%,9.3%,16.3%,0.0%,0.0%,11.7%,68.4%,31.6%,15.3%
+210,1200236800,H. Boncal,Hudson Boncal,Boncal,Hudson,P,Ohio University,OHIO,730298368,Ohio,BBC,R,R,14,368,1363,55.1%,0.0%,0.8%,16.8%,26.2%,1.2%,0.0%,0.0%,44.8%,55.1%,44.1%,43.0%
+211,1351173671,M. Belcher,Michael Belcher,Belcher,Michael,P,Bryant University,BRY,730266880,Bryant,BBC,R,R,14,282,1045,55.0%,0.5%,12.5%,20.5%,0.1%,11.4%,0.0%,0.0%,17.9%,55.5%,32.1%,20.6%
+212,1287363584,M. Phillips,Marcus Phillips,Phillips,Marcus,P,University of Tennessee,TENN,730153728,Tennessee,BBC,R,R,17,359,1412,54.9%,0.1%,0.0%,35.7%,0.1%,9.2%,0.0%,0.0%,0.0%,55.0%,45.0%,35.8%
+213,1018912519,K. Ishikawa,Kenny Ishikawa,Ishikawa,Kenny,TWP,Seattle University,SEA,4504,Seattle,BBC,L,L,19,303,1104,54.9%,0.0%,2.0%,18.2%,16.6%,7.6%,0.7%,0.0%,12.3%,54.9%,43.2%,34.8%
+214,1310892288,J. Woolfolk,Jay Woolfolk,Woolfolk,Jay,P,University of Virginia,UVA,5415,Virginia,BBC,R,R,13,279,1126,54.9%,0.2%,11.4%,17.2%,0.5%,2.5%,12.6%,0.0%,0.3%,55.0%,33.6%,18.4%
+215,1656400118,C. Crossland,Cade Crossland,Crossland,Cade,P,University of Oklahoma,OKLA,730294528,Oklahoma,BBC,R,L,16,316,1293,54.8%,0.8%,0.0%,4.1%,9.1%,31.2%,0.0%,0.0%,0.4%,55.6%,44.4%,13.2%
+216,1099789056,H. Holcombe,Huxley Holcombe,Holcombe,Huxley,P,Cornell University,COR,730298624,Cornell,BBC,L,L,11,274,988,54.8%,3.5%,0.4%,23.0%,11.4%,4.4%,2.6%,0.0%,9.3%,58.3%,41.3%,34.4%
+217,1281584640,D. Gonzalez,Daniel Gonzalez,Gonzalez,Daniel,P,University of Louisiana at Monroe,ULM,730362880,UL Monroe,BBC,R,R,13,241,946,54.8%,0.0%,0.0%,17.1%,20.3%,7.8%,0.0%,0.0%,0.0%,54.8%,45.2%,37.4%
+218,1260237537,J. Ohman,Jack Ohman,Ohman,Jack,P,Yale University,YALE,730334464,Yale,BBC,L,R,12,288,1139,54.6%,0.2%,1.8%,28.1%,4.5%,10.7%,0.0%,0.0%,0.2%,54.8%,43.4%,32.6%
+219,1162026752,Z. Adams,Zane Adams,Adams,Zane,P,University of Alabama,ALA,730206976,Alabama,BBC,L,L,15,293,1195,54.6%,1.7%,8.5%,0.6%,15.2%,19.4%,0.0%,0.0%,0.0%,56.2%,35.2%,15.8%
+220,1092684544,M. Heer,Mitchell Heer,Heer,Mitchell,P,University of South Alabama,USA,730298880,South Alabama,BBC,R,R,12,274,959,54.5%,3.4%,14.1%,11.1%,5.5%,7.3%,4.1%,0.0%,0.0%,57.9%,28.0%,16.6%
+221,1179093504,D. Purser,Daxton Purser,Purser,Daxton,P,University of New Mexico,UNM,730153472,New Mexico,BBC,L,L,17,334,1283,54.4%,0.0%,0.8%,17.5%,1.9%,25.4%,0.0%,0.0%,0.6%,54.4%,44.8%,19.4%
+222,1294976512,J. Thompson,JD Thompson,Thompson,JD,P,Vanderbilt University,VAN,5046,Vanderbilt,BBC,R,L,16,380,1512,54.4%,0.3%,0.0%,17.9%,14.0%,13.4%,0.0%,0.0%,0.0%,54.8%,45.2%,31.8%
+223,1176066304,J. Middleton,JB Middleton,Middleton,JB,P,The University of Southern Mississippi,USM,730246656,Southern Miss,BBC,R,R,16,415,1538,54.4%,1.1%,4.0%,29.4%,0.1%,10.2%,0.8%,0.0%,0.0%,55.5%,40.5%,29.5%
+224,1162029824,J. Snipes,James Snipes,Snipes,James,P,Mississippi Valley State University,MVSU,730259200,Mississippi Valley State,BBC,R,R,15,216,461,54.4%,0.0%,0.0%,42.1%,0.0%,3.5%,0.0%,0.0%,87.6%,54.4%,45.6%,42.1%
+225,1292598272,S. Murchison,Sam Murchison,Murchison,Sam,P,UNC Greensboro,UNCG,730238720,UNC Greensboro,BBC,R,R,15,357,1351,54.3%,0.3%,2.1%,10.8%,3.8%,28.7%,0.0%,0.0%,1.1%,54.6%,43.3%,14.6%
+226,1568921580,B. Cassedy,Brandon Cassedy,Cassedy,Brandon,P,George Mason University,GMU,730265088,George Mason,BBC,R,R,16,359,1318,54.2%,0.0%,10.3%,11.8%,22.5%,1.2%,0.0%,0.0%,11.4%,54.2%,35.5%,34.3%
+227,1428410894,S. Dudley,Seth Dudley,Dudley,Seth,P,University of West Georgia,UOWG,730308864,West Georgia,BBC,R,R,14,317,1152,54.2%,0.3%,0.9%,35.7%,0.0%,8.9%,0.0%,0.0%,69.9%,54.5%,44.7%,35.7%
+228,1270721280,P. Fosher,Peyton Fosher,Fosher,Peyton,P,University of Nevada,NEV,4784,Nevada,BBC,R,R,15,337,1290,54.1%,0.0%,0.0%,20.1%,19.1%,6.7%,0.0%,0.0%,0.7%,54.1%,45.9%,39.2%
+229,1214276096,T. Levesque,Trystan Levesque,Levesque,Trystan,P,University of Rhode Island,URI,730163712,Rhode Island,BBC,L,L,16,401,1485,54.1%,0.0%,0.0%,15.3%,8.0%,22.7%,0.0%,0.0%,7.7%,54.1%,45.9%,23.2%
+230,1330706688,Z. Petty,Zane Petty,Petty,Zane,P,Texas Tech University,TTU,2350,Texas Tech,BBC,R,R,14,278,1001,54.0%,0.0%,7.9%,30.4%,6.8%,0.9%,0.0%,0.0%,0.0%,54.0%,38.1%,37.2%
+231,1174671104,C. Doorn,Carter Doorn,Doorn,Carter,P,Purdue University,PUR,730353152,Purdue,BBC,R,R,14,290,1092,54.0%,0.0%,0.0%,27.2%,5.4%,13.4%,0.0%,0.0%,11.1%,54.0%,46.0%,32.6%
+232,1199734331,J. Nedrow,Jack Nedrow,Nedrow,Jack,P,University of South Florida,USF,2292,South Florida,BBC,R,R,18,300,1035,54.0%,0.0%,32.8%,10.9%,0.7%,1.5%,0.1%,0.0%,0.3%,54.0%,13.2%,11.6%
+233,1299763712,B. Eftink,Brayden Eftink,Eftink,Brayden,P,Mississippi Valley State University,MVSU,730259200,Mississippi Valley State,BBC,L,R,12,230,533,54.0%,0.0%,0.0%,7.9%,11.1%,27.0%,0.0%,0.0%,88.2%,54.0%,46.0%,19.0%
+234,1238131200,J. Gatti,J.J. Gatti,Gatti,J.J.,P,University of Dayton,DAY,730194688,Dayton,BBC,R,R,16,306,1189,53.9%,0.1%,0.0%,26.4%,8.0%,10.5%,1.0%,0.1%,19.7%,54.0%,46.0%,34.5%
+235,1105517312,D. Munn,Drew Munn,Munn,Drew,P,Central Connecticut State University,CCSU,730306816,Central Connecticut State,BBC,R,R,14,369,1174,53.9%,3.8%,0.4%,23.7%,1.3%,16.8%,0.0%,0.0%,55.5%,57.7%,41.9%,25.0%
+236,1281884928,B. Gaskey,Blake Gaskey,Gaskey,Blake,P,Ohio University,OHIO,730298368,Ohio,BBC,L,R,14,348,1195,53.7%,1.8%,0.0%,33.1%,0.0%,11.4%,0.0%,0.0%,41.1%,55.5%,44.5%,33.1%
+237,1227145728,B. Gomez,Brandon Gomez,Gomez,Brandon,P,Santa Clara University,SCU,730297600,Santa Clara,BBC,L,L,15,322,1288,53.6%,0.0%,1.4%,32.2%,1.0%,11.8%,0.0%,0.1%,8.2%,53.6%,45.1%,33.3%
+238,1301684992,C. Fitzgerald,Colin Fitzgerald,Fitzgerald,Colin,P,University of Maine,ME,730275840,Maine,BBC,R,R,14,396,1377,53.5%,0.4%,0.0%,35.8%,6.6%,3.8%,0.0%,0.0%,16.9%,53.9%,46.1%,42.3%
+239,1207928320,J. DeCaro,Jason DeCaro,DeCaro,Jason,P,University of North Carolina,UNC,730181888,North Carolina,BBC,R,R,16,356,1379,53.5%,5.7%,0.7%,17.1%,9.2%,13.8%,0.0%,0.0%,0.0%,59.2%,40.1%,26.3%
+240,1142659328,K. Sivley,Kros Sivley,Sivley,Kros,P,The University of Southern Mississippi,USM,730246656,Southern Miss,BBC,L,L,22,310,1093,53.4%,1.7%,0.0%,27.3%,4.1%,12.7%,0.7%,0.0%,0.0%,55.2%,44.8%,31.4%
+241,1052929589,G. Workman,Garrett Workman,Workman,Garrett,P,Florida A&M University,FAMU,5416,Florida A&M,BBC,L,L,15,367,924,53.4%,0.0%,0.4%,10.4%,13.9%,21.9%,0.0%,0.0%,72.8%,53.4%,46.2%,24.3%
+242,1296189440,T. Hartley,Tyler Hartley,Hartley,Tyler,P,Marist College,MRST,730374656,Marist,BBC,R,R,14,287,1070,53.4%,0.5%,9.5%,13.5%,17.5%,5.7%,0.0%,0.0%,62.5%,53.9%,36.7%,30.9%
+243,1468279426,B. Smith,Ben Smith,Smith,Ben,P,Houston Christian University,HCU,730157824,Houston Christian,BBC,R,R,18,287,1025,53.3%,0.8%,0.5%,8.5%,8.8%,28.2%,0.0%,0.0%,39.0%,54.1%,45.4%,17.3%
+244,1166183424,M. Morrissey,M.T. Morrissey,Morrissey,M.T.,P,New Jersey Institute of Technology,NJIT,730313216,NJIT,BBC,R,R,15,370,1347,53.2%,2.2%,5.3%,24.2%,0.0%,10.1%,4.9%,0.0%,48.6%,55.4%,39.2%,24.2%
+245,1790363222,D. Story,Dylan Story,Story,Dylan,P,High Point University,HP,730321152,High Point,BBC,R,R,15,366,1403,53.2%,0.9%,0.5%,31.2%,0.8%,13.3%,0.0%,0.0%,7.6%,54.2%,45.3%,31.9%
+246,1492829743,C. Golden,Cooper Golden,Golden,Cooper,P,McNeese State University,MCNS,730285056,McNeese State,BBC,L,L,15,288,1021,53.2%,10.8%,0.1%,22.3%,0.1%,13.5%,0.0%,0.0%,15.3%,63.9%,36.0%,22.4%
+247,1119214592,J. Elizondo,Jackson Elizondo,Elizondo,Jackson,P,University of the Incarnate Word,IW,730225152,Incarnate Word,BBC,R,L,10,250,916,53.2%,0.0%,0.9%,12.7%,20.6%,12.7%,0.0%,0.0%,24.2%,53.2%,46.0%,33.3%
+248,1243071232,B. Haston,Brandon Haston,Haston,Brandon,P,Jackson State University,JKST,730378240,Jackson State,BBC,L,L,16,369,1161,53.1%,0.0%,0.0%,29.0%,3.9%,14.1%,0.0%,0.0%,37.6%,53.1%,46.9%,32.8%
+249,1176124160,T. LaPour,Tommy LaPour,LaPour,Tommy,P,Texas Christian University,TCU,5045,TCU,BBC,R,R,16,376,1464,53.1%,0.9%,0.3%,16.9%,2.1%,25.6%,1.0%,0.0%,0.3%,54.0%,45.7%,19.0%
+250,1080345600,N. Valdez,Noel Valdez,Valdez,Noel,P,UC Davis,UCD,730153984,UC Davis,BBC,R,R,21,344,1293,53.0%,0.1%,8.3%,9.7%,3.0%,25.9%,0.0%,0.0%,1.0%,53.1%,38.6%,12.7%
+251,1483854437,B. Hamlin,Brendan Hamlin,Hamlin,Brendan,P,University of Arkansas-Pine Bluff,ARPB,5377,Arkansas-Pine Bluff,BBC,R,R,18,281,866,53.0%,2.5%,0.0%,20.3%,19.2%,5.0%,0.0%,0.0%,67.6%,55.5%,44.5%,39.5%
+252,1225719296,C. Proskey,Calvin Proskey,Proskey,Calvin,P,UC Santa Barbara,UCSB,730364160,UC Santa Barbara,BBC,R,R,14,287,1160,53.0%,0.0%,13.8%,14.4%,7.3%,0.9%,10.6%,0.0%,7.9%,53.0%,33.3%,21.7%
+253,1497321367,M. Sipila,Marko Sipila,Sipila,Marko,P,San Diego State University,SDSU,730218496,San Diego State,BBC,R,R,12,322,1226,52.9%,0.1%,1.1%,18.0%,10.6%,14.4%,2.8%,0.0%,0.0%,53.0%,45.8%,28.6%
+254,1837146158,J. Litman,James Litman,Litman,James,P,Florida Atlantic University,FAU,339,Florida Atlantic,BBC,R,R,15,258,980,52.9%,0.7%,0.1%,19.8%,2.5%,24.0%,0.1%,0.0%,0.3%,53.6%,46.3%,22.2%
+255,1493066280,A. Quezada,Adrian Quezada,Quezada,Adrian,P,Queens University of Charlotte,QUC,754315264,Queens University of Charlotte,BBC,R,R,11,257,862,52.9%,3.9%,10.8%,17.9%,6.5%,7.9%,0.0%,0.0%,41.2%,56.8%,32.3%,24.5%
+256,1296180224,L. Schmidt,Logan Schmidt,Schmidt,Logan,P,Xavier University,XAV,5464,Xavier,BBC,R,R,19,298,1135,52.8%,8.2%,0.6%,21.6%,0.5%,15.9%,0.3%,0.0%,0.1%,61.1%,38.3%,22.1%
+257,1310308608,A. Berg,Andrew Berg,Berg,Andrew,P,Army West Point,ARMY,4744,Army,BBC,R,R,15,338,1223,52.7%,1.9%,4.7%,31.7%,4.4%,4.6%,0.0%,0.0%,4.2%,54.6%,40.7%,36.1%
+258,1462207411,A. Johnson,Andrew Johnson,Johnson,Andrew,P,University of Southern California,USC,5047,USC,BBC,S,R,22,296,1049,52.7%,0.1%,0.0%,21.7%,15.4%,10.0%,0.0%,0.0%,0.4%,52.8%,47.2%,37.1%
+259,1188623261,E. DeRossi,Eli DeRossi,DeRossi,Eli,P,Mount St. Mary's University,MSM,730291712,Mount St. Mary's,BBC,R,R,14,307,1040,52.7%,0.2%,0.0%,30.1%,9.5%,7.5%,0.0%,0.0%,47.6%,52.8%,47.2%,39.6%
+260,1739007204,B. Weber,Ben Weber,Weber,Ben,P,University of Nebraska-Omaha,NEOM,730235648,Omaha,BBC,R,R,17,347,1321,52.6%,0.3%,10.7%,19.0%,2.0%,14.4%,0.0%,0.9%,10.5%,53.0%,36.4%,22.0%
+261,1248478720,N. Parache,Nuno Parache,Parache,Nuno,P,Nicholls State University,NICH,730284032,Nicholls State,BBC,R,R,13,240,835,52.6%,0.0%,0.1%,25.9%,6.9%,14.3%,0.1%,0.0%,3.5%,52.6%,47.3%,32.9%
+262,1279246592,J. LaBoy,Jorhan LaBoy,LaBoy,Jorhan,P,Alabama State University,ALST,4765,Alabama State,BBC,L,L,17,404,1432,52.6%,0.0%,0.0%,11.9%,19.6%,15.9%,0.0%,0.0%,42.0%,52.6%,47.4%,31.5%
+263,1311025920,J. Thomas,Jackson Thomas,Thomas,Jackson,P,University of Washington,WASH,3110,Washington,BBC,R,R,15,325,1195,52.6%,0.0%,1.6%,31.2%,0.2%,14.5%,0.0%,0.0%,0.0%,52.6%,45.9%,31.4%
+264,1635844120,T. Schmitt,Tyler Schmitt,Schmitt,Tyler,P,University of Illinois,ILL,730163456,Illinois,BBC,R,R,15,364,1415,52.4%,0.5%,7.3%,11.9%,16.3%,11.5%,0.0%,0.0%,0.1%,52.9%,39.8%,28.2%
+265,1311052288,D. Rogers,Dylan Rogers,Rogers,Dylan,P,Air Force Academy,AFA,730205440,Air Force,BBC,R,R,14,305,1005,52.4%,0.2%,6.1%,28.6%,7.1%,5.6%,0.0%,0.0%,5.2%,52.6%,41.3%,35.8%
+266,1574122232,A. Ehmke,Aric Ehmke,Ehmke,Aric,P,University of Wisconsin-Milwaukee,MILW,5036,Milwaukee,BBC,R,R,15,285,1036,52.4%,1.8%,13.4%,8.9%,10.7%,12.8%,0.0%,0.0%,63.1%,54.2%,32.5%,19.6%
+267,1396741102,L. Grigg,Landon Grigg,Grigg,Landon,P,University of Louisiana at Monroe,ULM,730362880,UL Monroe,BBC,R,R,17,274,983,52.3%,0.1%,14.7%,14.3%,15.6%,3.1%,0.0%,0.0%,0.0%,52.4%,32.9%,29.8%
+268,1310848000,N. Remy,Nick Remy,Remy,Nick,P,UMBC,UMBC,730210304,UMBC,BBC,R,R,21,200,669,52.3%,0.0%,25.4%,11.4%,0.0%,3.2%,7.8%,0.0%,21.1%,52.3%,22.3%,11.4%
+269,1258115584,A. Colarusso,A.J. Colarusso,Colarusso,A.J.,P,Boston College,BC,227,Boston College,BBC,L,L,19,327,1247,52.2%,0.2%,2.2%,24.5%,7.0%,13.8%,0.0%,0.1%,5.5%,52.4%,45.4%,31.6%
+270,1287322880,R. Fox,Rory Fox,Fox,Rory,P,University of Notre Dame,ND,225,Notre Dame,BBC,L,R,14,280,1120,52.1%,0.1%,11.6%,13.0%,7.1%,16.0%,0.0%,0.0%,0.0%,52.2%,36.2%,20.2%
+271,1342169499,N. Lewis,Nick Lewis,Lewis,Nick,P,Washington State University,WSU,4505,Washington State,BBC,L,L,16,344,1231,52.1%,0.1%,0.4%,18.4%,6.0%,23.1%,0.0%,0.0%,8.4%,52.2%,47.5%,24.4%
+272,1330578944,E. Del Valle,Eddie Del Valle,Del Valle,Eddie,P,Delaware State University,DSU,730217984,Delaware State,BBC,R,L,12,289,1014,52.1%,0.0%,0.0%,9.4%,35.4%,3.1%,0.0%,0.0%,90.5%,52.1%,47.9%,44.8%
+273,1139725824,J. Raab,JT Raab,Raab,JT,P,Georgetown University,GTWN,2330,Georgetown,BBC,R,R,14,330,1112,52.0%,0.1%,0.1%,18.8%,15.5%,9.7%,3.6%,0.0%,37.9%,52.2%,47.7%,34.3%
+274,1162110976,C. Mayfield,Carson Mayfield,Mayfield,Carson,P,Cornell University,COR,730298624,Cornell,BBC,R,R,11,265,1032,52.0%,16.4%,0.8%,23.4%,2.5%,4.9%,0.1%,0.0%,0.5%,68.4%,30.9%,25.9%
+275,1694755002,S. Sarre,Serigne Sarre,Sarre,Serigne,P,Mount St. Mary's University,MSM,730291712,Mount St. Mary's,BBC,L,L,14,319,1153,52.0%,0.2%,0.0%,30.5%,0.3%,17.1%,0.0%,0.0%,47.6%,52.2%,47.8%,30.8%
+276,1196798720,C. Keshock,Cameron Keshock,Keshock,Cameron,P,Samford University,SAM,730386432,Samford,BBC,R,R,15,366,1325,51.9%,9.3%,0.0%,31.1%,0.6%,7.1%,0.0%,0.0%,6.3%,61.3%,38.7%,31.6%
+277,1255708160,J. Morrison,Jacob Morrison,Morrison,Jacob,P,Coastal Carolina University,CCAR,4104,Coastal Carolina,BBC,R,R,19,425,1618,51.9%,0.1%,15.0%,10.6%,15.8%,6.7%,0.0%,0.0%,0.0%,51.9%,33.1%,26.4%
+278,1198583040,C. Powers,Callen Powers,Powers,Callen,P,University of Massachusetts,MASS,5451,UMass,BBC,R,R,14,338,1245,51.9%,0.0%,0.2%,4.2%,28.2%,15.5%,0.0%,0.0%,54.5%,51.9%,48.0%,32.5%
+279,1255285248,J. Phillips,Jacob Phillips,Phillips,Jacob,P,Georgia Southern University,GASO,730331648,Georgia Southern,BBC,L,L,18,268,984,51.8%,1.0%,0.7%,9.3%,16.8%,19.5%,0.8%,0.0%,0.0%,52.8%,46.4%,26.1%
+280,1257329152,N. Chapman,Noah Chapman,Chapman,Noah,P,UNC Greensboro,UNCG,730238720,UNC Greensboro,BBC,L,L,21,292,1116,51.8%,0.4%,0.0%,33.9%,0.3%,13.6%,0.0%,0.0%,1.4%,52.2%,47.8%,34.2%
+281,1231526144,C. Burfield,Casey Burfield,Burfield,Casey,P,University of Nevada,NEV,4784,Nevada,BBC,R,R,14,316,1118,51.8%,0.0%,0.0%,38.0%,0.0%,10.2%,0.0%,0.0%,1.0%,51.8%,48.2%,38.0%
+282,1310946560,C. Benson,Chandler Benson,Benson,Chandler,P,Abilene Christian University,AC,730375936,Abilene Christian,BBC,L,L,20,276,953,51.7%,6.4%,0.0%,13.3%,0.6%,28.0%,0.0%,0.0%,9.8%,58.1%,41.9%,13.8%
+283,1111554816,Z. Royse,Zach Royse,Royse,Zach,P,UTSA,UTSA,730373120,UTSA,BBC,R,R,19,418,1531,51.7%,0.5%,1.0%,43.1%,1.4%,0.9%,1.2%,0.0%,0.4%,52.3%,46.7%,44.5%
+284,1142482688,K. Grundy,Kade Grundy,Grundy,Kade,P,Georgia Southern University,GASO,730331648,Georgia Southern,BBC,R,R,15,326,1182,51.7%,3.6%,3.3%,22.2%,6.4%,12.9%,0.0%,0.0%,0.1%,55.3%,41.4%,28.5%
+285,1110073856,S. Garner,Seth Garner,Garner,Seth,P,University of Memphis,MEM,730172160,Memphis,BBC,R,R,14,329,1214,51.7%,0.0%,0.2%,17.0%,2.0%,29.2%,0.0%,0.0%,1.0%,51.7%,48.2%,19.0%
+286,1238136064,K. Barr,Kurt Barr,Barr,Kurt,P,University of Michigan,MICH,2290,Michigan,BBC,R,R,16,323,1181,51.7%,2.6%,6.0%,10.6%,18.0%,8.0%,0.0%,0.0%,0.0%,54.3%,39.7%,31.7%
+287,1261138697,G. Sentell,Gavin Sentell,Sentell,Gavin,P,North Carolina A&T State University,NCAT,730372352,North Carolina A&T,BBC,L,R,14,246,915,51.6%,0.4%,0.0%,29.9%,0.4%,15.2%,0.0%,2.4%,50.3%,52.1%,47.9%,32.7%
+288,1150347776,C. Allen,Colby Allen,Allen,Colby,P,The University of Southern Mississippi,USM,730246656,Southern Miss,BBC,R,R,29,276,1009,51.6%,1.3%,1.5%,43.5%,0.6%,1.4%,0.1%,0.0%,0.1%,52.9%,45.6%,44.1%
+289,1116316672,K. Lesler,Kyle Lesler,Lesler,Kyle,P,Fairfield University,FAIR,730380544,Fairfield,BBC,R,R,14,261,961,51.6%,0.0%,0.0%,23.7%,12.4%,12.4%,0.0%,0.0%,80.6%,51.6%,48.4%,36.0%
+290,1217549824,R. Reyes,Randy Reyes,Reyes,Randy,P,Grambling State University,GRAM,5378,Grambling State,BBC,L,L,14,289,872,51.6%,3.4%,0.3%,26.4%,10.0%,8.3%,0.0%,0.0%,60.0%,55.0%,44.7%,36.4%
+291,1320362240,J. Kim,Justin Kim,Kim,Justin,P,Princeton University,PRIN,730198784,Princeton,BBC,R,R,19,228,865,51.5%,0.0%,0.2%,19.2%,26.7%,2.3%,0.0%,0.0%,0.0%,51.5%,48.3%,45.9%
+292,1160666624,M. Patton,Myles Patton,Patton,Myles,P,Texas A&M University,TXAM,3032,Texas A&M,BBC,L,L,15,332,1260,51.4%,7.8%,4.5%,21.5%,0.1%,14.7%,0.0%,0.0%,0.0%,59.2%,36.3%,21.6%
+293,1296842752,G. Naess,Griffin Naess,Naess,Griffin,P,Cal Poly,CP,5487,Cal Poly,BBC,R,R,16,400,1485,51.4%,0.1%,3.5%,2.9%,13.6%,28.5%,0.0%,0.0%,0.1%,51.5%,45.0%,16.5%
+294,1162130176,T. Hess,Tate Hess,Hess,Tate,P,University of Louisiana at Lafayette,ULL,5075,Louisiana,BBC,R,R,20,283,1029,51.4%,1.3%,4.0%,21.6%,8.2%,13.6%,0.0%,0.0%,1.1%,52.7%,43.3%,29.8%
+295,1102217472,H. Phelps,Holden Phelps,Phelps,Holden,P,Siena College,SIE,730382592,Siena,BBC,R,R,16,313,1100,51.3%,0.0%,18.1%,0.9%,8.0%,16.8%,4.9%,0.0%,79.5%,51.3%,30.5%,8.8%
+296,1094321664,J. Edwards,Jagger Edwards,Edwards,Jagger,P,Columbia University,CLMB,730319104,Columbia,BBC,L,L,14,271,986,51.3%,0.0%,4.5%,11.6%,21.6%,11.0%,0.0%,0.0%,0.2%,51.3%,44.2%,33.2%
+297,1349689556,R. Mealy,Ryan Mealy,Mealy,Ryan,P,Monmouth University,MONM,4164,Monmouth,BBC,R,R,15,292,985,51.3%,0.1%,0.4%,17.9%,1.7%,28.5%,0.0%,0.0%,6.3%,51.4%,48.2%,19.6%
+298,1802268698,E. Sanchez,Edwin Sanchez,Sanchez,Edwin,P,Bethune-Cookman University,COOK,730152960,Bethune-Cookman,BBC,L,L,17,355,1359,51.3%,0.0%,0.0%,5.9%,11.8%,31.0%,0.0%,0.0%,62.7%,51.3%,48.7%,17.8%
+299,1181533440,J. Lamkin,Justin Lamkin,Lamkin,Justin,P,Texas A&M University,TXAM,3032,Texas A&M,BBC,R,L,15,350,1346,51.3%,2.4%,0.1%,33.6%,0.1%,12.6%,0.0%,0.0%,0.1%,53.6%,46.2%,33.6%
+300,1100455936,T. Charlton,Tyler Charlton,Charlton,Tyler,P,Missouri State University,MOSU,5382,Missouri State,BBC,L,L,16,260,1057,51.2%,0.0%,0.5%,20.3%,14.6%,13.5%,0.0%,0.0%,16.5%,51.2%,48.4%,34.9%
+301,1273112064,D. Beckner,Drew Beckner,Beckner,Drew,P,Eastern Michigan University,EMU,5385,Eastern Michigan,BBC,L,L,15,372,1471,51.1%,1.0%,0.0%,15.5%,6.6%,25.7%,0.1%,0.0%,37.9%,52.1%,47.9%,22.1%
+302,1090704384,J. Turner,Jacob Turner,Turner,Jacob,P,Bowling Green State University,BGSU,730189056,Bowling Green,BBC,R,R,16,292,1038,50.9%,6.7%,0.0%,25.9%,3.0%,13.4%,0.0%,0.0%,48.4%,57.6%,42.4%,28.9%
+303,1142994176,L. Peterson,Liam Peterson,Peterson,Liam,P,University of Florida,FLA,730168320,Florida,BBC,R,R,16,305,1262,50.9%,0.2%,0.2%,31.3%,4.6%,12.7%,0.0%,0.1%,0.5%,51.1%,48.7%,36.0%
+304,1179432448,D. Delvecchio,Dylan Delvecchio,Delvecchio,Dylan,P,Saint Mary's College (CA),SMC,730288896,Saint Mary's,BBC,L,L,18,311,1173,50.8%,0.3%,0.0%,19.7%,3.7%,25.4%,0.0%,0.1%,0.0%,51.2%,48.8%,23.4%
+305,1085418496,K. Remington,Kyle Remington,Remington,Kyle,P,University of Minnesota,MINN,4864,Minnesota,BBC,L,R,15,297,1024,50.8%,1.7%,6.0%,25.6%,0.0%,15.9%,0.0%,0.0%,0.2%,52.4%,41.6%,25.6%
+306,1086409984,T. Bryan,Tyler Bryan,Bryan,Tyler,P,Northwestern State University,NWST,730255872,Northwestern State,BBC,R,R,14,347,1262,50.6%,0.3%,0.0%,28.3%,12.8%,7.2%,0.9%,0.0%,11.5%,50.9%,49.1%,41.1%
+307,1421915542,C. Torres,Chris Torres,Torres,Chris,P,University of South Carolina Upstate,SCUS,730317312,South Carolina Upstate,BBC,L,L,17,369,1320,50.6%,0.0%,12.2%,25.7%,3.2%,7.9%,0.0%,0.5%,1.6%,50.6%,37.3%,29.4%
+308,1473506994,G. Kirn,Griffin Kirn,Kirn,Griffin,P,West Virginia University,WVU,5327,West Virginia,BBC,L,L,18,420,1546,50.6%,9.1%,0.8%,25.0%,0.3%,13.2%,0.0%,1.0%,0.1%,59.7%,39.5%,26.3%
+309,1230322309,D. Wright,Davis Wright,Wright,Davis,P,Western Carolina University,WCU,730278144,Western Carolina,BBC,L,L,15,383,1500,50.4%,0.9%,0.6%,11.6%,19.4%,17.0%,0.0%,0.0%,6.0%,51.3%,48.1%,31.1%
+310,1162233600,C. Obermueller,Cade Obermueller,Obermueller,Cade,P,University of Iowa,IOWA,1232,Iowa,BBC,L,L,15,356,1432,50.4%,2.6%,0.0%,43.5%,0.0%,3.1%,0.3%,0.0%,0.0%,53.0%,47.0%,43.5%
+311,1146369280,Z. Longshore,Zach Longshore,Longshore,Zach,P,University of New Orleans,UNO,5380,New Orleans,BBC,L,L,17,303,1088,50.4%,4.8%,0.6%,22.6%,13.9%,7.7%,0.0%,0.0%,9.7%,55.1%,44.3%,36.5%
+312,1277191168,M. Dalquist,Matthew Dalquist,Dalquist,Matthew,P,UC San Diego,UCSD,730348032,UC San Diego,BBC,S,R,14,347,1263,50.3%,0.0%,1.7%,20.5%,15.1%,11.2%,0.0%,0.6%,0.4%,50.3%,48.0%,36.8%
+313,1313846272,D. Lavelle,Declan Lavelle,Lavelle,Declan,P,Elon University,ELON,730252544,Elon,BBC,R,R,15,367,1253,50.3%,0.0%,4.9%,25.9%,12.7%,5.2%,0.7%,0.3%,0.3%,50.3%,44.8%,38.9%
+314,1093159424,B. Curley,Brian Curley,Curley,Brian,P,University of Georgia,UGA,226,Georgia,BBC,R,R,17,271,1096,50.3%,0.1%,23.1%,14.0%,11.4%,0.3%,0.0%,0.8%,0.2%,50.4%,26.5%,26.2%
+315,1604541126,T. Hillen,Trent Hillen,Hillen,Trent,P,Northwestern State University,NWST,730255872,Northwestern State,BBC,R,R,14,349,1239,50.3%,1.8%,0.0%,29.8%,10.2%,8.0%,0.0%,0.0%,7.8%,52.1%,47.9%,39.9%
+316,1002892320,M. Hagler,Micah Hagler,Hagler,Micah,P,Seattle University,SEA,4504,Seattle,BBC,R,R,16,266,913,50.2%,3.4%,1.0%,23.3%,6.6%,15.5%,0.0%,0.0%,13.6%,53.6%,45.4%,29.9%
+317,1100149248,P. Schmitz,Paul Schmitz,Schmitz,Paul,P,University of Houston,HOU,3030,Houston,BBC,R,R,14,275,1108,50.2%,0.5%,19.0%,8.3%,15.1%,4.2%,2.6%,0.1%,0.7%,50.7%,30.3%,23.5%
+318,1338119552,D. Thomas,Daniel Thomas,Thomas,Daniel,P,Mercyhurst College,MCYH,730196224,Mercyhurst,BBC,R,R,16,300,967,50.1%,0.0%,0.0%,24.1%,0.0%,25.7%,0.0%,0.0%,61.8%,50.1%,49.9%,24.1%
+319,1204042240,H. Elliott,Hunter Elliott,Elliott,Hunter,P,University of Mississippi,MISS,5322,Ole Miss,BBC,L,L,17,361,1474,50.1%,3.7%,0.4%,9.1%,4.3%,32.5%,0.0%,0.0%,0.0%,53.7%,45.9%,13.4%
+320,1246857984,B. Jacobs,Ben Jacobs,Jacobs,Ben,P,Arizona State University,ASU,5035,Arizona State,BBC,L,L,16,368,1577,50.0%,1.7%,3.0%,21.4%,8.5%,1.3%,14.2%,0.0%,0.6%,51.7%,45.3%,29.8%
+321,1271444225,R. Hunsaker,Riely Hunsaker,Hunsaker,Riely,P,Lamar University,LAM,730162432,Lamar,BBC,R,R,14,320,1135,49.9%,0.4%,8.5%,27.3%,2.6%,10.9%,0.4%,0.0%,4.8%,50.3%,41.2%,29.9%
+322,1342166856,G. Eddy,Gavin Eddy,Eddy,Gavin,P,University of California,CAL,730152448,California,BBC,R,R,16,265,989,49.9%,0.0%,0.1%,34.0%,11.5%,4.5%,0.1%,0.0%,0.3%,49.9%,50.0%,45.4%
+323,1196196955,D. Morrill,Dylan Morrill,Morrill,Dylan,P,University of North Alabama,UNA,730266624,North Alabama,BBC,R,R,17,250,942,49.8%,9.4%,2.2%,32.2%,0.2%,6.1%,0.0%,0.0%,48.0%,59.2%,38.6%,32.4%
+324,1236290816,A. Haugh,Aidan Haugh,Haugh,Aidan,P,University of North Carolina,UNC,730181888,North Carolina,BBC,R,R,17,333,1354,49.7%,1.6%,0.8%,6.0%,19.1%,22.8%,0.0%,0.0%,0.0%,51.3%,47.9%,25.1%
+325,1288366848,K. Straily,Kaden Straily,Straily,Kaden,P,Coppin State University,COPP,730194176,Coppin State,BBC,R,R,13,344,1139,49.7%,0.0%,0.0%,17.0%,20.5%,12.9%,0.0%,0.0%,85.0%,49.7%,50.3%,37.4%
+326,1115370173,H. Bell,Hunter Bell,Bell,Hunter,P,Stonehill College,SC,730238464,Stonehill,BBC,L,L,13,270,860,49.7%,0.0%,0.0%,31.5%,0.0%,18.8%,0.0%,0.0%,82.7%,49.7%,50.3%,31.5%
+327,1069409302,Z. Danielson,Zane Danielson,Danielson,Zane,P,Fort Wayne,PFW,730231552,Fort Wayne,BBC,L,L,11,253,985,49.6%,0.0%,0.0%,15.4%,5.6%,29.5%,0.0%,0.0%,54.5%,49.6%,50.4%,21.0%
+328,1328895488,K. OConnor,Kellen OConnor,OConnor,Kellen,P,University of Cincinnati,CIN,5465,Cincinnati,BBC,L,L,16,300,1185,49.5%,1.4%,0.0%,20.7%,1.0%,27.4%,0.0%,0.0%,0.7%,50.9%,49.1%,21.8%
+329,1077994240,J. Katz,Josh Katz,Katz,Josh,P,University of Pennsylvania,PENN,730292224,Pennsylvania,BBC,R,R,13,227,837,49.5%,0.0%,0.1%,31.2%,2.4%,16.7%,0.0%,0.0%,0.1%,49.5%,50.4%,33.6%
+330,1100603904,T. Beard,Trey Beard,Beard,Trey,P,Florida Atlantic University,FAU,339,Florida Atlantic,BBC,L,L,16,350,1429,49.5%,0.0%,0.6%,3.4%,13.4%,33.2%,0.0%,0.0%,2.7%,49.5%,49.9%,16.8%
+331,1239087872,T. Bremner,Tyler Bremner,Bremner,Tyler,P,UC Santa Barbara,UCSB,730364160,UC Santa Barbara,BBC,R,R,14,310,1257,49.5%,0.3%,0.0%,16.4%,0.3%,33.4%,0.0%,0.1%,7.4%,49.7%,50.3%,16.8%
+332,1730428818,K. Fabian,Kenney Fabian,Fabian,Kenney,P,University of Arkansas-Pine Bluff,ARPB,5377,Arkansas-Pine Bluff,BBC,R,R,15,379,1131,49.5%,0.4%,0.0%,31.1%,2.5%,16.6%,0.0%,0.0%,75.0%,49.8%,50.2%,33.6%
+333,1262862080,C. Morgan,Chase Morgan,Morgan,Chase,P,University of Louisiana at Lafayette,ULL,5075,Louisiana,BBC,L,L,13,270,1066,49.4%,1.3%,0.0%,7.6%,22.0%,19.6%,0.0%,0.0%,0.0%,50.8%,49.2%,29.6%
+334,1488546413,L. Meyers,Luke Meyers,Meyers,Luke,P,Washington State University,WSU,4505,Washington State,BBC,R,R,15,290,1136,49.4%,0.0%,6.0%,15.0%,11.0%,18.6%,0.0%,0.1%,3.0%,49.4%,44.6%,26.0%
+335,1330098688,M. Negrete,Mikiah Negrete,Negrete,Mikiah,P,Cal State Fullerton,CSF,5414,CSU Fullerton,BBC,L,L,15,366,1330,49.4%,0.1%,0.0%,44.1%,0.2%,6.2%,0.2%,0.0%,0.1%,49.4%,50.6%,44.2%
+336,1287083776,B. Young,Brian Young,Young,Brian,P,Rider University,RID,730174976,Rider,BBC,L,L,14,382,1283,49.4%,0.4%,1.7%,26.6%,0.0%,21.5%,0.4%,0.0%,81.8%,49.8%,48.5%,26.6%
+337,1404806932,E. Young,Ethan Young,Young,Ethan,P,East Carolina University,ECU,730270720,East Carolina,BBC,R,R,23,303,1206,49.3%,3.9%,4.5%,25.3%,6.6%,5.0%,5.4%,0.0%,0.0%,53.2%,42.3%,31.9%
+338,1136816896,T. Brachbill,Ty Brachbill,Brachbill,Ty,P,Northern Illinois University,NIU,730386176,Northern Illinois,BBC,R,R,14,351,1321,49.3%,0.2%,0.0%,32.4%,7.6%,10.6%,0.0%,0.0%,17.0%,49.5%,50.5%,40.0%
+339,1950260205,M. Diforte,Michael Diforte,Diforte,Michael,P,Saint Peter's University,SPC,730149888,Saint Peter's,BBC,R,R,16,289,876,49.3%,16.7%,1.0%,22.7%,9.9%,0.5%,0.0%,0.0%,76.8%,66.0%,33.0%,32.5%
+340,1085390592,D. Brown,Dylan Brown,Brown,Dylan,P,Old Dominion University,ODU,3090,Old Dominion,BBC,R,L,15,358,1373,49.3%,1.5%,0.2%,26.9%,0.0%,22.2%,0.0%,0.0%,16.5%,50.7%,49.1%,26.9%
+341,1263423232,J. Lloyd,Jaxon Lloyd,Lloyd,Jaxon,P,Virginia Military Institute,VMI,730173440,VMI,BBC,L,L,16,285,1094,49.2%,0.1%,0.2%,29.7%,4.1%,16.6%,0.0%,0.0%,24.0%,49.3%,50.4%,33.8%
+342,1251441152,W. Rogers,Will Rogers,Rogers,Will,P,University of Michigan,MICH,2290,Michigan,BBC,R,R,23,260,945,49.2%,3.6%,18.7%,8.3%,12.6%,5.1%,0.0%,0.5%,0.4%,52.8%,28.5%,23.4%
+343,1239205376,M. Van Alstine,Marcus Van Alstine,Van Alstine,Marcus,P,Virginia Military Institute,VMI,730173440,VMI,BBC,R,R,22,270,997,49.2%,4.3%,0.1%,26.1%,0.0%,19.6%,0.0%,0.6%,7.0%,53.5%,46.4%,26.8%
+344,1306777856,C. Shaw,Colton Shaw,Shaw,Colton,P,Yale University,YALE,730334464,Yale,BBC,R,R,12,329,1249,49.1%,7.8%,0.1%,20.6%,2.0%,20.3%,0.0%,0.0%,1.4%,56.9%,43.0%,22.7%
+345,1153411840,J. Radel,Jack Radel,Radel,Jack,P,University of Notre Dame,ND,225,Notre Dame,BBC,R,R,13,289,1090,49.1%,0.3%,7.9%,31.6%,5.7%,5.4%,0.0%,0.0%,0.6%,49.4%,42.7%,37.3%
+346,1279533312,C. Dygert,Caylon Dygert,Dygert,Caylon,P,University of Texas-Arlington,UTA,5324,UT Arlington,BBC,R,R,15,368,1362,49.1%,7.3%,0.2%,13.8%,6.3%,23.3%,0.0%,0.0%,8.6%,56.4%,43.5%,20.2%
+347,1713704850,T. Patterson,Tripp Patterson,Patterson,Tripp,P,University of North Alabama,UNA,730266624,North Alabama,BBC,L,L,15,373,1356,49.1%,3.4%,0.0%,6.6%,4.1%,36.8%,0.0%,0.0%,41.1%,52.4%,47.6%,10.8%
+348,1742320429,M. Vaisvila,Max Vaisvila,Vaisvila,Max,P,Northern Illinois University,NIU,730386176,Northern Illinois,BBC,L,L,16,304,1103,49.0%,5.4%,0.0%,16.6%,2.4%,26.6%,0.0%,0.0%,15.9%,54.4%,45.6%,19.0%
+349,1251300352,I. Takemoto,Itsuki Takemoto,Takemoto,Itsuki,P,"University of Hawaii, Manoa",HAW,730158848,Hawaii,BBC,L,R,15,315,1099,49.0%,0.0%,11.0%,25.8%,11.4%,2.1%,0.7%,0.0%,38.7%,49.0%,40.1%,37.2%
+350,1131526490,F. Romano,Frederick Romano,Romano,Frederick,P,Western Illinois University,WIU,730370560,Western Illinois,BBC,R,R,12,286,969,48.9%,1.8%,2.0%,12.2%,27.3%,7.8%,0.0%,0.0%,41.8%,50.7%,47.3%,39.5%
+351,1184713472,C. Fang,Callan Fang,Fang,Callan,P,Harvard University,HARV,5450,Harvard,BBC,L,R,11,280,1045,48.9%,0.0%,1.6%,11.8%,22.3%,12.7%,2.8%,0.0%,9.8%,48.9%,49.5%,34.0%
+352,1188014592,T. Pauley,Truman Pauley,Pauley,Truman,P,Harvard University,HARV,5450,Harvard,BBC,R,R,14,315,1307,48.9%,0.0%,1.9%,26.8%,3.9%,6.3%,0.3%,11.9%,8.4%,48.9%,49.2%,42.7%
+353,1196797696,D. Lally Jr.,David Lally Jr.,Lally Jr.,David,P,University of Michigan,MICH,2290,Michigan,BBC,R,R,15,328,1224,48.8%,1.7%,12.8%,13.1%,10.5%,11.9%,0.0%,1.0%,1.1%,50.5%,36.7%,24.8%
+354,1232208640,L. McCollough,Luke McCollough,McCollough,Luke,P,Villanova University,VILL,730278400,Villanova,BBC,R,R,13,335,1219,48.8%,3.0%,1.9%,27.9%,9.7%,8.7%,0.0%,0.0%,0.0%,51.8%,46.3%,37.6%
+355,1993201465,M. Banks,Max Banks,Banks,Max,P,University of Washington,WASH,3110,Washington,BBC,R,R,13,311,1219,48.8%,0.1%,5.5%,18.5%,8.7%,16.7%,0.0%,1.6%,0.5%,48.9%,45.6%,28.9%
+356,1082443399,C. Moak,Clint Moak,Moak,Clint,P,Marshall University,MRSH,730333696,Marshall,BBC,R,R,19,282,989,48.8%,5.0%,2.3%,36.0%,5.0%,3.0%,0.0%,0.0%,4.2%,53.7%,43.9%,41.0%
+357,1326021632,Z. Garcia,Zach Garcia,Garcia,Zach,P,Texas A&M-Corpus Christi,AMCC,4764,Texas A&M-Corpus Christi,BBC,L,L,14,391,1365,48.8%,2.3%,0.0%,11.5%,18.9%,18.5%,0.0%,0.0%,9.1%,51.1%,48.9%,30.4%
+358,1207755520,J. Gehring,Jacob Gehring,Gehring,Jacob,P,Youngstown State University,YSU,730284544,Youngstown State,BBC,R,R,12,291,1089,48.7%,0.0%,0.0%,33.2%,0.0%,18.1%,0.0%,0.0%,48.9%,48.7%,51.3%,33.2%
+359,1311140864,B. Pendley,Brady Pendley,Pendley,Brady,P,Georgia Southern University,GASO,730331648,Georgia Southern,BBC,R,R,16,289,1041,48.6%,0.1%,2.2%,31.9%,14.4%,2.7%,0.0%,0.0%,0.4%,48.7%,49.0%,46.3%
+360,1211049217,K. Pallares,Kenji Pallares,Pallares,Kenji,P,Loyola Marymount University,LMU,730149120,Loyola Marymount,BBC,R,R,15,309,1216,48.6%,0.3%,6.9%,13.7%,14.1%,16.3%,0.0%,0.1%,0.4%,48.9%,44.2%,27.9%
+361,1296173568,J. Kelley,Jack Kelley,Kelley,Jack,P,University of Akron,AKR,540536064,Akron,BBC,R,R,12,248,926,48.5%,1.2%,4.8%,20.2%,11.6%,13.7%,0.0%,0.0%,25.7%,49.7%,45.5%,31.8%
+361,1661534629,S. Lavin,Sam Lavin,Lavin,Sam,P,George Mason University,GMU,730265088,George Mason,BBC,L,R,16,289,1116,48.5%,0.2%,15.5%,10.4%,20.2%,1.6%,3.6%,0.0%,7.5%,48.7%,35.8%,30.5%
+363,1392733460,J. Sperry,Joe Sperry,Sperry,Joe,P,University of Minnesota,MINN,4864,Minnesota,BBC,R,R,20,243,881,48.5%,8.6%,18.2%,19.3%,0.1%,5.2%,0.0%,0.0%,0.1%,57.2%,24.7%,19.4%
+364,1207489536,C. Monke,Carter Monke,Monke,Carter,P,Illinois State University,ILST,730258944,Illinois State,BBC,R,R,17,271,864,48.5%,12.0%,0.0%,24.0%,2.7%,12.7%,0.0%,0.0%,6.5%,60.5%,39.5%,26.7%
+365,1432381131,B. Lobell,Blake Lobell,Lobell,Blake,P,Southeastern Louisiana University,SELA,730209280,Southeastern Louisiana,BBC,R,R,13,284,999,48.5%,7.2%,1.4%,24.0%,13.2%,5.3%,0.4%,0.0%,3.8%,55.7%,43.0%,37.3%
+366,1162060288,T. Hansen,Trevor Hansen,Hansen,Trevor,P,UC Irvine,UCI,3031,UC Irvine,BBC,R,R,16,402,1545,48.5%,0.1%,0.2%,4.0%,23.5%,22.9%,0.9%,0.0%,1.7%,48.6%,51.3%,27.5%
+367,1269484032,A. Steinhaus,Andrew Steinhaus,Steinhaus,Andrew,P,Radford University,RAD,730267392,Radford,BBC,R,R,20,275,1013,48.4%,24.5%,17.0%,6.8%,0.7%,2.5%,0.0%,0.0%,6.6%,72.9%,10.0%,7.5%
+368,1226682112,Z. Taylor,Zane Taylor,Taylor,Zane,P,UNC Wilmington,UNCW,730229504,UNC Wilmington,BBC,R,R,15,365,1306,48.4%,0.0%,25.5%,9.9%,6.0%,10.3%,0.0%,0.0%,0.0%,48.4%,26.1%,15.8%
+369,1330401536,B. Baker,Bowen Baker,Baker,Bowen,P,Fairfield University,FAIR,730380544,Fairfield,BBC,L,L,16,341,1136,48.4%,0.0%,3.0%,11.2%,6.8%,30.6%,0.0%,0.0%,67.8%,48.4%,48.6%,18.0%
+370,1335271936,E. Norby,Ethan Norby,Norby,Ethan,P,East Carolina University,ECU,730270720,East Carolina,BBC,R,L,18,368,1388,48.3%,3.2%,8.1%,30.1%,0.2%,10.1%,0.0%,0.0%,0.0%,51.5%,40.4%,30.3%
+371,1521413935,C. Linn,Conner Linn,Linn,Conner,P,Northern Kentucky University,NKU,730230272,Northern Kentucky,BBC,L,L,15,301,1073,48.3%,0.0%,0.3%,27.0%,7.2%,17.3%,0.0%,0.0%,29.8%,48.3%,51.4%,34.1%
+372,1288825344,N. Taylor,Nathan Taylor,Taylor,Nathan,P,University of Cincinnati,CIN,5465,Cincinnati,BBC,L,R,15,373,1395,48.3%,0.4%,0.5%,41.3%,4.5%,5.0%,0.0%,0.0%,0.1%,48.7%,50.8%,45.8%
+373,1279379456,I. Magdaleno,Isaiah Magdaleno,Magdaleno,Isaiah,P,"University of Hawaii, Manoa",HAW,730158848,Hawaii,BBC,R,R,24,242,842,48.3%,0.0%,0.0%,15.9%,10.5%,22.3%,3.0%,0.0%,33.4%,48.3%,51.7%,26.4%
+374,1297541376,C. McAnelly,Colter McAnelly,McAnelly,Colter,P,University of Utah,UTAH,730328320,Utah,BBC,R,R,14,400,1478,48.3%,6.5%,10.9%,3.0%,17.2%,13.0%,1.2%,0.0%,1.5%,54.7%,34.3%,20.1%
+375,1129687636,G. Garman,Grant Garman,Garman,Grant,P,Oakland University,OAK,5386,Oakland,BBC,L,L,15,370,1405,48.3%,2.5%,0.0%,22.4%,10.1%,16.6%,0.0%,0.0%,16.5%,50.7%,49.3%,32.7%
+376,1763497799,J. Pfeffer,John Pfeffer,Pfeffer,John,P,Gardner Webb University,WEBB,730222592,Gardner Webb,BBC,R,R,26,264,992,48.2%,2.1%,0.4%,33.8%,7.5%,7.5%,0.3%,0.0%,6.1%,50.4%,49.2%,41.4%
+377,1201053184,G. Braunecker,Gavin Braunecker,Braunecker,Gavin,P,Austin Peay State University,PEAY,730219520,Austin Peay,BBC,L,L,15,305,1119,48.2%,6.3%,15.4%,5.0%,0.0%,25.2%,0.0%,0.0%,9.9%,54.5%,30.2%,5.0%
+378,1311168256,F. Ciccone,Frank Ciccone,Ciccone,Frank,P,Saint Joseph's University,JOES,730332416,Saint Joseph's,BBC,R,R,14,331,1193,48.2%,3.7%,0.7%,34.7%,5.3%,7.5%,0.0%,0.0%,4.3%,51.8%,47.5%,39.9%
+379,1239369472,K. Reed,Kevin Reed,Reed,Kevin,P,University of Evansville,EVAN,730327808,Evansville,BBC,L,L,14,338,1221,48.2%,0.0%,15.4%,7.6%,27.1%,1.7%,0.1%,0.0%,2.0%,48.2%,36.5%,34.7%
+380,1145349376,C. Poliey,Clayton Poliey,Poliey,Clayton,P,Rider University,RID,730174976,Rider,BBC,R,R,14,278,872,48.1%,1.2%,16.7%,21.0%,6.8%,6.2%,0.0%,0.0%,81.4%,49.4%,34.0%,27.8%
+381,1102896128,J. Gonzalez,Jonathan Gonzalez,Gonzalez,Jonathan,P,Stetson University,STET,730261504,Stetson,BBC,L,L,15,373,1419,48.1%,0.4%,0.2%,5.8%,2.3%,43.3%,0.0%,0.0%,14.2%,48.5%,51.4%,8.1%
+382,1275226481,J. Bauer,Jackson Bauer,Bauer,Jackson,P,Hofstra University,HOF,730245120,Hofstra,BBC,L,L,17,339,1277,48.0%,5.7%,0.0%,14.1%,19.5%,12.5%,0.0%,0.1%,15.7%,53.7%,46.3%,33.7%
+383,1162505216,I. May,Ian May,May,Ian,P,UCLA,UCLA,5048,UCLA,BBC,R,L,27,304,1201,48.0%,0.3%,0.0%,26.4%,5.7%,19.5%,0.0%,0.1%,0.2%,48.3%,51.7%,32.2%
+384,1207806720,L. Fladda,Luc Fladda,Fladda,Luc,P,Tulane University,TULN,730354176,Tulane,BBC,L,L,15,346,1214,48.0%,0.0%,7.2%,21.2%,0.6%,23.1%,0.0%,0.0%,0.0%,48.0%,44.8%,21.7%
+385,1314894592,C. Fink,Carter Fink,Fink,Carter,P,East Tennessee State University,ETSU,4844,East Tennessee State,BBC,R,R,16,335,1243,47.9%,5.4%,0.0%,11.0%,0.2%,35.3%,0.0%,0.1%,0.0%,53.3%,46.7%,11.3%
+386,1580046011,E. Lay,Ethan Lay,Lay,Ethan,P,Sacramento State University,SAC,730293760,Sacramento State,BBC,L,R,14,320,1121,47.9%,2.9%,3.9%,13.7%,13.3%,18.2%,0.0%,0.0%,0.1%,50.9%,45.2%,27.0%
+387,1228796416,N. McCay,Nic McCay,McCay,Nic,P,University of Kentucky,UK,5362,Kentucky,BBC,R,R,15,316,1237,47.9%,4.4%,12.8%,4.1%,17.0%,13.7%,0.1%,0.0%,0.0%,52.4%,34.8%,21.1%
+388,1238202112,K. Witherspoon,Kyson Witherspoon,Witherspoon,Kyson,P,University of Oklahoma,OKLA,730294528,Oklahoma,BBC,R,R,16,390,1568,47.9%,0.9%,21.0%,19.0%,8.0%,3.3%,0.0%,0.0%,0.1%,48.8%,30.2%,27.0%
+389,1907374041,J. Nichols,James Nichols,Nichols,James,P,Merrimack College,MRMK,730295552,Merrimack,BBC,R,R,13,283,792,47.9%,0.0%,8.2%,20.6%,4.7%,18.7%,0.0%,0.0%,67.6%,47.9%,44.0%,25.3%
+390,1236990464,D. Reid,Dominick Reid,Reid,Dominick,P,Abilene Christian University,AC,730375936,Abilene Christian,BBC,R,R,15,362,1384,47.8%,1.1%,0.1%,8.5%,2.0%,40.4%,0.0%,0.0%,7.8%,48.9%,51.0%,10.6%
+391,1311153664,A. Herrmann,Andrew Herrmann,Herrmann,Andrew,P,University of Louisiana at Lafayette,ULL,5075,Louisiana,BBC,L,L,18,329,1185,47.8%,0.1%,1.0%,26.4%,5.4%,19.3%,0.0%,0.0%,1.3%,47.9%,51.1%,31.8%
+392,1257398016,R. Bilka,Ryan Bilka,Bilka,Ryan,P,University of Richmond,RICH,730171904,Richmond,BBC,R,R,18,243,801,47.7%,1.3%,1.3%,34.6%,0.1%,2.4%,12.6%,0.0%,1.1%,49.0%,49.7%,34.7%
+393,1298785536,M. Kuhle,Max Kuhle,Kuhle,Max,P,James Madison University,JMU,730340096,James Madison,BBC,L,L,19,240,914,47.7%,0.7%,1.8%,14.1%,10.4%,25.4%,0.0%,0.0%,0.0%,48.4%,49.9%,24.5%
+394,1004454230,M. Delvecchio,Matthew Delvecchio,Delvecchio,Matthew,P,Niagara University,NIAG,730156544,Niagara,BBC,R,R,17,380,1168,47.6%,22.9%,0.0%,17.1%,0.0%,12.4%,0.0%,0.0%,82.0%,70.5%,29.5%,17.1%
+395,1312932352,C. New,Cody New,New,Cody,P,California Baptist University,CBU,5091,California Baptist,BBC,L,L,16,346,1421,47.6%,0.2%,1.7%,14.9%,21.6%,13.5%,0.0%,0.5%,0.1%,47.8%,50.5%,37.0%
+396,1310787840,O. Proksch,Owen Proksch,Proksch,Owen,P,Duke University,DUKE,730336256,Duke,BBC,S,L,19,290,1167,47.6%,0.8%,0.2%,43.6%,0.1%,7.8%,0.0%,0.0%,0.1%,48.4%,51.5%,43.7%
+397,1236991744,K. Anderson,Kade Anderson,Anderson,Kade,P,Louisiana State University,LSU,5323,Louisiana State,BBC,L,L,19,481,1922,47.5%,0.1%,0.1%,28.2%,12.0%,12.2%,0.0%,0.0%,0.1%,47.5%,52.4%,40.2%
+398,1106733824,C. Roberts,Cole Roberts,Roberts,Cole,P,Georgia State University,GAST,730239744,Georgia State,BBC,R,R,13,297,1077,47.4%,0.0%,0.0%,28.5%,0.5%,23.6%,0.0%,0.0%,0.0%,47.4%,52.6%,29.0%
+399,1854940930,H. Deliyannis,Harry Deliyannis,Deliyannis,Harry,P,Valparaiso University,VALP,730369536,Valparaiso,BBC,R,R,14,290,957,47.4%,0.4%,10.1%,12.2%,3.4%,26.3%,0.0%,0.0%,6.0%,47.9%,42.0%,15.7%
+400,1100074752,D. James,David James,James,David,P,St. Bonaventure University,SBON,730375424,St. Bonaventure,BBC,R,R,13,245,891,47.4%,0.0%,3.0%,37.8%,5.4%,5.2%,1.1%,0.0%,21.7%,47.4%,49.6%,43.3%
+401,1310380288,B. Poynter,Bradley Poynter,Poynter,Bradley,P,Morehead State University,MORE,730158080,Morehead State,BBC,R,R,14,287,915,47.3%,14.4%,1.4%,22.9%,1.9%,12.1%,0.0%,0.0%,23.3%,61.7%,36.9%,24.8%
+402,1132735744,C. Ingram,Chase Ingram,Ingram,Chase,P,UAB,UAB,730345984,UAB,BBC,R,R,15,266,911,47.2%,0.0%,18.9%,6.5%,23.6%,3.8%,0.0%,0.0%,8.2%,47.2%,33.9%,30.0%
+403,1334314752,A. Brouwer,Adam Brouwer,Brouwer,Adam,P,Northern Illinois University,NIU,730386176,Northern Illinois,BBC,R,R,13,310,1111,47.2%,0.2%,11.7%,21.1%,12.1%,4.6%,3.1%,0.0%,19.0%,47.4%,40.9%,33.2%
+404,1143044608,J. Burcham,Jake Burcham,Burcham,Jake,P,Tarleton State University,TAR,730236416,Tarleton State,BBC,R,R,15,321,1111,47.2%,9.9%,0.0%,29.8%,2.5%,10.7%,0.0%,0.0%,57.1%,57.0%,43.0%,32.3%
+404,1310134016,N. Luckett,Nick Luckett,Luckett,Nick,P,Southern University,SOU,4767,Southern,BBC,R,R,15,425,1340,47.2%,0.0%,0.0%,22.4%,4.9%,25.6%,0.0%,0.0%,72.3%,47.2%,52.8%,27.2%
+406,1248493824,J. Pease,Jaxson Pease,Pease,Jaxson,P,Tennessee Technological University,TNTC,730166272,Tennessee Tech,BBC,R,R,14,301,1121,47.0%,1.2%,0.0%,11.5%,27.8%,12.5%,0.0%,0.0%,55.0%,48.2%,51.8%,39.3%
+407,1341380352,R. Martinez,Ryan Martinez,Martinez,Ryan,P,Utah Tech University,UTU,730318592,Utah Tech,BBC,R,R,14,375,1297,47.0%,3.6%,0.0%,12.4%,4.4%,26.8%,5.7%,0.0%,10.9%,50.6%,49.4%,16.8%
+408,1099159040,N. Lawson,Nathan Lawson,Lawson,Nathan,P,Eastern Kentucky University,EKY,5417,Eastern Kentucky,BBC,R,R,22,267,1011,47.0%,0.4%,0.4%,23.7%,15.6%,12.9%,0.0%,0.0%,30.8%,47.4%,52.1%,39.3%
+409,1162558464,W. Scott,Win Scott,Scott,Win,P,San Jose State University,SJSU,730206720,San Jose State,BBC,L,L,14,328,1113,47.0%,4.0%,0.1%,38.9%,0.5%,9.6%,0.0%,0.0%,14.5%,50.9%,48.9%,39.4%
+410,1521776654,G. Kuzniewski,Gavin Kuzniewski,Kuzniewski,Gavin,P,The Ohio State University,OSU,4144,Ohio State,BBC,R,R,18,266,1027,46.9%,0.1%,6.1%,20.2%,24.2%,2.4%,0.0%,0.0%,0.0%,47.0%,46.8%,44.4%
+411,1085401856,C. Byers,Carson Byers,Byers,Carson,P,Miami University (Ohio),M-OH,730379264,Miami (OH),BBC,L,L,23,320,1167,46.9%,0.0%,13.5%,10.3%,7.3%,22.1%,0.0%,0.0%,8.3%,46.9%,39.6%,17.6%
+412,1176352256,J. Lehman,Justin Lehman,Lehman,Justin,TWP,Army West Point,ARMY,4744,Army,BBC,L,R,13,369,1257,46.8%,0.5%,4.7%,16.0%,5.9%,26.1%,0.0%,0.0%,1.5%,47.3%,48.0%,21.9%
+413,1248451072,W. Taylor,William Taylor,Taylor,William,P,Marist College,MRST,730374656,Marist,BBC,R,L,15,329,1172,46.8%,0.3%,2.1%,17.4%,4.6%,28.7%,0.0%,0.0%,72.1%,47.1%,50.8%,22.0%
+414,1307648256,J. Cebert,Jack Cebert,Cebert,Jack,P,Texas Tech University,TTU,2350,Texas Tech,BBC,R,R,19,268,1037,46.7%,10.3%,14.8%,11.5%,9.0%,7.0%,0.0%,0.6%,1.1%,57.1%,28.1%,21.1%
+415,1038792681,M. Brassfield,Mason Brassfield,Brassfield,Mason,P,Texas Christian University,TCU,5045,TCU,BBC,L,L,18,266,1001,46.7%,2.1%,0.0%,43.8%,2.9%,4.6%,0.0%,0.0%,0.0%,48.8%,51.2%,46.7%
+416,1815927257,L. Corcoran,Luke Corcoran,Corcoran,Luke,P,Coppin State University,COPP,730194176,Coppin State,BBC,L,L,15,277,853,46.6%,0.0%,0.0%,35.0%,16.0%,2.5%,0.0%,0.0%,80.9%,46.6%,53.4%,50.9%
+417,1342168472,T. Williams,Tyrell Williams,Williams,Tyrell,P,Presbyterian College,PRE,730184192,Presbyterian,BBC,R,R,16,249,948,46.6%,0.8%,0.0%,9.0%,14.6%,29.0%,0.0%,0.0%,0.2%,47.5%,52.5%,23.6%
+418,1210149120,S. Pinson,Smith Pinson,Pinson,Smith,P,Kennesaw State University,KENN,730197504,Kennesaw State,BBC,R,R,22,276,1074,46.6%,2.0%,2.1%,11.4%,12.1%,25.9%,0.0%,0.0%,4.7%,48.5%,49.4%,23.5%
+419,1136957440,W. Perkins,Wilson Perkins,Perkins,Wilson,P,Davidson College,DAV,730363136,Davidson,BBC,R,R,15,385,1370,46.5%,6.0%,0.2%,20.6%,21.6%,4.4%,0.0%,0.7%,1.8%,52.6%,47.2%,42.8%
+420,1310612992,B. Little,Branton Little,Little,Branton,P,Wofford College,WOF,730176512,Wofford,BBC,R,R,16,322,1109,46.4%,5.8%,18.1%,12.8%,0.3%,13.0%,0.0%,3.6%,0.5%,52.2%,29.6%,16.7%
+421,1311043840,P. Consigli,Peyton Consigli,Consigli,Peyton,P,Canisius College,CAN,730218752,Canisius,BBC,L,R,13,290,1014,46.4%,0.0%,0.0%,40.2%,9.0%,3.7%,0.6%,0.0%,68.3%,46.4%,53.6%,49.2%
+422,1216329728,N. Robb,Nicholas Robb,Robb,Nicholas,P,University of Texas-Arlington,UTA,5324,UT Arlington,BBC,R,R,15,367,1226,46.4%,13.3%,0.0%,16.3%,4.7%,19.2%,0.0%,0.0%,6.7%,59.7%,40.3%,21.1%
+423,1162566912,E. Gonzales,Erick Gonzales,Gonzales,Erick,P,Jackson State University,JKST,730378240,Jackson State,BBC,R,R,18,387,1317,46.4%,0.0%,0.0%,23.9%,15.7%,14.1%,0.0%,0.0%,32.6%,46.4%,53.6%,39.5%
+424,1297342720,R. Prager,Ryan Prager,Prager,Ryan,P,Texas A&M University,TXAM,3032,Texas A&M,BBC,L,L,15,350,1339,46.3%,0.0%,0.0%,24.5%,0.4%,28.8%,0.0%,0.0%,0.0%,46.3%,53.7%,24.9%
+425,1404703032,G. Sumner,Garrison Sumner,Sumner,Garrison,P,Brigham Young University,BYU,730257152,BYU,BBC,R,R,14,295,1118,46.2%,0.5%,4.3%,28.3%,0.4%,20.2%,0.0%,0.0%,0.0%,46.8%,48.9%,28.7%
+426,1692575936,L. Glidewell,Lyndon Glidewell,Glidewell,Lyndon,P,Austin Peay State University,PEAY,730219520,Austin Peay,BBC,R,R,14,338,1237,46.1%,7.0%,0.4%,11.1%,1.4%,34.0%,0.0%,0.0%,14.0%,53.1%,46.5%,12.5%
+427,1187053824,C. Gaston,Carter Gaston,Gaston,Carter,P,University of Portland,PORT,730360320,Portland,BBC,R,R,14,312,1137,46.1%,0.0%,0.0%,24.2%,3.9%,25.8%,0.0%,0.0%,52.3%,46.1%,53.9%,28.0%
+428,1316364032,S. Stearns,Spencer Stearns,Stearns,Spencer,P,Southern Illinois Univ.-Edwardsville,SIUE,730298112,SIU Edwardsville,BBC,R,R,13,290,1093,46.1%,0.2%,9.9%,26.5%,4.6%,11.7%,1.0%,0.0%,9.7%,46.3%,43.8%,31.1%
+429,1081801472,J. Trombley,Joseph Trombley,Trombley,Joseph,P,Sacred Heart University,SHU,730194944,Sacred Heart,BBC,R,R,15,388,1356,46.1%,3.3%,0.0%,23.4%,0.7%,26.4%,0.0%,0.0%,80.2%,49.4%,50.6%,24.2%
+430,1257443072,B. Renfrow,Brett Renfrow,Renfrow,Brett,P,Virginia Tech,VT,2293,Virginia Tech,BBC,R,R,15,332,1265,46.1%,0.2%,6.3%,27.1%,2.6%,17.8%,0.0%,0.0%,0.5%,46.2%,47.5%,29.7%
+431,1558238257,S. Bailey,Smith Bailey,Bailey,Smith,P,University of Arizona,ARIZ,232,Arizona,BBC,R,R,18,383,1444,45.9%,1.5%,0.0%,25.6%,11.3%,15.2%,0.0%,0.5%,0.1%,47.5%,52.5%,37.4%
+432,1099400192,H. Tarsia,Hayden Tarsia,Tarsia,Hayden,P,Binghamton University,BING,730155776,Binghamton,BBC,R,R,18,305,1137,45.9%,8.2%,0.9%,26.3%,5.3%,12.1%,0.1%,1.1%,7.3%,54.1%,45.0%,32.7%
+433,1279325440,G. Gaeckle,Gabe Gaeckle,Gaeckle,Gabe,P,University of Arkansas,ARK,3375,Arkansas,BBC,R,R,19,308,1255,45.9%,0.6%,0.2%,33.7%,11.1%,8.5%,0.0%,0.0%,0.2%,46.6%,53.3%,44.8%
+434,1303446784,C. Clarke,Collin Clarke,Clarke,Collin,P,University of Oregon,ORE,4807,Oregon,BBC,R,R,13,293,1060,45.9%,1.4%,5.4%,22.9%,0.5%,23.9%,0.0%,0.0%,0.0%,47.3%,47.3%,23.4%
+435,1114614016,C. Moore,Chance Moore,Moore,Chance,P,St. Bonaventure University,SBON,730375424,St. Bonaventure,BBC,R,R,16,334,1158,45.8%,0.1%,0.0%,37.4%,6.5%,10.1%,0.0%,0.0%,19.2%,45.9%,54.1%,43.9%
+436,1136097280,A. Stanley,Andrew Stanley,Stanley,Andrew,P,The Citadel,CIT,730366720,The Citadel,BBC,R,R,17,317,1200,45.7%,0.0%,5.4%,33.4%,5.3%,10.1%,0.0%,0.0%,1.1%,45.7%,48.9%,38.8%
+437,1310907904,M. Quevedo,Michael Quevedo,Quevedo,Michael,P,Kansas State University,KSU,730270464,Kansas State,BBC,L,L,15,301,1176,45.7%,9.9%,0.0%,29.3%,0.6%,14.5%,0.0%,0.0%,7.6%,55.6%,44.4%,30.0%
+438,1227439427,J. Gottesman,Jordan Gottesman,Gottesman,Jordan,P,Northeastern University,NE,343,Northeastern,BBC,L,L,16,321,1167,45.7%,0.1%,5.2%,28.1%,6.2%,14.6%,0.2%,0.0%,10.2%,45.8%,49.0%,34.3%
+439,1005138026,K. Davis,Kanious Davis,Davis,Kanious,P,Alcorn State University,ALCN,5376,Alcorn State,BBC,R,R,15,300,815,45.7%,0.0%,4.5%,14.4%,25.9%,9.5%,0.0%,0.0%,70.2%,45.7%,49.8%,40.3%
+440,1196854016,A. Knaak,Aidan Knaak,Knaak,Aidan,P,Clemson University,CLEM,730358784,Clemson,BBC,R,R,16,383,1492,45.7%,3.5%,8.1%,2.8%,8.0%,31.9%,0.0%,0.0%,0.1%,49.2%,42.7%,10.9%
+441,1342170423,N. Varnier,Nathaniel Varnier,Varnier,Nathaniel,P,Norfolk State University,NORF,3904,Norfolk State,BBC,L,L,13,323,878,45.7%,0.0%,0.0%,40.2%,0.0%,14.1%,0.0%,0.0%,89.5%,45.7%,54.3%,40.2%
+442,1386471821,T. McKinstry,Tyler McKinstry,McKinstry,Tyler,P,Western Michigan University,WMU,730165248,Western Michigan,BBC,R,R,14,326,1157,45.6%,5.0%,10.8%,15.7%,5.6%,17.2%,0.0%,0.0%,53.8%,50.7%,38.5%,21.3%
+443,1341316352,R. Kittredge,Ryan Kittredge,Kittredge,Ryan,P,California Baptist University,CBU,5091,California Baptist,BBC,R,R,19,325,1215,45.5%,5.3%,0.0%,27.1%,0.9%,21.1%,0.0%,0.0%,7.7%,50.9%,49.1%,28.0%
+444,1142086912,M. Gienger,Murphy Gienger,Gienger,Murphy,P,University of Northern Colorado,UNCO,730286592,Northern Colorado,BBC,R,R,14,376,1298,45.5%,4.5%,0.0%,17.2%,25.6%,7.2%,0.0%,0.0%,55.2%,50.0%,50.0%,42.8%
+445,1152901632,C. Keel,Christian Keel,Keel,Christian,P,Brown University,BRWN,730236160,Brown,BBC,R,R,14,266,1005,45.4%,0.1%,0.0%,12.0%,14.2%,28.2%,0.1%,0.0%,0.0%,45.5%,54.5%,26.3%
+446,1237048064,S. Simon,Sam Simon,Simon,Sam,P,UNLV,UNLV,730161664,UNLV,BBC,R,R,13,268,970,45.2%,0.0%,26.1%,5.0%,8.9%,14.7%,0.0%,0.1%,0.2%,45.2%,28.6%,13.9%
+447,1449071722,C. Walls,Cooper Walls,Walls,Cooper,P,"University of Hawaii, Manoa",HAW,730158848,Hawaii,BBC,R,R,15,267,943,45.2%,2.4%,0.0%,38.1%,12.3%,1.9%,0.0%,0.0%,51.0%,47.6%,52.4%,50.4%
+448,1749819658,B. Kimball,Blake Kimball,Kimball,Blake,P,University of Southern Indiana,SIND,730288640,Southern Indiana,BBC,R,R,18,338,1219,45.2%,1.2%,2.4%,6.2%,33.6%,11.3%,0.0%,0.0%,26.2%,46.4%,51.1%,39.8%
+449,1152945664,A. Eyanson,Anthony Eyanson,Eyanson,Anthony,P,Louisiana State University,LSU,5323,Louisiana State,BBC,R,R,20,448,1756,45.2%,0.0%,0.3%,30.7%,19.3%,0.1%,4.4%,0.0%,0.2%,45.2%,54.5%,49.9%
+450,1202718208,E. Dempsey,Evan Dempsey,Dempsey,Evan,TWP,Florida Gulf Coast University,FGCU,4964,Florida Gulf Coast,BBC,L,R,15,288,1125,45.0%,0.1%,0.1%,35.1%,17.5%,2.2%,0.0%,0.0%,9.3%,45.1%,54.8%,52.6%
+451,1341830144,D. Gutierrez,Diego Gutierrez,Gutierrez,Diego,P,Cal State-Northridge,CSN,730380032,CSU Northridge,BBC,R,R,14,352,1350,45.0%,1.4%,0.7%,18.8%,1.8%,32.3%,0.0%,0.0%,0.1%,46.4%,52.9%,20.5%
+452,1100119040,P. Gubler,Payton Gubler,Gubler,Payton,P,Brigham Young University,BYU,730257152,BYU,BBC,R,R,12,264,963,45.0%,14.5%,11.9%,20.0%,2.3%,6.2%,0.0%,0.0%,0.0%,59.5%,28.6%,22.3%
+453,1084443136,C. Katskee,Cooper Katskee,Katskee,Cooper,P,Miami University (Ohio),M-OH,730379264,Miami (OH),BBC,R,R,16,343,1294,44.9%,0.0%,0.1%,20.7%,25.4%,8.9%,0.0%,0.0%,6.8%,44.9%,55.0%,46.1%
+454,1220043596,B. Panneton,Brian Panneton,Panneton,Brian,P,Tarleton State University,TAR,730236416,Tarleton State,BBC,R,R,15,331,1184,44.9%,4.6%,0.2%,24.3%,16.9%,8.6%,0.0%,0.4%,60.0%,49.6%,50.2%,41.6%
+455,1798423777,A. Espinoza,Alejandro Espinoza,Espinoza,Alejandro,P,Central Michigan University,CMU,5342,Central Michigan,BBC,R,R,15,320,1053,44.9%,1.4%,16.0%,17.5%,6.2%,13.8%,0.1%,0.0%,20.3%,46.4%,37.7%,23.7%
+456,1297496064,I. Fix,Isaac Fix,Fix,Isaac,P,Davidson College,DAV,730363136,Davidson,BBC,R,L,16,334,1275,44.9%,9.1%,5.1%,18.7%,1.2%,20.9%,0.0%,0.0%,3.7%,54.0%,40.9%,20.0%
+457,1134423040,T. Helmick,Tristan Helmick,Helmick,Tristan,P,Lafayette College,LAF,730217728,Lafayette,BBC,R,R,12,240,849,44.8%,0.6%,16.6%,29.1%,1.3%,7.4%,0.1%,0.0%,0.1%,45.4%,38.0%,30.4%
+458,1489292894,V. Borghese,Vincent Borghese,Borghese,Vincent,P,Central Connecticut State University,CCSU,730306816,Central Connecticut State,BBC,R,R,15,395,1154,44.8%,0.0%,0.0%,31.0%,12.3%,11.9%,0.0%,0.0%,52.0%,44.8%,55.2%,43.3%
+459,1160848648,M. Kouser,Matthew Kouser,Kouser,Matthew,P,Northwestern University,NW,730247680,Northwestern,BBC,R,R,15,310,1116,44.7%,2.4%,0.0%,25.5%,1.3%,26.0%,0.0%,0.0%,0.0%,47.1%,52.9%,26.9%
+460,1310416128,L. Finley,Leighton Finley,Finley,Leighton,P,University of Georgia,UGA,226,Georgia,BBC,R,R,16,302,1189,44.7%,9.2%,0.0%,36.4%,1.4%,8.3%,0.0%,0.0%,0.1%,53.9%,46.1%,37.8%
+461,1210179584,J. Gutierrez,Jacob Gutierrez,Gutierrez,Jacob,P,CSU Bakersfield,CSB,730283008,CSU Bakersfield,BBC,R,R,17,307,1098,44.6%,1.4%,1.5%,30.2%,0.1%,22.2%,0.0%,0.0%,11.2%,46.1%,52.4%,30.3%
+462,1229117952,Z. Willingham,Zach Willingham,Willingham,Zach,P,University of South Alabama,USA,730298880,South Alabama,BBC,L,L,14,333,1232,44.6%,9.1%,0.6%,27.6%,4.0%,14.1%,0.0%,0.0%,0.0%,53.7%,45.7%,31.6%
+463,1093040640,T. O'Neill,Tyler O'Neill,O'Neill,Tyler,P,Bucknell University,BUCK,730214144,Bucknell,BBC,R,R,12,333,1227,44.5%,1.1%,13.1%,16.8%,10.6%,13.9%,0.0%,0.0%,0.0%,45.6%,41.2%,27.4%
+464,1342168337,D. Dean,David Dean,Dean,David,P,Texas A&M-Corpus Christi,AMCC,4764,Texas A&M-Corpus Christi,BBC,L,L,17,240,806,44.5%,0.5%,0.0%,28.8%,0.1%,26.0%,0.0%,0.0%,7.8%,45.0%,55.0%,29.0%
+465,1204808114,R. Lynch,Ryan Lynch,Lynch,Ryan,P,University of North Carolina,UNC,730181888,North Carolina,BBC,R,R,27,265,1031,44.5%,21.7%,0.0%,32.8%,0.0%,0.5%,0.0%,0.5%,0.1%,66.2%,33.8%,33.3%
+466,1310868737,C. McGarrh,Cade McGarrh,McGarrh,Cade,P,Abilene Christian University,AC,730375936,Abilene Christian,BBC,L,R,15,342,1219,44.3%,2.6%,0.1%,20.4%,1.5%,31.0%,0.0%,0.0%,8.8%,46.9%,53.0%,21.9%
+467,1334326016,W. Retz,Walker Retz,Retz,Walker,P,University of St. Thomas (Minn.),UOST,730200320,University of St. Thomas (Minn.),BBC,R,R,12,307,1160,44.2%,0.0%,0.0%,33.2%,2.9%,15.0%,0.0%,0.0%,76.4%,44.2%,55.8%,40.9%
+468,1176403456,T. Santana,Thomas Santana,Santana,Thomas,P,Columbia University,CLMB,730319104,Columbia,BBC,R,R,14,285,1102,44.1%,0.0%,4.7%,36.4%,1.2%,12.4%,0.3%,0.8%,0.1%,44.1%,51.1%,38.4%
+469,1269627392,B. Hamilton,Brady Hamilton,Hamilton,Brady,P,Wichita State University,WICH,730203904,Wichita State,BBC,R,R,16,352,1267,44.0%,12.7%,0.0%,27.5%,5.6%,10.2%,0.0%,0.0%,0.0%,56.7%,43.3%,33.1%
+470,1092631296,B. Jones,Brady Jones,Jones,Brady,P,Georgia Tech,GT,100,Georgia Tech,BBC,R,R,16,314,1197,44.0%,3.5%,29.8%,16.7%,0.1%,5.8%,0.0%,0.0%,0.0%,47.5%,22.6%,16.8%
+471,1692745387,N. Harris,Nate Harris,Harris,Nate,P,University of Kentucky,UK,5362,Kentucky,BBC,R,R,13,261,971,44.0%,4.0%,4.8%,11.4%,14.8%,20.8%,0.0%,0.0%,0.1%,48.0%,47.1%,26.3%
+472,1080063269,C. OBrien,Cole OBrien,OBrien,Cole,P,Lipscomb University,LIP,730307072,Lipscomb,BBC,R,R,17,287,1013,44.0%,2.4%,1.2%,26.9%,15.2%,10.2%,0.1%,0.0%,17.5%,46.4%,52.4%,42.1%
+473,1683462800,C. McClendon,Calvin McClendon,McClendon,Calvin,P,Texas Southern University,TXSO,4768,Texas Southern,BBC,L,L,16,332,985,43.9%,0.0%,0.0%,8.6%,15.8%,31.7%,0.0%,0.0%,71.8%,43.9%,56.1%,24.5%
+474,1307056128,J. Wywoda,Jaden Wywoda,Wywoda,Jaden,P,College of the Holy Cross,HC,730310656,Holy Cross,BBC,R,R,16,372,1367,43.8%,2.8%,0.0%,46.3%,0.1%,7.0%,0.0%,0.0%,2.1%,46.6%,53.4%,46.4%
+475,1190356736,T. Horn,Ty Horn,Horn,Ty,P,University of Nebraska,NEB,4865,Nebraska,BBC,L,R,18,370,1465,43.8%,0.0%,9.3%,15.0%,15.5%,16.5%,0.0%,0.0%,0.5%,43.8%,46.9%,30.4%
+476,1311844864,C. Edmondson,Clay Edmondson,Edmondson,Clay,P,UNC Asheville,UNCA,1570,UNC Asheville,BBC,R,R,13,348,1357,43.6%,14.8%,0.0%,16.6%,19.5%,5.5%,0.0%,0.0%,0.1%,58.4%,41.6%,36.1%
+477,1370357953,M. Yusypchuk,Michael Yusypchuk,Yusypchuk,Michael,P,Missouri State University,MOSU,5382,Missouri State,BBC,R,R,15,320,1130,43.5%,0.0%,17.2%,7.1%,12.7%,19.5%,0.0%,0.0%,10.3%,43.5%,39.3%,19.8%
+478,1179985408,R. Walton,Ryker Walton,Walton,Ryker,P,Eastern Kentucky University,EKY,5417,Eastern Kentucky,BBC,R,R,15,283,1035,43.4%,1.3%,8.5%,23.0%,10.8%,13.0%,0.0%,0.0%,33.7%,44.8%,46.8%,33.8%
+479,1233795610,R. Cole,Ryan Cole,Cole,Ryan,P,Charleston Southern University,CHSO,730194432,Charleston Southern,BBC,R,R,14,297,1079,43.4%,0.0%,0.4%,13.3%,35.3%,7.6%,0.0%,0.0%,0.6%,43.4%,56.3%,48.6%
+480,1334909196,N. Balcom,Nick Balcom,Balcom,Nick,P,Quinnipiac University,QUIN,730386688,Quinnipiac,BBC,R,R,17,305,1094,43.3%,0.0%,15.0%,23.8%,0.0%,17.9%,0.0%,0.0%,70.8%,43.3%,41.7%,23.8%
+481,1279144448,J. Francis,Jake Francis,Francis,Jake,P,Villanova University,VILL,730278400,Villanova,BBC,R,R,18,293,1010,43.2%,0.3%,23.2%,16.6%,0.9%,14.4%,0.0%,1.3%,1.1%,43.5%,33.2%,18.8%
+482,1016358398,B. Bouchard,Brady Bouchard,Bouchard,Brady,P,Binghamton University,BING,730155776,Binghamton,BBC,R,R,18,288,1024,43.0%,14.9%,3.2%,23.8%,4.3%,10.8%,0.0%,0.0%,9.2%,58.0%,38.8%,28.1%
+483,1483661805,J. Bazala,Jacob Bazala,Bazala,Jacob,P,Mercyhurst College,MCYH,730196224,Mercyhurst,BBC,R,R,20,351,1185,43.0%,0.0%,0.0%,44.0%,1.0%,11.8%,0.3%,0.0%,66.4%,43.0%,57.0%,45.0%
+484,1207790848,A. Williams,Andrew Williams,Williams,Andrew,P,Georgetown University,GTWN,2330,Georgetown,BBC,L,L,14,340,1022,43.0%,1.1%,0.0%,21.6%,15.2%,19.2%,0.0%,0.0%,46.5%,44.1%,55.9%,36.7%
+485,1056444835,M. Smith,Mason Smith,Smith,Mason,P,Campbell University,CAMP,730187776,Campbell,BBC,R,R,14,286,1050,43.0%,0.5%,7.0%,16.5%,0.9%,30.1%,2.1%,0.0%,4.7%,43.5%,49.6%,17.4%
+486,1058441697,S. Jenkins,Sean Jenkins,Jenkins,Sean,P,East Carolina University,ECU,730270720,East Carolina,BBC,R,R,19,310,1135,42.9%,7.9%,10.1%,25.0%,4.5%,0.1%,9.3%,0.0%,0.0%,50.9%,39.0%,29.5%
+487,1296521728,K. Segel,Kaden Segel,Segel,Kaden,P,University of Portland,PORT,730360320,Portland,BBC,R,R,21,274,1029,42.8%,0.0%,0.0%,16.7%,4.9%,35.6%,0.0%,0.0%,38.9%,42.8%,57.2%,21.6%
+488,1267252480,G. Theis,Gavin Theis,Theis,Gavin,P,University of Wisconsin-Milwaukee,MILW,5036,Milwaukee,BBC,R,R,16,392,1447,42.7%,0.6%,29.3%,8.5%,18.7%,0.2%,0.0%,0.0%,56.3%,43.4%,27.4%,27.2%
+489,1128523264,C. Wylde,Connor Wylde,Wylde,Connor,P,New Mexico State University,NMSU,730302720,New Mexico State,BBC,L,L,16,292,1050,42.6%,2.7%,0.0%,16.9%,18.4%,19.4%,0.0%,0.0%,5.6%,45.4%,54.6%,35.3%
+490,1065548722,A. Laine,Avery Laine,Laine,Avery,P,Loyola Marymount University,LMU,730149120,Loyola Marymount,BBC,L,R,17,304,1118,42.6%,0.1%,7.0%,22.4%,5.0%,22.8%,0.0%,0.1%,1.9%,42.7%,50.3%,27.5%
+491,1246582016,D. Voegele,Dominic Voegele,Voegele,Dominic,P,University of Kansas,KU,730360064,Kansas,BBC,R,R,16,418,1583,42.6%,2.0%,0.4%,34.6%,11.0%,9.4%,0.0%,0.0%,0.3%,44.6%,55.0%,45.6%
+492,1281671425,R. Bertram,Reid Bertram,Bertram,Reid,P,Gardner Webb University,WEBB,730222592,Gardner Webb,BBC,L,L,17,275,994,42.5%,6.8%,0.4%,31.9%,2.7%,15.6%,0.0%,0.0%,4.4%,49.4%,50.2%,34.6%
+493,1229631744,R. Rembisz,Ryan Rembisz,Rembisz,Ryan,P,University of Portland,PORT,730360320,Portland,BBC,L,L,15,318,1115,42.5%,2.0%,4.7%,28.7%,4.0%,18.0%,0.0%,0.0%,55.7%,44.5%,50.8%,32.8%
+494,1239091969,J. Schaeffer,Jared Schaeffer,Schaeffer,Jared,P,University of Akron,AKR,540536064,Akron,BBC,R,R,14,360,1325,42.4%,0.9%,0.0%,28.1%,3.9%,24.8%,0.0%,0.0%,22.3%,43.2%,56.8%,32.0%
+495,1084209920,R. Reed,Ryan Reed,Reed,Ryan,P,University of Pittsburgh,PITT,5424,Pittsburgh,BBC,L,L,14,327,1255,42.3%,20.5%,13.0%,15.3%,0.2%,8.7%,0.0%,0.0%,5.9%,62.7%,24.2%,15.5%
+496,1100142592,E. Blakeney,Ethan Blakeney,Blakeney,Ethan,P,Norfolk State University,NORF,3904,Norfolk State,BBC,R,R,13,258,677,42.2%,0.0%,0.0%,47.0%,0.0%,10.8%,0.0%,0.0%,87.7%,42.2%,57.8%,47.0%
+497,1401671129,J. Tovar,Jesus Tovar,Tovar,Jesus,P,Texas State University,TXST,5420,Texas State,BBC,L,L,15,312,1180,42.2%,7.1%,0.1%,28.1%,14.8%,7.5%,0.3%,0.0%,0.0%,49.3%,50.6%,42.8%
+498,1184585216,C. Rothermel,Collin Rothermel,Rothermel,Collin,P,Jacksonville University,JAC,730335488,Jacksonville,BBC,R,R,15,303,1185,42.0%,1.4%,20.4%,16.8%,5.7%,13.8%,0.0%,0.0%,37.6%,43.4%,36.2%,22.4%
+499,1162504960,D. Case,David Case,Case,David,P,University of Memphis,MEM,730172160,Memphis,BBC,L,L,14,295,1135,42.0%,0.0%,0.0%,36.6%,13.6%,7.7%,0.1%,0.0%,0.4%,42.0%,58.0%,50.2%
+500,1311366656,S. Hliboki,Sam Hliboki,Hliboki,Sam,P,Northwestern University,NW,730247680,Northwestern,BBC,L,R,20,369,1359,41.9%,1.6%,17.2%,29.2%,0.7%,9.4%,0.0%,0.0%,0.1%,43.5%,39.2%,29.9%
+501,1286570752,J. Kartsonas,Jack Kartsonas,Kartsonas,Jack,P,West Virginia University,WVU,5327,West Virginia,BBC,R,R,20,285,1126,41.8%,20.1%,1.1%,17.9%,2.7%,13.2%,0.0%,3.3%,0.0%,61.9%,37.0%,23.8%
+502,1665927471,W. Magers,Wilson Magers,Magers,Wilson,P,Creighton University,CREI,730243840,Creighton,BBC,R,R,16,314,1179,41.6%,3.2%,7.1%,34.6%,9.8%,3.8%,0.0%,0.0%,9.9%,44.8%,48.1%,44.4%
+503,1286473472,H. Alexander,Hunter Alexander,Alexander,Hunter,P,University of Central Arkansas,CARK,730175232,Central Arkansas,BBC,R,R,20,314,1233,41.6%,0.1%,2.7%,38.7%,13.2%,3.7%,0.0%,0.0%,30.2%,41.7%,55.6%,51.9%
+504,1310893568,C. Plummer,Caden Plummer,Plummer,Caden,P,Virginia Military Institute,VMI,730173440,VMI,BBC,R,R,14,277,1007,41.5%,5.0%,2.0%,32.1%,0.7%,14.8%,0.9%,2.8%,12.7%,46.5%,51.4%,35.7%
+505,1152937984,I. Umlandt,Ian Umlandt,Umlandt,Ian,P,University of Oregon,ORE,4807,Oregon,BBC,L,L,18,265,982,41.3%,0.2%,18.0%,26.6%,1.1%,12.6%,0.0%,0.1%,0.6%,41.5%,40.5%,27.9%
+506,1026778788,A. Gonzalez,Andres Gonzalez,Gonzalez,Andres,P,University of Southern Indiana,SIND,730288640,Southern Indiana,BBC,R,R,19,302,1150,41.2%,0.0%,24.1%,16.9%,4.2%,13.5%,0.0%,0.0%,13.9%,41.2%,34.6%,21.1%
+507,1328495337,L. Trout,Luke Trout,Trout,Luke,P,Brown University,BRWN,730236160,Brown,BBC,R,R,11,221,874,41.2%,0.5%,0.4%,40.6%,9.2%,8.2%,0.0%,0.0%,4.7%,41.7%,58.0%,49.8%
+508,1182295552,J. Faulkner,Jacob Faulkner,Faulkner,Jacob,P,Princeton University,PRIN,730198784,Princeton,BBC,R,R,19,301,990,41.1%,15.8%,0.0%,34.4%,0.9%,7.7%,0.0%,0.0%,0.8%,56.9%,43.1%,35.3%
+509,1198527488,J. Hanson,Jared Hanson,Hanson,Jared,P,Central Michigan University,CMU,5342,Central Michigan,BBC,R,R,15,256,909,41.1%,0.0%,9.7%,23.9%,2.4%,22.9%,0.0%,0.0%,16.8%,41.1%,49.2%,26.3%
+510,1162067200,E. Sargent,Eddie Sargent,Sargent,Eddie,P,UMBC,UMBC,730210304,UMBC,BBC,L,L,13,257,852,41.1%,3.0%,14.7%,27.2%,0.0%,14.0%,0.0%,0.0%,29.7%,44.1%,41.2%,27.2%
+511,1296198400,J. Hyde,Jace Hyde,Hyde,Jace,P,East Tennessee State University,ETSU,4844,East Tennessee State,BBC,R,R,14,287,1009,41.0%,14.4%,9.4%,3.0%,0.3%,32.0%,0.0%,0.0%,2.7%,55.4%,35.2%,3.3%
+512,1340724736,R. Rivera,Reagan Rivera,Rivera,Reagan,P,Coppin State University,COPP,730194176,Coppin State,BBC,R,R,15,369,1388,40.9%,0.0%,0.0%,32.6%,15.5%,11.0%,0.0%,0.0%,76.4%,40.9%,59.1%,48.2%
+513,1110844672,M. Bucknam,Micah Bucknam,Bucknam,Micah,P,Dallas Baptist University,DBU,730198016,Dallas Baptist,BBC,R,R,13,272,1020,40.8%,0.8%,0.4%,34.4%,14.8%,8.8%,0.0%,0.0%,0.2%,41.6%,58.1%,49.2%
+514,1052931303,C. Trizuto,Colin Trizuto,Trizuto,Colin,P,Wagner College,WAG,730192640,Wagner,BBC,R,R,15,284,805,40.7%,0.0%,0.0%,25.2%,0.7%,33.3%,0.0%,0.0%,83.2%,40.7%,59.3%,25.9%
+515,1273200896,M. Simpson,Max Simpson,Simpson,Max,P,Towson University,TOWS,730318336,Towson,BBC,R,R,17,305,1080,40.7%,3.0%,5.2%,31.4%,10.2%,9.5%,0.0%,0.0%,17.2%,43.7%,51.1%,41.6%
+516,1218243584,B. Olsen,Bobby Olsen,Olsen,Bobby,P,Villanova University,VILL,730278400,Villanova,BBC,R,R,12,271,983,40.7%,1.4%,20.0%,12.1%,17.3%,8.3%,0.0%,0.1%,0.0%,42.1%,37.8%,29.5%
+517,1330492928,R. Long,Richard Long,Long,Richard,P,Jacksonville University,JAC,730335488,Jacksonville,BBC,R,R,15,375,1346,40.7%,2.1%,1.3%,44.1%,0.0%,11.7%,0.0%,0.0%,37.4%,42.8%,55.9%,44.1%
+518,1258983680,M. Bayles,Max Bayles,Bayles,Max,P,Santa Clara University,SCU,730297600,Santa Clara,BBC,R,R,15,299,1229,40.7%,0.0%,3.1%,42.7%,10.1%,3.3%,0.0%,0.0%,0.4%,40.7%,56.2%,52.9%
+519,1279324160,J. Ellwanger,James Ellwanger,Ellwanger,James,P,Dallas Baptist University,DBU,730198016,Dallas Baptist,BBC,R,R,16,288,1196,40.7%,13.9%,5.4%,12.5%,25.6%,1.6%,0.3%,0.0%,0.3%,54.6%,40.1%,38.1%
+520,1257440000,J. Reitz,Jason Reitz,Reitz,Jason,P,University of Oregon,ORE,4807,Oregon,BBC,R,R,16,272,1081,40.6%,9.6%,3.6%,15.4%,7.5%,23.3%,0.0%,0.0%,0.0%,50.2%,46.2%,22.8%
+521,1304813312,A. Rudd,Andrew Rudd,Rudd,Andrew,P,California Baptist University,CBU,5091,California Baptist,BBC,R,R,23,278,1026,40.6%,0.1%,1.0%,10.4%,31.5%,16.4%,0.0%,0.0%,6.7%,40.7%,58.3%,41.8%
+522,1123952128,G. Morris,Gavin Morris,Morris,Gavin,P,Indiana State University,INST,730350080,Indiana State,BBC,R,R,23,244,831,40.5%,13.4%,15.1%,22.5%,2.2%,6.1%,0.0%,0.1%,8.5%,53.9%,30.9%,24.9%
+523,1101382656,J. Miller,Jay Miller,Miller,Jay,P,UNC Greensboro,UNCG,730238720,UNC Greensboro,BBC,R,R,11,256,960,40.5%,0.2%,0.0%,17.8%,2.4%,39.1%,0.0%,0.0%,0.0%,40.7%,59.3%,20.2%
+524,1195467264,M. Martinez,Mason Martinez,Martinez,Mason,P,Grambling State University,GRAM,5378,Grambling State,BBC,R,R,16,374,1000,40.4%,5.5%,6.6%,25.8%,5.3%,16.3%,0.0%,0.0%,63.9%,46.0%,47.4%,31.0%
+525,1126303232,T. Evans,Tate Evans,Evans,Tate,P,Yale University,YALE,730334464,Yale,BBC,R,R,22,210,829,40.3%,5.8%,7.5%,11.5%,1.0%,33.9%,0.0%,0.0%,6.4%,46.1%,46.4%,12.5%
+526,1241946112,J. Urena,Jeremy Urena,Urena,Jeremy,P,University of Rhode Island,URI,730163712,Rhode Island,BBC,R,R,15,361,1183,40.3%,16.4%,0.5%,19.6%,1.0%,22.2%,0.0%,0.0%,6.9%,56.8%,42.8%,20.6%
+527,1143046400,E. Marks,Easton Marks,Marks,Easton,P,Florida International University,FIU,4468,Florida International,BBC,R,R,14,300,1174,40.3%,0.0%,20.5%,3.3%,19.2%,16.4%,0.3%,0.0%,1.3%,40.3%,39.2%,22.5%
+528,1463788430,N. Stein,Nathan Stein,Stein,Nathan,P,Saint Joseph's University,JOES,730332416,Saint Joseph's,BBC,L,L,15,297,1033,40.3%,14.5%,0.1%,27.6%,1.2%,16.2%,0.0%,0.0%,12.8%,54.8%,45.1%,28.9%
+529,1237056768,C. Hansen,Cole Hansen,Hansen,Cole,P,Seton Hall University,HALL,730272512,Seton Hall,BBC,R,R,14,312,1164,40.2%,1.4%,1.2%,26.9%,8.9%,21.3%,0.0%,0.0%,3.5%,41.7%,57.1%,35.8%
+530,1227026689,E. Calder,Ethan Calder,Calder,Ethan,P,Baylor University,BAY,3033,Baylor,BBC,L,L,15,315,1178,40.2%,0.7%,0.0%,30.0%,8.5%,20.5%,0.1%,0.0%,0.0%,40.9%,59.1%,38.5%
+531,1505725733,R. Gaber,Reese Gaber,Gaber,Reese,P,Western Michigan University,WMU,730165248,Western Michigan,BBC,L,L,14,256,978,40.2%,17.1%,0.0%,24.5%,3.1%,15.1%,0.0%,0.0%,47.9%,57.3%,42.7%,27.6%
+532,1260755712,B. Weber,Ben Weber,Weber,Ben,P,Xavier University,XAV,5464,Xavier,BBC,R,R,18,366,1331,39.8%,29.1%,2.3%,14.4%,0.9%,13.1%,0.0%,0.4%,0.0%,68.9%,28.8%,15.6%
+533,1311551232,C. OHara,Connor OHara,OHara,Connor,P,George Mason University,GMU,730265088,George Mason,BBC,R,R,17,374,1377,39.8%,9.1%,14.5%,19.5%,4.6%,12.6%,0.0%,0.0%,18.2%,48.8%,36.7%,24.1%
+534,1302032384,J. Weaver,Jacob Weaver,Weaver,Jacob,P,Austin Peay State University,PEAY,730219520,Austin Peay,BBC,R,R,15,312,1123,39.7%,16.9%,5.1%,13.3%,10.0%,14.9%,0.0%,0.0%,11.7%,56.7%,38.2%,23.3%
+535,1306812928,B. Blevins,Bryce Blevins,Blevins,Bryce,P,Marshall University,MRSH,730333696,Marshall,BBC,R,L,16,416,1425,39.7%,6.8%,0.1%,36.0%,2.4%,14.9%,0.1%,0.0%,0.3%,46.5%,53.3%,38.4%
+536,1199765504,C. Christenson,Charlie Christenson,Christenson,Charlie,P,University of Central Arkansas,CARK,730175232,Central Arkansas,BBC,R,R,16,371,1373,39.6%,19.1%,6.4%,22.4%,3.4%,9.1%,0.0%,0.0%,35.1%,58.7%,34.9%,25.8%
+537,1105525504,O. Sarna,Owen Sarna,Sarna,Owen,P,Winthrop University,WIN,730294784,Winthrop,BBC,R,R,18,290,1066,39.6%,18.0%,0.0%,19.9%,9.9%,12.6%,0.0%,0.0%,2.2%,57.6%,42.4%,29.8%
+538,1195586304,E. Chaffee,Evan Chaffee,Chaffee,Evan,P,St. John's University (NY),SJU,4285,St. John's,BBC,L,L,14,309,1212,39.5%,24.6%,0.0%,5.0%,10.5%,20.4%,0.0%,0.0%,9.4%,64.1%,35.9%,15.5%
+539,1328140800,L. Knight,Logan Knight,Knight,Logan,P,North Dakota State University,NDSU,730343168,North Dakota State,BBC,R,R,15,370,1339,39.5%,0.0%,2.8%,42.8%,4.1%,10.8%,0.0%,0.0%,15.5%,39.5%,57.6%,46.9%
+540,1217850368,W. Jones,Will Jones,Jones,Will,P,Northeastern University,NE,343,Northeastern,BBC,L,L,15,290,1142,39.5%,0.4%,2.6%,34.3%,20.9%,2.4%,0.0%,0.0%,11.5%,39.9%,57.6%,55.2%
+541,1225968640,B. Moore,Ben Moore,Moore,Ben,P,Old Dominion University,ODU,3090,Old Dominion,BBC,L,L,16,309,1188,39.5%,21.0%,4.0%,23.9%,3.2%,6.6%,1.9%,0.0%,21.3%,60.4%,35.6%,27.1%
+542,1211982848,S. Gottam,Santhosh Gottam,Gottam,Santhosh,P,Brown University,BRWN,730236160,Brown,BBC,R,R,14,283,986,39.4%,0.3%,0.0%,29.2%,1.1%,21.4%,8.6%,0.0%,0.4%,39.7%,60.3%,30.3%
+543,1660995022,N. Schutte,Nic Schutte,Schutte,Nic,P,Murray State University,MURR,730188032,Murray State,BBC,R,R,18,435,1671,39.3%,21.5%,0.2%,5.6%,19.6%,9.3%,0.0%,4.5%,28.9%,60.8%,39.1%,29.8%
+544,1198297344,T. Perry,Tanner Perry,Perry,Tanner,P,Illinois State University,ILST,730258944,Illinois State,BBC,R,R,16,329,1239,39.3%,0.0%,23.2%,17.0%,16.8%,3.6%,0.0%,0.0%,19.0%,39.3%,37.5%,33.9%
+545,1152936192,I. Lyon,Isaac Lyon,Lyon,Isaac,P,Grand Canyon University,GC,5310,Grand Canyon,BBC,R,R,15,392,1425,39.2%,10.8%,5.9%,29.5%,0.0%,14.6%,0.0%,0.0%,0.9%,50.0%,44.1%,29.5%
+546,1080702208,H. Dow,Haden Dow,Dow,Haden,P,Southeast Missouri State University,SEMO,730168576,Southeast Missouri State,BBC,L,L,14,321,1089,39.2%,1.3%,0.0%,20.0%,3.8%,35.7%,0.0%,0.0%,14.7%,40.5%,59.5%,23.8%
+547,1278843253,T. Teixeira,Tim Teixeira,Teixeira,Tim,P,Southern Illinois Univ.-Edwardsville,SIUE,730298112,SIU Edwardsville,BBC,R,R,15,334,1295,39.2%,15.6%,4.9%,22.9%,7.7%,9.7%,0.0%,0.0%,6.6%,54.8%,40.3%,30.6%
+548,1094204160,A. Jean,Antoine Jean,Jean,Antoine,P,University of Houston,HOU,3030,Houston,BBC,R,L,21,266,1109,39.1%,5.2%,1.2%,22.6%,21.4%,9.9%,0.5%,0.0%,3.7%,44.4%,54.4%,44.0%
+549,1507662845,T. Brooks,Ty Brooks,Brooks,Ty,P,Indiana State University,INST,730350080,Indiana State,BBC,R,R,17,258,904,39.1%,21.6%,5.7%,23.2%,2.0%,7.3%,0.0%,1.0%,15.2%,60.8%,33.5%,26.2%
+550,1176554496,B. Morgan,Blake Morgan,Morgan,Blake,P,Old Dominion University,ODU,3090,Old Dominion,BBC,L,L,15,386,1342,39.1%,0.9%,0.3%,13.7%,23.0%,23.0%,0.0%,0.0%,12.1%,40.0%,59.7%,36.7%
+551,1311020288,J. Volchko,Joey Volchko,Volchko,Joey,P,Stanford University,STAN,730251264,Stanford,BBC,R,R,15,324,1235,38.9%,1.5%,11.8%,30.4%,5.6%,11.7%,0.0%,0.0%,0.0%,40.4%,47.8%,36.0%
+552,1094165504,A. Pingeton,Anthony Pingeton,Pingeton,Anthony,P,University of North Alabama,UNA,730266624,North Alabama,BBC,R,R,15,311,1208,38.8%,9.2%,0.1%,34.9%,4.5%,12.6%,0.0%,0.0%,38.7%,48.0%,51.9%,39.3%
+553,1310530560,J. Core,Joel Core,Core,Joel,P,Bethune-Cookman University,COOK,730152960,Bethune-Cookman,BBC,R,R,15,333,1225,38.6%,0.2%,1.7%,26.6%,0.9%,32.1%,0.0%,0.0%,52.4%,38.8%,59.5%,27.4%
+554,1287055616,E. Albert,Eddie Albert,Albert,Eddie,P,Dartmouth College,DART,730216192,Dartmouth,BBC,R,R,10,247,943,38.6%,18.8%,0.3%,34.3%,4.9%,3.1%,0.0%,0.0%,20.6%,57.4%,42.3%,39.3%
+555,1212105985,C. Van Assen,Cole Van Assen,Van Assen,Cole,P,Purdue University,PUR,730353152,Purdue,BBC,R,R,15,297,1037,38.6%,18.2%,0.0%,28.5%,1.7%,13.0%,0.0%,0.0%,7.5%,56.8%,43.2%,30.1%
+556,1058739885,L. Pearson,Lane Pearson,Pearson,Lane,P,University of West Georgia,UOWG,730308864,West Georgia,BBC,R,R,14,360,1234,38.5%,0.0%,26.0%,32.7%,0.0%,2.7%,0.0%,0.0%,61.1%,38.5%,35.4%,32.7%
+557,1100466176,J. Mitrovich,Justin Mitrovich,Mitrovich,Justin,P,Elon University,ELON,730252544,Elon,BBC,R,R,15,376,1386,38.5%,14.3%,2.5%,18.2%,0.1%,26.4%,0.0%,0.0%,0.0%,52.8%,44.7%,18.3%
+558,1093144320,S. Cash,Steven Cash,Cash,Steven,P,Jacksonville State University,JVST,730225408,Jacksonville State,BBC,R,L,16,366,1352,38.5%,0.4%,0.0%,18.8%,2.1%,40.2%,0.0%,0.0%,0.2%,38.9%,61.1%,20.9%
+559,1317475840,C. Wade,Crawford Wade,Wade,Crawford,P,Northwestern University,NW,730247680,Northwestern,BBC,L,L,18,320,1186,38.4%,0.0%,0.0%,3.5%,18.4%,39.8%,0.0%,0.0%,0.7%,38.4%,61.6%,21.8%
+560,1536897735,B. Treichel,Bryson Treichel,Treichel,Bryson,P,University of North Florida,UNF,730296832,North Florida,BBC,R,R,15,288,1018,38.4%,6.5%,0.3%,19.5%,1.2%,34.1%,0.0%,0.0%,13.3%,44.8%,54.8%,20.7%
+561,1282555136,P. Gardner,Patrick Gardner,Gardner,Patrick,P,University of Pittsburgh,PITT,5424,Pittsburgh,BBC,L,L,15,337,1250,38.4%,16.4%,1.7%,33.2%,0.1%,10.2%,0.0%,0.0%,6.0%,54.8%,43.5%,33.3%
+562,1195501312,C. Diaz,Chris Diaz,Diaz,Chris,P,Florida Gulf Coast University,FGCU,4964,Florida Gulf Coast,BBC,R,R,13,319,1170,38.3%,15.9%,0.5%,38.9%,0.0%,6.4%,0.0%,0.0%,8.9%,54.2%,45.3%,38.9%
+563,1614212435,J. Wizceb,Joey Wizceb,Wizceb,Joey,P,Western Michigan University,WMU,730165248,Western Michigan,BBC,L,L,14,316,1072,38.3%,2.7%,0.0%,18.4%,0.0%,40.4%,0.2%,0.0%,48.3%,41.0%,59.0%,18.4%
+564,1125104128,G. Garcia Jr.,Guillermo Garcia Jr.,Garcia Jr.,Guillermo,P,Longwood University,LONG,730219264,Longwood,BBC,R,R,13,333,1281,38.2%,0.3%,1.3%,43.4%,5.4%,11.3%,0.0%,0.0%,7.7%,38.5%,60.2%,48.9%
+565,1184281600,R. Brooks,Ryder Brooks,Brooks,Ryder,P,UC Irvine,UCI,3031,UC Irvine,BBC,L,L,20,307,1144,38.1%,13.5%,0.4%,37.5%,0.3%,10.0%,0.0%,0.3%,0.2%,51.6%,48.0%,38.0%
+566,1303094016,D. Stanley,Drew Stanley,Stanley,Drew,P,Radford University,RAD,730267392,Radford,BBC,R,R,21,305,1039,38.0%,23.8%,2.3%,26.7%,1.7%,7.4%,0.0%,0.0%,5.4%,61.9%,35.8%,28.4%
+567,1113138432,J. Steeber,Joe Steeber,Steeber,Joe,P,University of Texas-Arlington,UTA,5324,UT Arlington,BBC,R,R,15,341,1092,37.9%,5.7%,2.2%,18.0%,4.7%,31.5%,0.0%,0.0%,4.9%,43.6%,54.2%,22.7%
+568,1002961029,R. Ritter,Riane Ritter,Ritter,Riane,P,University of St. Thomas (Minn.),UOST,730200320,University of St. Thomas (Minn.),BBC,R,R,12,284,1102,37.7%,6.8%,0.3%,37.1%,3.0%,14.4%,0.0%,0.8%,66.5%,44.4%,55.3%,40.9%
+569,1092369664,A. Morin,Alistair Morin,Morin,Alistair,P,Siena College,SIE,730382592,Siena,BBC,R,R,15,383,1341,37.7%,0.0%,19.0%,23.5%,7.3%,12.6%,0.0%,0.0%,81.6%,37.7%,43.3%,30.8%
+570,1297349632,M. Scott,Matt Scott,Scott,Matt,P,Stanford University,STAN,730251264,Stanford,BBC,R,R,11,244,925,37.6%,0.4%,18.6%,27.0%,0.5%,4.2%,11.6%,0.0%,0.0%,38.1%,43.4%,27.6%
+571,1149743416,M. Goodpaster,Marcus Goodpaster,Goodpaster,Marcus,P,Butler University,BUT,730283520,Butler,BBC,R,R,14,357,1222,37.6%,8.3%,5.0%,23.2%,3.3%,17.9%,4.6%,0.0%,20.4%,45.9%,49.0%,26.5%
+572,1183062528,A. Heffernan,Andrew Heffernan,Heffernan,Andrew,P,Merrimack College,MRMK,730295552,Merrimack,BBC,R,R,12,328,864,37.5%,0.0%,10.0%,22.5%,11.7%,18.3%,0.0%,0.0%,86.1%,37.5%,52.5%,34.2%
+573,1164663040,F. Morin,Felix Morin,Morin,Felix,P,Canisius College,CAN,730218752,Canisius,BBC,L,L,13,273,897,37.4%,0.0%,0.0%,30.5%,2.9%,29.2%,0.0%,0.0%,58.0%,37.4%,62.6%,33.4%
+574,1861492309,A. Risse,Aidan Risse,Risse,Aidan,P,University of San Francisco,SF,730365696,San Francisco,BBC,R,R,15,317,1166,37.2%,15.8%,0.1%,27.6%,13.3%,6.0%,0.0%,0.0%,0.7%,53.0%,46.9%,40.9%
+575,1288367360,A. Elges,Alek Elges,Elges,Alek,P,Longwood University,LONG,730219264,Longwood,BBC,R,R,22,310,1048,37.1%,1.1%,4.8%,27.7%,10.7%,15.9%,0.0%,2.7%,3.5%,38.2%,57.0%,41.0%
+576,1250079232,J. Schaaf,Jason Schaaf,Schaaf,Jason,P,Missouri State University,MOSU,5382,Missouri State,BBC,R,R,19,314,1089,37.1%,0.6%,0.2%,27.8%,19.3%,15.1%,0.0%,0.0%,1.3%,37.6%,62.2%,47.1%
+577,1294172672,B. Magovern,Ben Magovern,Magovern,Ben,P,Bucknell University,BUCK,730214144,Bucknell,BBC,L,L,12,253,884,36.8%,14.1%,0.0%,27.4%,5.5%,16.2%,0.0%,0.0%,0.0%,50.9%,49.1%,32.9%
+578,1769907041,B. Loeger,Bryce Loeger,Loeger,Bryce,P,Dartmouth College,DART,730216192,Dartmouth,BBC,R,R,12,229,844,36.3%,0.9%,6.1%,39.6%,14.0%,3.1%,0.0%,0.0%,23.7%,37.3%,56.7%,53.6%
+579,1238871552,J. Newell,Josh Newell,Newell,Josh,P,Lindenwood University,LU,730322176,Lindenwood,BBC,R,R,15,406,1229,36.3%,8.4%,14.5%,26.3%,3.4%,11.0%,0.0%,0.0%,37.8%,44.7%,40.8%,29.8%
+580,1340662528,P. Brown,Peyton Brown,Brown,Peyton,P,Campbell University,CAMP,730187776,Campbell,BBC,R,R,17,257,939,35.9%,15.2%,0.0%,35.4%,0.2%,13.1%,0.0%,0.1%,0.7%,51.2%,48.8%,35.7%
+581,1238315520,D. Macchiarola,Danny Macchiarola,Macchiarola,Danny,P,College of the Holy Cross,HC,730310656,Holy Cross,BBC,L,R,16,396,1474,35.8%,1.8%,6.3%,29.2%,0.1%,26.2%,0.0%,0.4%,4.4%,37.7%,56.0%,29.8%
+582,1279233792,T. Florio,Trace Florio,Florio,Trace,P,Lafayette College,LAF,730217728,Lafayette,BBC,L,L,13,295,1039,35.8%,0.1%,0.0%,39.8%,1.2%,22.9%,0.3%,0.0%,0.2%,35.9%,64.1%,41.0%
+583,1202725632,G. Miller,Griffin Miller,Miller,Griffin,P,Marshall University,MRSH,730333696,Marshall,BBC,R,R,15,387,1408,35.6%,10.0%,0.4%,41.7%,12.2%,0.1%,0.0%,0.0%,6.0%,45.6%,54.0%,53.9%
+584,1200193536,W. Walsh,Will Walsh,Walsh,Will,P,University of Nebraska,NEB,4865,Nebraska,BBC,R,L,17,314,1108,35.6%,0.1%,0.3%,33.5%,6.3%,24.3%,0.0%,0.0%,0.0%,35.6%,64.1%,39.8%
+585,1195482112,M. Jones,Merit Jones,Jones,Merit,P,University of Utah,UTAH,730328320,Utah,BBC,R,R,15,371,1349,35.5%,16.2%,5.6%,32.7%,1.4%,8.7%,0.0%,0.0%,8.7%,51.7%,42.7%,34.0%
+586,1279310848,L. Stump,Landon Stump,Stump,Landon,P,UCLA,UCLA,5048,UCLA,BBC,R,R,18,344,1314,35.4%,18.5%,15.7%,14.6%,3.0%,12.7%,0.0%,0.0%,0.0%,53.9%,30.4%,17.7%
+587,1207792896,W. Ross,Will Ross,Ross,Will,P,University of North Florida,UNF,730296832,North Florida,BBC,R,R,15,292,999,35.2%,2.1%,0.0%,32.3%,0.0%,30.4%,0.0%,0.0%,7.6%,37.3%,62.7%,32.3%
+588,1281260544,P. Havard,Peyton Havard,Havard,Peyton,P,Lamar University,LAM,730162432,Lamar,BBC,R,R,22,261,1012,35.1%,2.2%,0.0%,25.4%,8.9%,28.3%,0.0%,0.0%,2.3%,37.3%,62.7%,34.4%
+589,1281129472,C. Martindale,Cam Martindale,Martindale,Cam,P,Saint Peter's University,SPC,730149888,Saint Peter's,BBC,R,R,15,255,761,35.0%,26.7%,3.3%,15.0%,10.0%,10.0%,0.0%,0.0%,92.1%,61.7%,35.0%,25.0%
+590,1428256371,D. Fischer,Dillon Fischer,Fischer,Dillon,P,Fort Wayne,PFW,730231552,Fort Wayne,BBC,R,R,17,397,1549,35.0%,0.1%,14.1%,20.7%,24.1%,5.9%,0.0%,0.0%,56.4%,35.1%,50.8%,44.9%
+591,1515769016,E. Smith,Ethan Smith,Smith,Ethan,P,Lindenwood University,LU,730322176,Lindenwood,BBC,L,L,14,301,1046,34.3%,2.5%,20.0%,27.0%,0.2%,15.9%,0.0%,0.0%,13.6%,36.8%,43.1%,27.2%
+592,1238201856,M. Witherspoon,Malachi Witherspoon,Witherspoon,Malachi,P,University of Oklahoma,OKLA,730294528,Oklahoma,BBC,R,R,15,353,1331,34.3%,22.7%,11.1%,15.4%,14.1%,2.4%,0.0%,0.0%,0.1%,57.0%,32.0%,29.5%
+593,1760692530,A. Kribbs,Andrew Kribbs,Kribbs,Andrew,P,UNC Charlotte,CHAR,730214400,Charlotte,BBC,R,R,16,285,1052,34.2%,0.0%,2.7%,22.3%,26.2%,14.6%,0.0%,0.0%,0.3%,34.2%,63.1%,48.5%
+594,1320920832,J. Volini,Joey Volini,Volini,Joey,P,Florida State University,FSU,101,Florida State,BBC,L,L,16,357,1340,34.2%,0.3%,0.1%,20.7%,23.3%,19.3%,2.1%,0.0%,0.0%,34.5%,65.4%,44.0%
+595,1203581952,C. Gilley,Cole Gilley,Gilley,Cole,P,"Indiana University, Bloomington",IND,4866,Indiana,BBC,R,R,18,289,1136,34.0%,0.0%,29.5%,9.4%,0.2%,15.2%,0.1%,11.6%,1.2%,34.0%,36.5%,21.1%
+596,1099147776,R. Riojas,Ruger Riojas,Riojas,Ruger,P,University of Texas,TEX,245,Texas,BBC,R,R,18,300,1082,34.0%,3.0%,7.9%,22.0%,12.2%,4.3%,15.0%,1.4%,0.0%,37.1%,55.0%,35.7%
+597,1263954688,J. Ford,Jermel Ford,Ford,Jermel,TWP,Alcorn State University,ALCN,5376,Alcorn State,BBC,L,L,14,322,839,33.9%,0.0%,0.0%,10.0%,9.4%,46.7%,0.0%,0.0%,78.5%,33.9%,66.1%,19.4%
+598,1196851200,Z. Root,Zach Root,Root,Zach,P,University of Arkansas,ARK,3375,Arkansas,BBC,L,L,19,420,1613,33.8%,3.5%,11.6%,3.7%,27.5%,19.8%,0.0%,0.0%,0.2%,37.4%,51.0%,31.2%
+599,1202694400,J. Martinez,Jack Martinez,Martinez,Jack,P,Arizona State University,ASU,5035,Arizona State,BBC,R,R,15,341,1423,33.7%,0.0%,0.0%,31.2%,3.4%,31.7%,0.0%,0.0%,0.1%,33.7%,66.3%,34.6%
+600,1132673280,G. Adler,Grant Adler,Adler,Grant,P,Wichita State University,WICH,730203904,Wichita State,BBC,R,R,15,364,1405,33.7%,1.8%,18.2%,19.3%,18.4%,8.5%,0.2%,0.0%,6.5%,35.5%,46.3%,37.7%
+601,1154111488,C. Peguero,Chris Peguero,Peguero,Chris,P,University of Dayton,DAY,730194688,Dayton,BBC,R,R,15,390,1382,33.3%,14.7%,2.2%,31.9%,0.8%,14.6%,2.5%,0.0%,18.6%,48.0%,49.8%,32.7%
+602,1195612672,B. Pruett,Brad Pruett,Pruett,Brad,P,East Carolina University,ECU,730270720,East Carolina,BBC,R,R,28,285,1130,33.2%,0.7%,39.2%,12.8%,0.1%,3.9%,10.0%,0.0%,3.5%,33.9%,26.9%,12.9%
+603,1132957952,C. Olivier,Chris Olivier,Olivier,Chris,P,Lamar University,LAM,730162432,Lamar,BBC,R,R,14,294,1046,33.1%,2.7%,0.7%,26.1%,21.0%,16.5%,0.0%,0.0%,3.5%,35.8%,63.5%,47.1%
+604,1121725952,J. Sheets,Joe Sheets,Sheets,Joe,P,Columbia University,CLMB,730319104,Columbia,BBC,R,R,14,315,1169,32.9%,20.9%,2.8%,30.9%,3.3%,4.1%,5.1%,0.0%,0.0%,53.8%,43.4%,34.1%
+605,1303167488,D. Whalen,Drew Whalen,Whalen,Drew,P,Western Kentucky University,WKU,730212096,Western Kentucky,BBC,R,R,16,350,1339,32.6%,10.1%,25.1%,4.0%,10.1%,5.2%,12.9%,0.0%,0.0%,42.6%,32.3%,14.1%
+606,1099378432,B. Gillespie,Blake Gillespie,Gillespie,Blake,P,UNC Charlotte,CHAR,730214400,Charlotte,BBC,S,R,15,385,1405,32.5%,0.0%,3.0%,55.3%,1.4%,7.8%,0.0%,0.0%,0.1%,32.5%,64.5%,56.7%
+607,1294886144,J. Ritz,Justin Ritz,Ritz,Justin,P,Coppin State University,COPP,730194176,Coppin State,BBC,R,R,27,244,836,32.3%,0.0%,0.0%,62.5%,0.0%,5.2%,0.0%,0.0%,77.0%,32.3%,67.7%,62.5%
+608,1945290525,J. Hibbard,Jack Hibbard,Hibbard,Jack,P,Arkansas State University,ARST,730290176,Arkansas State,BBC,R,R,12,240,827,31.8%,16.0%,0.0%,4.5%,7.5%,40.2%,0.0%,0.0%,0.2%,47.8%,52.2%,12.0%
+609,1144599808,J. Goble,Jake Goble,Goble,Jake,P,South Dakota State University,SDST,730323200,South Dakota State,BBC,R,R,14,229,826,31.5%,1.4%,0.0%,56.6%,1.4%,8.7%,0.0%,0.0%,65.4%,32.9%,67.1%,58.4%
+610,1308181507,B. Miller,Brady Miller,Miller,Brady,P,Boston College,BC,227,Boston College,BBC,R,L,16,265,955,31.4%,9.0%,5.8%,25.8%,1.6%,24.8%,0.0%,1.7%,0.0%,40.4%,53.8%,29.0%
+611,1178715648,S. Heyman,Sam Heyman,Heyman,Sam,P,Southeast Missouri State University,SEMO,730168576,Southeast Missouri State,BBC,R,R,14,295,1023,31.3%,26.7%,11.8%,20.2%,3.6%,6.4%,0.0%,0.0%,9.2%,58.0%,30.1%,23.8%
+612,1307084033,R. Hall,Regan Hall,Hall,Regan,P,University of Illinois,ILL,730163456,Illinois,BBC,L,L,14,303,1056,31.1%,16.6%,0.6%,19.9%,11.8%,20.0%,0.0%,0.0%,0.9%,47.8%,51.7%,31.7%
+613,1097108340,C. Bagwell,Cam Bagwell,Bagwell,Cam,P,UNC Wilmington,UNCW,730229504,UNC Wilmington,BBC,R,R,15,348,1264,31.1%,6.3%,19.2%,16.7%,9.8%,9.4%,0.0%,7.7%,0.2%,37.4%,43.5%,34.1%
+614,1087388672,T. McGregor,Tristan McGregor,McGregor,Tristan,P,Presbyterian College,PRE,730184192,Presbyterian,BBC,R,R,13,273,990,30.8%,4.3%,0.1%,6.6%,22.9%,35.3%,0.0%,0.0%,0.5%,35.0%,64.9%,29.5%
+615,1250615738,J. Leary,Jack Leary,Leary,Jack,P,CSU Bakersfield,CSB,730283008,CSU Bakersfield,BBC,R,R,22,343,1221,30.7%,0.1%,6.1%,30.2%,18.0%,15.0%,0.0%,0.1%,5.2%,30.8%,63.2%,48.2%
+616,1104573440,L. Nichols,Luke Nichols,Nichols,Luke,P,Louisiana Tech University,LT,3374,Louisiana Tech,BBC,L,L,25,274,988,30.7%,23.6%,0.0%,38.9%,2.0%,4.8%,0.0%,0.0%,19.8%,54.3%,45.7%,40.9%
+617,1166285312,M. Coyne,Marty Coyne,Coyne,Marty,P,University of Pennsylvania,PENN,730292224,Pennsylvania,BBC,R,L,16,192,779,30.7%,35.0%,0.0%,22.7%,3.1%,8.5%,0.0%,0.0%,0.0%,65.7%,34.3%,25.8%
+618,1597386236,L. Cooley,Luke Cooley,Cooley,Luke,P,Louisiana Tech University,LT,3374,Louisiana Tech,BBC,L,L,16,291,1136,30.6%,22.1%,0.6%,20.1%,1.0%,25.6%,0.0%,0.0%,18.6%,52.6%,46.7%,21.1%
+619,1227038720,E. Brown,Eli Brown,Brown,Eli,P,Lindenwood University,LU,730322176,Lindenwood,BBC,R,L,15,345,1189,30.4%,2.7%,0.0%,17.2%,14.7%,34.8%,0.1%,0.0%,29.5%,33.2%,66.8%,31.9%
+620,1822252575,R. Parker,Ryan Parker,Parker,Ryan,P,Sacred Heart University,SHU,730194944,Sacred Heart,BBC,R,R,15,287,1027,30.2%,0.4%,17.8%,36.3%,1.8%,13.5%,0.0%,0.0%,72.6%,30.6%,51.6%,38.1%
+621,1075848055,L. Sheffield,Lincoln Sheffield,Sheffield,Lincoln,P,Kansas State University,KSU,730270464,Kansas State,BBC,L,L,16,333,1161,30.2%,2.0%,0.0%,43.0%,0.8%,24.0%,0.0%,0.0%,0.0%,32.2%,67.8%,43.8%
+622,1175789044,B. Romero,Braeden Romero,Romero,Braeden,P,Manhattan College,MAN,730363648,Manhattan,BBC,R,R,13,228,767,29.3%,17.1%,0.0%,31.5%,0.9%,21.2%,0.0%,0.0%,58.1%,46.4%,53.6%,32.4%
+623,1184457216,S. Dutton,Samuel Dutton,Dutton,Samuel,P,Auburn University,AUB,5466,Auburn,BBC,L,R,16,354,1373,29.3%,15.1%,21.6%,6.5%,25.6%,1.9%,0.0%,0.0%,0.0%,44.4%,34.0%,32.1%
+624,1116320256,A. Sachais,Alec Sachais,Sachais,Alec,P,Villanova University,VILL,730278400,Villanova,BBC,R,R,21,232,882,29.3%,0.0%,33.7%,36.3%,0.2%,0.5%,0.0%,0.0%,0.0%,29.3%,37.0%,36.6%
+625,1150276096,C. Richter,Chase Richter,Richter,Chase,P,Arkansas State University,ARST,730290176,Arkansas State,BBC,L,L,28,228,864,29.0%,34.6%,0.0%,13.0%,22.8%,0.7%,0.0%,0.0%,14.6%,63.6%,36.4%,35.8%
+626,1205406720,H. Watkins,Hunter Watkins,Watkins,Hunter,P,Oklahoma State University,OKST,4245,Oklahoma State,BBC,R,R,19,301,1130,28.9%,10.6%,17.6%,35.5%,5.6%,1.6%,0.0%,0.2%,9.8%,39.5%,42.9%,41.3%
+627,1312690944,R. Eikhoff,Riley Eikhoff,Eikhoff,Riley,P,Coastal Carolina University,CCAR,4104,Coastal Carolina,BBC,R,R,17,370,1228,28.9%,27.2%,0.0%,32.8%,0.3%,10.8%,0.0%,0.0%,0.0%,56.2%,43.8%,33.1%
+628,1653486670,N. Love,Nathan Love,Love,Nathan,P,Oral Roberts University,ORU,730180096,Oral Roberts,BBC,R,R,15,328,1167,28.6%,10.1%,3.3%,10.7%,26.4%,20.0%,0.0%,0.9%,12.3%,38.7%,58.0%,37.9%
+629,1153452544,J. Logar,Jackson Logar,Logar,Jackson,P,James Madison University,JMU,730340096,James Madison,BBC,R,R,15,336,1334,28.6%,38.5%,5.9%,24.8%,0.1%,2.1%,0.0%,0.0%,0.2%,67.1%,27.0%,24.9%
+630,1245880832,J. Duffield,Joseph Duffield,Duffield,Joseph,P,Manhattan College,MAN,730363648,Manhattan,BBC,R,R,13,257,837,28.6%,19.9%,0.0%,30.7%,9.8%,11.1%,0.0%,0.0%,65.7%,48.4%,51.6%,40.4%
+631,1330730752,D. Vigue,Dylan Vigue,Vigue,Dylan,P,University of Michigan,MICH,2290,Michigan,BBC,R,R,16,269,1028,28.5%,25.5%,22.3%,16.8%,0.1%,5.5%,0.1%,1.2%,0.1%,54.0%,23.7%,18.1%
+632,1146468608,M. Foltz,Michael Foltz,Foltz,Michael,P,George Washington University,GW,730249216,George Washington,BBC,L,L,14,355,1325,28.4%,35.6%,8.0%,7.4%,0.2%,13.8%,0.4%,6.1%,8.8%,64.0%,28.0%,13.7%
+633,1237026048,N. Millikan,Noah Millikan,Millikan,Noah,P,University of Pennsylvania,PENN,730292224,Pennsylvania,BBC,R,R,12,276,978,28.3%,24.5%,5.4%,16.1%,15.2%,10.4%,0.0%,0.0%,0.0%,52.9%,41.7%,31.3%
+634,1897229556,G. Thompson,Gavin Thompson,Thompson,Gavin,P,Bradley University,BRAD,730253312,Bradley,BBC,R,R,18,281,965,27.9%,13.4%,1.5%,34.7%,1.2%,21.2%,0.0%,0.0%,12.0%,41.3%,57.1%,35.9%
+635,1155468544,R. Beuter,Reece Beuter,Beuter,Reece,P,University of Iowa,IOWA,1232,Iowa,BBC,R,R,13,259,983,27.7%,10.7%,0.0%,56.5%,0.1%,5.1%,0.0%,0.0%,0.0%,38.4%,61.6%,56.6%
+636,1619696044,D. DeProspero,Dutch DeProspero,DeProspero,Dutch,P,Towson University,TOWS,730318336,Towson,BBC,R,R,16,262,885,27.4%,0.0%,13.9%,33.3%,10.4%,15.0%,0.0%,0.0%,23.7%,27.4%,58.7%,43.7%
+637,1136002048,J. Soberon,Joe Soberon,Soberon,Joe,P,University of San Francisco,SF,730365696,San Francisco,BBC,R,R,14,290,1083,27.2%,34.7%,0.4%,5.8%,11.3%,20.7%,0.0%,0.0%,2.2%,61.9%,37.8%,17.1%
+638,1290508544,J. Bennett,Jack Bennett,Bennett,Jack,P,Western Kentucky University,WKU,730212096,Western Kentucky,BBC,R,R,14,275,986,27.1%,20.8%,15.8%,13.8%,1.5%,21.0%,0.0%,0.0%,0.0%,47.9%,36.3%,15.3%
+639,1162536960,A. DAlessio,Andrew DAlessio,DAlessio,Andrew,P,Princeton University,PRIN,730198784,Princeton,BBC,R,R,9,226,803,26.8%,36.5%,1.2%,17.8%,0.2%,17.4%,0.0%,0.0%,0.0%,63.3%,35.5%,18.1%
+640,1064527734,B. Grasser,Brad Grasser,Grasser,Brad,P,Manhattan College,MAN,730363648,Manhattan,BBC,R,R,13,267,861,26.7%,7.8%,0.0%,34.9%,9.7%,20.9%,0.0%,0.0%,70.0%,34.5%,65.5%,44.6%
+641,1162538496,C. Lockwood,Connor Lockwood,Lockwood,Connor,P,Valparaiso University,VALP,730369536,Valparaiso,BBC,R,R,14,431,1434,26.2%,10.6%,20.0%,11.5%,6.1%,25.6%,0.0%,0.0%,6.8%,36.8%,43.3%,17.7%
+642,1196833025,R. O'Connor,Robbie O'Connor,O'Connor,Robbie,P,University of Massachusetts,MASS,5451,UMass,BBC,R,R,14,338,1204,26.1%,29.5%,2.2%,30.7%,0.2%,11.3%,0.0%,0.0%,47.8%,55.6%,42.2%,30.9%
+643,1084516352,C. Kelly,Carson Kelly,Kelly,Carson,P,Florida A&M University,FAMU,5416,Florida A&M,BBC,L,L,26,310,802,26.0%,13.0%,0.0%,31.3%,21.0%,8.4%,0.4%,0.0%,67.3%,38.9%,61.1%,52.3%
+644,1311169536,M. Patel,Mason Patel,Patel,Mason,P,Georgia Tech,GT,100,Georgia Tech,BBC,R,R,23,283,957,25.6%,17.1%,3.5%,17.7%,0.7%,34.4%,1.0%,0.0%,0.0%,42.7%,53.9%,18.4%
+645,1216810752,J. Harris,Jaden Harris,Harris,Jaden,P,Brigham Young University,BYU,730257152,BYU,BBC,R,R,17,301,1128,25.2%,18.1%,19.8%,19.2%,1.2%,14.8%,1.6%,0.0%,0.3%,43.4%,36.8%,20.4%
+646,1226691328,J. Halford,Jacob Halford,Halford,Jacob,P,North Carolina A&T State University,NCAT,730372352,North Carolina A&T,BBC,R,R,23,258,917,25.2%,31.7%,0.0%,14.4%,19.5%,3.8%,0.0%,5.4%,59.8%,56.9%,43.1%,39.3%
+647,1279326464,B. Morningstar,Blake Morningstar,Morningstar,Blake,P,Wake Forest University,WAKE,730373376,Wake Forest,BBC,R,R,16,347,1352,25.1%,18.3%,20.5%,1.9%,19.5%,14.8%,0.0%,0.0%,0.4%,43.4%,36.2%,21.3%
+648,1257441536,K. Montgomery,Kellan Montgomery,Montgomery,Kellan,P,Long Beach State University,LBSU,730224128,Long Beach State,BBC,R,R,14,353,1257,24.9%,25.6%,0.4%,29.7%,1.3%,18.1%,0.0%,0.0%,8.2%,50.4%,49.1%,31.0%
+649,1203293440,B. Wilson,Bradley Wilson,Wilson,Bradley,P,Appalachian State University,APP,730240256,Appalachian State,BBC,R,R,24,297,1076,24.5%,9.3%,16.4%,14.7%,20.2%,14.9%,0.0%,0.0%,0.4%,33.8%,49.8%,34.8%
+650,1238212096,J. Tollett,JR Tollett,Tollett,JR,P,University of Louisiana at Lafayette,ULL,5075,Louisiana,BBC,R,R,17,328,1103,24.4%,20.1%,13.1%,26.5%,5.8%,10.0%,0.0%,0.0%,0.5%,44.5%,42.4%,32.4%
+651,1254309120,O. Geiss,Owen Geiss,Geiss,Owen,P,Long Beach State University,LBSU,730224128,Long Beach State,BBC,R,R,16,315,1125,24.1%,26.2%,0.0%,30.8%,4.7%,13.5%,0.0%,0.8%,10.2%,50.3%,49.7%,36.2%
+652,1099691264,R. Quick,Riley Quick,Quick,Riley,P,University of Alabama,ALA,730206976,Alabama,BBC,R,R,14,270,1069,23.4%,24.4%,9.3%,27.2%,0.0%,15.7%,0.0%,0.0%,0.1%,47.8%,42.9%,27.2%
+653,1481247285,R. Borberg,Ryan Borberg,Borberg,Ryan,P,Dallas Baptist University,DBU,730198016,Dallas Baptist,BBC,R,R,16,342,1234,23.2%,15.5%,5.2%,15.1%,3.7%,36.5%,0.8%,0.0%,0.0%,38.7%,56.2%,18.8%
+654,1238172160,N. Rodriguez,Noah Rodriguez,Rodriguez,Noah,P,Siena College,SIE,730382592,Siena,BBC,L,R,16,381,1269,23.1%,16.9%,18.4%,24.7%,0.8%,16.1%,0.0%,0.0%,79.9%,40.0%,41.6%,25.5%
+655,1162245632,J. Arnold,Jamie Arnold,Arnold,Jamie,P,Florida State University,FSU,101,Florida State,BBC,L,L,15,351,1370,22.6%,23.5%,2.9%,42.0%,0.1%,8.4%,0.6%,0.0%,0.0%,46.1%,51.0%,42.0%
+656,1138165504,C. Aoki,Caden Aoki,Aoki,Caden,P,University of Southern California,USC,5047,USC,BBC,R,R,17,405,1472,22.3%,13.5%,0.0%,13.0%,19.5%,27.1%,4.4%,0.1%,0.0%,35.8%,64.2%,32.7%
+657,1243621888,R. Maddox,Riley Maddox,Maddox,Riley,P,University of Mississippi,MISS,5322,Ole Miss,BBC,R,R,17,313,1229,21.6%,33.2%,14.0%,17.7%,6.4%,6.8%,0.0%,0.2%,0.0%,54.8%,31.2%,24.3%
+658,1130326784,I. Silva,Isaac Silva,Silva,Isaac,P,Murray State University,MURR,730188032,Murray State,BBC,R,R,18,384,1413,21.6%,31.7%,7.0%,27.2%,0.5%,12.0%,0.0%,0.0%,31.1%,53.3%,39.7%,27.7%
+659,1275958784,E. Hoffberg,Erik Hoffberg,Hoffberg,Erik,P,Gonzaga University,GONZ,730200832,Gonzaga,BBC,R,R,23,242,944,21.6%,0.1%,8.0%,66.7%,0.2%,3.3%,0.0%,0.0%,0.6%,21.7%,70.3%,67.0%
+660,1093169920,H. Andrews,Heath Andrews,Andrews,Heath,P,North Carolina State University,NCST,730216448,North Carolina State,BBC,R,R,14,294,1075,21.5%,26.4%,0.0%,42.8%,0.2%,9.1%,0.0%,0.0%,0.1%,47.9%,52.1%,43.0%
+661,1332929792,J. McCracken,J.D. McCracken,McCracken,J.D.,P,Rice University,RICE,2352,Rice,BBC,L,L,16,336,1158,21.3%,31.1%,7.1%,8.6%,0.0%,31.9%,0.0%,0.0%,0.1%,52.4%,40.5%,8.6%
+662,1287368192,A. Savary,Aaron Savary,Savary,Aaron,P,University of Iowa,IOWA,1232,Iowa,BBC,R,R,15,342,1284,21.1%,21.3%,0.0%,33.8%,9.3%,11.2%,0.0%,3.4%,0.1%,42.4%,57.6%,46.4%
+663,1297348096,K. McCoy,Kyle McCoy,McCoy,Kyle,P,University of Maryland-College Park,MD,730172928,Maryland,BBC,L,L,14,366,1316,21.0%,38.8%,0.0%,25.5%,0.0%,14.6%,0.0%,0.0%,2.1%,59.9%,40.1%,25.5%
+664,1231134895,B. Roberson,Brooks Roberson,Roberson,Brooks,P,Louisiana Tech University,LT,3374,Louisiana Tech,BBC,R,R,16,317,1165,21.0%,15.7%,0.0%,22.5%,11.7%,29.1%,0.0%,0.0%,15.2%,36.6%,63.4%,34.2%
+665,1100716032,C. Marshburn,Connor Marshburn,Marshburn,Connor,P,UNC Wilmington,UNCW,730229504,UNC Wilmington,BBC,R,R,15,322,1160,20.9%,43.4%,2.0%,10.0%,0.0%,4.8%,0.0%,18.9%,0.0%,64.3%,33.7%,28.9%
+666,1537972184,E. Teel,Easton Teel,Teel,Easton,P,Oral Roberts University,ORU,730180096,Oral Roberts,BBC,R,R,17,341,1181,20.6%,38.5%,3.4%,19.2%,1.9%,16.4%,0.0%,0.0%,17.4%,59.1%,37.5%,21.1%
+667,1208166656,L. Harrison,Luke Harrison,Harrison,Luke,P,University of Texas,TEX,245,Texas,BBC,L,L,15,315,1151,20.4%,8.6%,22.6%,21.9%,10.4%,16.1%,0.0%,0.0%,0.2%,29.0%,48.4%,32.3%
+668,1162521088,L. Runde,Logan Runde,Runde,Logan,P,Florida International University,FIU,4468,Florida International,BBC,R,R,21,274,999,19.7%,26.4%,0.4%,34.4%,13.1%,6.1%,0.0%,0.0%,5.9%,46.1%,53.5%,47.4%
+669,1184585728,L. Jurecka,Landry Jurecka,Jurecka,Landry,P,Queens University of Charlotte,QUC,754315264,Queens University of Charlotte,BBC,R,R,15,360,1281,19.7%,35.4%,6.5%,2.9%,10.0%,25.5%,0.0%,0.0%,27.7%,55.1%,38.4%,13.0%
+670,1238157312,O. Kramkowski,Owen Kramkowski,Kramkowski,Owen,P,University of Arizona,ARIZ,232,Arizona,BBC,R,R,18,415,1451,19.4%,21.8%,26.3%,30.7%,1.5%,0.1%,0.0%,0.0%,0.0%,41.2%,32.5%,32.3%
+671,1237012736,C. Cheatham,Cole Cheatham,Cheatham,Cole,P,UAB,UAB,730345984,UAB,BBC,L,L,16,306,1175,19.1%,36.1%,0.2%,30.9%,7.7%,4.8%,0.0%,1.3%,5.6%,55.2%,44.6%,39.9%
+672,1334313472,R. Kraft,Ryan Kraft,Kraft,Ryan,P,"Indiana University, Bloomington",IND,4866,Indiana,BBC,L,L,20,271,1013,19.0%,25.7%,27.0%,0.9%,19.5%,8.0%,0.0%,0.0%,8.2%,44.7%,28.3%,20.3%
+673,1006945294,A. Ciscar,AJ Ciscar,Ciscar,AJ,P,University of Miami,MIA,236,Miami,BBC,R,R,21,290,1009,18.6%,36.6%,0.0%,31.7%,0.0%,13.0%,0.0%,0.0%,0.4%,55.2%,44.8%,31.8%
+674,1190568448,T. McKee,Tate McKee,McKee,Tate,P,Georgia Tech,GT,100,Georgia Tech,BBC,R,R,16,362,1418,17.4%,20.5%,15.0%,21.1%,15.9%,10.0%,0.0%,0.0%,0.0%,37.9%,47.0%,37.0%
+675,1258111488,C. Daniel,Colin Daniel,Daniel,Colin,P,UAB,UAB,730345984,UAB,BBC,R,R,14,379,1332,17.0%,33.5%,0.0%,46.6%,0.0%,2.4%,0.0%,0.4%,6.2%,50.5%,49.5%,47.1%
+676,1192573184,M. Barnett,Michael Barnett,Barnett,Michael,P,UCLA,UCLA,5048,UCLA,BBC,R,R,19,373,1391,16.5%,23.2%,3.6%,2.9%,0.4%,41.2%,0.0%,12.2%,0.0%,39.7%,56.7%,15.5%
+677,1738764358,L. Mack,Landon Mack,Mack,Landon,P,Rutgers University,RUTG,730229248,Rutgers,BBC,S,R,15,340,1223,16.4%,39.7%,22.8%,2.8%,11.1%,7.0%,0.0%,0.2%,0.1%,56.1%,21.1%,14.1%
+678,1190323968,B. Blair,Ben Blair,Blair,Ben,P,Liberty University,LIB,730156288,Liberty,BBC,R,R,15,364,1418,15.8%,49.1%,18.1%,13.1%,0.1%,3.9%,0.0%,0.0%,6.8%,64.9%,17.0%,13.2%
+679,1713770973,B. Stone,Brandon Stone,Stone,Brandon,P,University of South Carolina,SCAR,730348544,South Carolina,BBC,R,R,15,285,941,15.8%,41.4%,4.1%,27.5%,5.4%,5.9%,0.0%,0.0%,0.3%,57.1%,38.8%,32.9%
+680,1319265024,E. Bates,Ethan Bates,Bates,Ethan,P,Grambling State University,GRAM,5378,Grambling State,BBC,R,L,20,249,588,15.3%,13.1%,0.0%,26.2%,1.1%,44.3%,0.0%,0.0%,68.9%,28.4%,71.6%,27.3%
+681,1580729364,T. Valincius,Tomas Valincius,Valincius,Tomas,P,University of Virginia,UVA,5415,Virginia,BBC,L,L,13,275,1020,14.9%,41.3%,0.2%,30.9%,0.0%,12.7%,0.0%,0.0%,0.3%,56.2%,43.6%,30.9%
+682,1304691713,C. Moore,Cooper Moore,Moore,Cooper,P,University of Kansas,KU,730360064,Kansas,BBC,R,R,15,373,1305,13.6%,25.3%,6.2%,4.5%,11.1%,39.4%,0.0%,0.0%,0.3%,38.9%,54.9%,15.5%
+683,1117508864,A. Ortiz,Angel Ortiz,Ortiz,Angel,P,North Carolina A&T State University,NCAT,730372352,North Carolina A&T,BBC,R,R,14,334,1128,13.3%,28.5%,0.0%,35.5%,0.0%,22.7%,0.0%,0.0%,63.3%,41.8%,58.2%,35.5%
+684,1115419904,J. Bergman,Jackson Bergman,Bergman,Jackson,P,University of Toledo,TOL,5388,Toledo,BBC,L,R,16,292,978,13.2%,42.4%,0.0%,17.4%,8.4%,18.6%,0.0%,0.0%,8.6%,55.6%,44.4%,25.8%
+685,1265428992,T. Chadwick,Tyrelle Chadwick,Chadwick,Tyrelle,P,Illinois State University,ILST,730258944,Illinois State,BBC,R,R,14,338,1207,12.7%,60.2%,0.0%,12.1%,0.0%,4.3%,10.6%,0.0%,6.3%,72.9%,27.1%,12.1%
+686,1238278144,R. Bassinger,Reese Bassinger,Bassinger,Reese,P,West Virginia University,WVU,5327,West Virginia,BBC,R,R,30,269,985,12.6%,31.0%,0.3%,39.1%,1.4%,15.4%,0.0%,0.0%,0.6%,43.6%,56.1%,40.7%
+687,1279760896,O. Tappy,Owen Tappy,Tappy,Owen,P,Virginia Commonwealth University,VCU,730179328,VCU,BBC,R,R,14,337,1127,12.5%,51.9%,0.0%,23.3%,0.2%,12.0%,0.0%,0.0%,11.4%,64.4%,35.6%,23.5%
+688,1268530176,R. Easterly,Reid Easterly,Easterly,Reid,P,Duke University,DUKE,730336256,Duke,BBC,L,L,37,312,1110,11.3%,26.8%,32.4%,17.8%,1.8%,8.7%,1.3%,0.0%,3.1%,38.1%,29.5%,19.5%
+689,1220061620,C. Hendry,Clay Hendry,Hendry,Clay,P,University of North Florida,UNF,730296832,North Florida,BBC,R,R,18,254,959,10.8%,28.1%,11.5%,27.8%,14.5%,7.4%,0.0%,0.0%,14.9%,38.8%,49.6%,42.3%
+690,1097715200,E. Gialloreto,Eric Gialloreto,Gialloreto,Eric,P,Iona College,IONA,730242048,Iona,BBC,R,R,14,383,1168,10.7%,29.1%,0.0%,33.0%,15.5%,11.7%,0.0%,0.0%,91.2%,39.8%,60.2%,48.5%
+691,1092652800,J. Johnson,Jeb Johnson,Johnson,Jeb,P,Mercer University,MER,730240512,Mercer,BBC,R,R,21,270,993,9.6%,28.5%,7.7%,30.7%,0.6%,23.0%,0.0%,0.0%,1.3%,38.1%,54.3%,31.3%
+692,1110024960,C. Bowker,Cody Bowker,Bowker,Cody,P,Vanderbilt University,VAN,5046,Vanderbilt,BBC,R,R,16,313,1285,9.1%,45.0%,22.3%,13.9%,0.5%,9.1%,0.0%,0.0%,0.0%,54.1%,23.6%,14.5%
+693,1310349568,H. Bodendorf,Harrison Bodendorf,Bodendorf,Harrison,P,Oklahoma State University,OKST,4245,Oklahoma State,BBC,R,L,17,377,1520,6.1%,36.3%,0.0%,23.4%,0.3%,33.9%,0.0%,0.0%,0.5%,42.4%,57.6%,23.7%
+694,1162333952,M. Pesca,Mario Pesca,Pesca,Mario,P,Oklahoma State University,OKST,4245,Oklahoma State,BBC,R,R,22,291,1104,2.4%,53.8%,6.6%,29.6%,1.8%,4.7%,0.0%,1.1%,9.5%,56.2%,37.2%,32.5%
+,1128813223,L. Darnell,Logan Darnell,Darnell,Logan,P,Mississippi Valley State University,MVSU,730259200,Mississippi Valley State,BBC,R,R,17,276,601,-,-,-,-,-,-,-,-,100.0%,-,-,-

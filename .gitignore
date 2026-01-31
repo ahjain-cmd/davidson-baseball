@@ -3,5 +3,7 @@ __pycache__/
 *.pyo
 .DS_Store
 *.csv
+!truemedia_hitting/*.csv
+!truemedia_pitching/*.csv
 v3/
 .env
