@@ -2276,11 +2276,11 @@ def page_pitching(data):
     # Compute Stuff+ for lab tabs
     stuff_df = _compute_stuff_plus(pdf, baseline=data)
 
-    # Tabs: Overview + 6 lab tabs
+    # Tabs: Overview + 6 lab tabs + Pitcher Strategy
     (tab_overview, tab_stuff, tab_tunnel, tab_seq, tab_loc,
-     tab_sim, tab_cmd) = st.tabs([
+     tab_sim, tab_cmd, tab_strategy) = st.tabs([
         "Overview", "Stuff+ Grades", "Pitch Tunnels", "Sequencing",
-        "Location Lab", "Hitter's Eye", "Command+"
+        "Location Lab", "Hitter's Eye", "Command+", "Pitcher Strategy"
     ])
 
     with tab_overview:
@@ -2290,6 +2290,11 @@ def page_pitching(data):
     _pitching_lab_content(data, pitcher, season_filter, pdf, stuff_df,
                           tab_stuff, tab_tunnel, tab_seq, tab_loc,
                           tab_sim, tab_cmd)
+
+    # Tab 8: Pitcher Strategy (sequencing + count leverage + effective velocity)
+    with tab_strategy:
+        _game_planning_content(data, pitcher=pitcher, season_filter=season_filter,
+                               pdf=pdf, key_prefix="ps")
 
 
 # ──────────────────────────────────────────────
@@ -9344,16 +9349,12 @@ def _hitting_lab_content(data, batter, season_filter, bdf, batted, pr, all_batte
 
 
 # ──────────────────────────────────────────────
-# PAGE: GAME PREP (Matchup Optimizer + Pitcher Strategy)
+# PAGE: GAME PREP (Pitcher Strategy)
 # ──────────────────────────────────────────────
 def page_game_prep(data):
     st.markdown('<div class="section-header">Game Prep</div>', unsafe_allow_html=True)
-    st.caption("Pre-game intelligence — matchup rankings and pitcher strategy")
-    tab_matchups, tab_strategy = st.tabs(["Matchup Optimizer", "Pitcher Strategy"])
-    with tab_matchups:
-        _matchup_optimizer_content(data)
-    with tab_strategy:
-        _game_planning_content(data)
+    st.caption("Pre-game intelligence — pitcher strategy")
+    _game_planning_content(data)
 
 
 def _matchup_optimizer_content(data):
@@ -9531,38 +9532,41 @@ def _matchup_optimizer_content(data):
         st.info("Not enough Davidson hitting data against these pitch types.")
 
 
-def _game_planning_content(data):
-    """Pitch sequencing engine, count leverage analysis, and effective velocity."""
+def _game_planning_content(data, pitcher=None, season_filter=None, pdf=None, key_prefix="gp"):
+    """Pitch sequencing engine, count leverage analysis, and effective velocity.
+    If pitcher/pdf provided, skip the pitcher selector (used from Pitching page)."""
 
-    dav_pitching = filter_davidson(data, role="pitcher")
-    if dav_pitching.empty:
-        st.warning("No Davidson pitching data found.")
-        return
+    if pitcher is None or pdf is None:
+        # Standalone mode: show pitcher selector
+        dav_pitching = filter_davidson(data, role="pitcher")
+        if dav_pitching.empty:
+            st.warning("No Davidson pitching data found.")
+            return
 
-    pitchers = sorted(dav_pitching["Pitcher"].unique())
-    col_sel1, col_sel2 = st.columns([2, 1])
-    with col_sel1:
-        pitcher = st.selectbox("Select Pitcher", pitchers, format_func=display_name, key="gp_pitcher")
-    with col_sel2:
-        seasons = sorted(dav_pitching["Season"].dropna().unique())
-        season_filter = st.multiselect("Season", seasons, default=seasons, key="gp_season")
+        pitchers = sorted(dav_pitching["Pitcher"].unique())
+        col_sel1, col_sel2 = st.columns([2, 1])
+        with col_sel1:
+            pitcher = st.selectbox("Select Pitcher", pitchers, format_func=display_name, key=f"{key_prefix}_pitcher")
+        with col_sel2:
+            seasons = sorted(dav_pitching["Season"].dropna().unique())
+            season_filter = st.multiselect("Season", seasons, default=seasons, key=f"{key_prefix}_season")
 
-    pdf = dav_pitching[dav_pitching["Pitcher"] == pitcher].copy()
-    if season_filter:
-        pdf = pdf[pdf["Season"].isin(season_filter)]
-    if len(pdf) < 30:
-        st.warning("Not enough pitches (need 30+).")
-        return
-    pdf = filter_minor_pitches(pdf)
+        pdf = dav_pitching[dav_pitching["Pitcher"] == pitcher].copy()
+        if season_filter:
+            pdf = pdf[pdf["Season"].isin(season_filter)]
+        if len(pdf) < 30:
+            st.warning("Not enough pitches (need 30+).")
+            return
+        pdf = filter_minor_pitches(pdf)
 
-    jersey = JERSEY.get(pitcher, "")
-    pos = POSITION.get(pitcher, "")
-    throws = safe_mode(pdf["PitcherThrows"], "")
-    t_str = {"Right": "R", "Left": "L"}.get(throws, throws)
+        jersey = JERSEY.get(pitcher, "")
+        pos = POSITION.get(pitcher, "")
+        throws = safe_mode(pdf["PitcherThrows"], "")
+        t_str = {"Right": "R", "Left": "L"}.get(throws, throws)
 
-    player_header(pitcher, jersey, pos,
-                  f"{pos} | Throws: {t_str} | Davidson Wildcats",
-                  f"{len(pdf):,} pitches | Seasons: {', '.join(str(int(s)) for s in sorted(pdf['Season'].dropna().unique()))}")
+        player_header(pitcher, jersey, pos,
+                      f"{pos} | Throws: {t_str} | Davidson Wildcats",
+                      f"{len(pdf):,} pitches | Seasons: {', '.join(str(int(s)) for s in sorted(pdf['Season'].dropna().unique()))}")
 
     tab_seq, tab_count, tab_effv = st.tabs(["Sequencing + Tunnels", "Count Leverage", "Effective Velocity"])
 
@@ -10120,7 +10124,7 @@ def _game_planning_content(data):
                            "\"After Slider strike → what comes next? What's the outcome?\"")
 
                 # Starting pitch selection
-                start_pitch = st.selectbox("Start with pitch:", pitch_types, key="gp_tree_start")
+                start_pitch = st.selectbox("Start with pitch:", pitch_types, key=f"{key_prefix}_tree_start")
 
                 # Build the tree from sdf2
                 tree_base = sdf2[sdf2["TaggedPitchType"] == start_pitch].copy()
@@ -10202,10 +10206,10 @@ def _game_planning_content(data):
                     if len(avail_seqs) >= 2:
                         col_cmp1, col_cmp2 = st.columns(2)
                         with col_cmp1:
-                            seq_a = st.selectbox("Sequence A", avail_seqs, key="gp_cmp_a")
+                            seq_a = st.selectbox("Sequence A", avail_seqs, key=f"{key_prefix}_cmp_a")
                         with col_cmp2:
                             seq_b = st.selectbox("Sequence B", [s for s in avail_seqs if s != seq_a],
-                                                 key="gp_cmp_b")
+                                                 key=f"{key_prefix}_cmp_b")
 
                         cmp_rows = []
                         for seq_name in [seq_a, seq_b]:
@@ -10352,7 +10356,7 @@ def _game_planning_content(data):
 
         # Detailed count breakdown
         section_header("Detailed Count Cheat Sheet")
-        selected_count = st.selectbox("Select Count", [f"{b}-{s}" for b in range(4) for s in range(3)], key="gp_count")
+        selected_count = st.selectbox("Select Count", [f"{b}-{s}" for b in range(4) for s in range(3)], key=f"{key_prefix}_count")
         if selected_count in count_pitch_data:
             details = count_pitch_data[selected_count]["details"]
             detail_rows = []
