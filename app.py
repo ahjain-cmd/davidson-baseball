@@ -3602,6 +3602,97 @@ def _build_3pitch_sequences(sorted_ps, hd, tun_df, seq_df):
     return results
 
 
+def _build_4pitch_sequence(top_seqs, sorted_ps, hd, tun_df, seq_df):
+    """Extend the best 3-pitch sequence into a 4-pitch sequence.
+    Tries appending a P4 after P3 (deeper at-bat / secondary putaway) and
+    also tries prepending a P0 before P1 (early-count setup). Returns the
+    best 4-pitch dict or None if fewer than 3 pitches available."""
+    if not top_seqs:
+        return None
+    pitches = [name for name, data in sorted_ps if data.get("count", 0) >= 10]
+    pitch_data = {name: data for name, data in sorted_ps if data.get("count", 0) >= 10}
+    comp_scores = {name: data.get("score", 50) for name, data in sorted_ps}
+    if len(pitches) < 3:
+        return None
+
+    best_4 = None
+    best_4_score = -1
+
+    for seq3 in top_seqs[:2]:  # try extending top 2 three-pitch sequences
+        p1, p2, p3 = seq3["p1"], seq3["p2"], seq3["p3"]
+        base_score = seq3["score"]
+
+        # ── Option A: append P4 after P3 ──
+        for p4 in pitches:
+            if p4 == p3 and p4 == p2:
+                continue  # avoid 3 in a row of same pitch
+            t34, g34 = _lookup_tunnel(p3, p4, tun_df)
+            sw34, ch34 = _lookup_seq(p3, p4, seq_df)
+            parts, wts = [], []
+            if not pd.isna(t34):
+                parts.append(t34); wts.append(25)
+            if not pd.isna(sw34):
+                parts.append(min(sw34 / 50 * 100, 100)); wts.append(20)
+            else:
+                parts.append(30); wts.append(20)
+            if not pd.isna(ch34):
+                parts.append(min(ch34 / 40 * 100, 100)); wts.append(10)
+            parts.append(comp_scores.get(p4, 50)); wts.append(15)
+            # Variety bonus
+            classes = set("H" if p in _hard_pitches else "O" for p in (p1, p2, p3, p4))
+            if len(classes) == 2:
+                parts.append(70); wts.append(5)
+            # P4 putaway vulnerability
+            is_hard_p4 = p4 in _hard_pitches
+            t2k_p4 = hd.get("whiff_2k_hard" if is_hard_p4 else "whiff_2k_os", np.nan)
+            if not pd.isna(t2k_p4):
+                parts.append(min(t2k_p4 / 40 * 100, 100)); wts.append(10)
+            if not wts:
+                continue
+            ext_score = sum(p * w for p, w in zip(parts, wts)) / sum(wts)
+            total = base_score * 0.55 + ext_score * 0.45
+            if total > best_4_score:
+                best_4_score = total
+                best_4 = {
+                    "seq": f"{p1} → {p2} → {p3} → {p4}",
+                    "p1": p1, "p2": p2, "p3": p3, "p4": p4,
+                    "score": round(total, 1),
+                    "sw34": sw34, "t34": t34,
+                    "mode": "append",
+                }
+
+        # ── Option B: prepend P0 before P1 ──
+        for p0 in pitches:
+            if p0 == p1 and p0 == p2:
+                continue
+            t01, g01 = _lookup_tunnel(p0, p1, tun_df)
+            sw01, ch01 = _lookup_seq(p0, p1, seq_df)
+            parts, wts = [], []
+            if not pd.isna(t01):
+                parts.append(t01); wts.append(25)
+            if not pd.isna(sw01):
+                parts.append(min(sw01 / 50 * 100, 100)); wts.append(15)
+            parts.append(comp_scores.get(p0, 50)); wts.append(15)
+            classes = set("H" if p in _hard_pitches else "O" for p in (p0, p1, p2, p3))
+            if len(classes) == 2:
+                parts.append(70); wts.append(5)
+            if not wts:
+                continue
+            ext_score = sum(p * w for p, w in zip(parts, wts)) / sum(wts)
+            total = base_score * 0.60 + ext_score * 0.40
+            if total > best_4_score:
+                best_4_score = total
+                best_4 = {
+                    "seq": f"{p0} → {p1} → {p2} → {p3}",
+                    "p1": p0, "p2": p1, "p3": p2, "p4": p3,
+                    "score": round(total, 1),
+                    "sw34": _lookup_seq(p2, p3, seq_df)[0], "t34": _lookup_tunnel(p2, p3, tun_df)[0],
+                    "mode": "prepend",
+                }
+
+    return best_4
+
+
 def _score_pitcher_vs_hitter(arsenal, hitter_profile):
     """Score how well our pitcher's arsenal exploits an opponent hitter's weaknesses.
     Uses the unified _pitch_score_composite for all per-pitch and overall scoring."""
@@ -4582,6 +4673,27 @@ def _pitching_plan_content(tm, team, data, season_filter):
                         st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;**{i+1}. {s['p1']} → {s['p2']} → {s['p3']}** (Score: {s['score']:.0f})")
                         if detail_parts:
                             st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;_{' | '.join(detail_parts)}_")
+
+                # ── 4-PITCH SEQUENCE (extended at-bat) ──
+                seq4 = _build_4pitch_sequence(top_seqs, sorted_ps, hd, tunnels, sequences)
+                if seq4:
+                    detail4 = []
+                    _, g12_4 = _lookup_tunnel(seq4["p1"], seq4["p2"], tunnels)
+                    _, g23_4 = _lookup_tunnel(seq4["p2"], seq4["p3"], tunnels)
+                    _, g34_4 = _lookup_tunnel(seq4["p3"], seq4["p4"], tunnels)
+                    for label, grade in [("P1→P2", g12_4), ("P2→P3", g23_4), ("P3→P4", g34_4)]:
+                        if grade not in ("-", "F", None):
+                            detail4.append(f"{label} {grade}")
+                    sw34 = seq4.get("sw34", np.nan)
+                    if not pd.isna(sw34):
+                        detail4.append(f"{sw34:.0f}% whiff on P4")
+                    p4_ars = arsenal["pitches"].get(seq4["p4"], {})
+                    p4_loc, _ = _best_putaway_zone(seq4["p4"], p4_ars)
+                    if p4_loc:
+                        detail4.append(f"P4 loc: {p4_loc}")
+                    st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;**4P. {seq4['seq']}** (Score: {seq4['score']:.0f})")
+                    if detail4:
+                        st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;_{' | '.join(detail4)}_")
 
                 # ── WHEN BEHIND (1-0, 2-0, 2-1, 3-1, 3-2) ──
                 if best_hard_p:
