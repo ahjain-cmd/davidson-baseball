@@ -4550,22 +4550,45 @@ def _pitching_plan_content(tm, team, data, season_filter):
                             bridge = (partner, ps_dict[partner], trow["Grade"])
                             break
 
-            # ── Zone Targets (compact, one line) ──
-            zone_target_parts = []
-            for pt_name, pt_data in sorted_ps[:4]:
-                zl = _best_zone_for(pt_name, pt_data)
-                if not zl:
-                    is_hard = pt_name in _hard_pitches
-                    if is_hard:
-                        pt_ivb = pt_data.get("ivb", np.nan) if isinstance(pt_data, dict) else np.nan
-                        if pt_name == "Sinker":
-                            zl = "low in zone"
-                        elif not pd.isna(pt_ivb) and pt_ivb >= 16:
-                            zl = "up in zone"
-                        else:
-                            zl = "up in zone"
+            # ── Zone Targets (ALL pitches, pitch-specific defaults for variety) ──
+            # Pitch-specific default zones ensure variety even when data-driven
+            # path returns the same zone for multiple offspeed pitches
+            def _pitch_default_zone(pname, p_ivb):
+                """Pitch-design default zone — used when data is missing OR to
+                break ties when multiple pitches get the same data-driven zone."""
+                if pname in _hard_pitches:
+                    if pname == "Sinker":
+                        return "low-and-away" if same_side else "low in zone"
+                    elif not pd.isna(p_ivb) and p_ivb >= 16:
+                        return "up-and-in" if same_side else "up-and-away"
+                    elif not pd.isna(p_ivb) and p_ivb < 12:
+                        return "down in zone"
                     else:
-                        zl = "bury below zone" if not pd.isna(hitter_chase) and hitter_chase > 28 else "low-and-away"
+                        return "up in zone"
+                elif pname in ("Slider", "Sweeper"):
+                    return "back door" if same_side else "front door"
+                elif pname in ("Curveball", "Knuckle Curve"):
+                    return "bury below zone"
+                elif pname == "Changeup":
+                    return "low-and-away" if same_side else "down-and-in"
+                elif pname in ("Splitter", "Knuckleball"):
+                    return "down in zone"
+                else:
+                    return "low-and-away" if same_side else "down in zone"
+
+            zone_target_parts = []
+            used_zones = {}  # track zone → pitch to detect redundancy
+            for pt_name, pt_data in sorted_ps:
+                pt_ivb = pt_data.get("ivb", np.nan) if isinstance(pt_data, dict) else np.nan
+                zl = _best_zone_for(pt_name, pt_data)
+                default_zl = _pitch_default_zone(pt_name, pt_ivb)
+                if not zl:
+                    zl = default_zl
+                # Break redundancy: if another pitch already has this exact zone label,
+                # swap to the pitch-specific default (which is unique per pitch type)
+                if zl in used_zones and zl != default_zl:
+                    zl = default_zl
+                used_zones[zl] = pt_name
                 zone_target_parts.append(f"**{pt_name}**: {zl}")
             if zone_target_parts:
                 st.markdown("**Zone Targets**")
@@ -4577,7 +4600,30 @@ def _pitching_plan_content(tm, team, data, season_filter):
             fp_ch = hd.get("fp_swing_ch", np.nan)
             their_chase_val = hd.get("chase_pct", np.nan)
 
-            # --- 0-0 / 1-0: First pitch decision ---
+            # Helper: zone label for early counts (0-0, 1-0) — never "bury", always in-zone
+            def _early_zone(pname, pdata):
+                zl = _best_zone_for(pname, pdata)
+                if zl and "bury" not in zl:
+                    return zl
+                # Override: early count = need a strike, not a chase pitch
+                pt_ivb = pdata.get("ivb", np.nan) if isinstance(pdata, dict) else np.nan
+                if pname in _hard_pitches:
+                    if pname == "Sinker":
+                        return "low in zone"
+                    elif not pd.isna(pt_ivb) and pt_ivb >= 16:
+                        return "up in zone"
+                    else:
+                        return "in zone"
+                elif pname in ("Slider", "Sweeper"):
+                    return "back door" if same_side else "front door"
+                elif pname in ("Curveball", "Knuckle Curve"):
+                    return "low in zone"
+                elif pname == "Changeup":
+                    return "low in zone"
+                else:
+                    return "low in zone"
+
+            # --- 0-0: First pitch decision ---
             # Passive/aggressive defined by D1 percentile of 1P swing% vs hard
             fp_pct = _pctile(_fp_hard_series, fp_hard)
             fp_pitch = None
@@ -4586,28 +4632,36 @@ def _pitching_plan_content(tm, team, data, season_filter):
                 if fp_pct <= 30 and best_hard_p:
                     # Bottom 30th %ile = passive vs hard → free strike with hard stuff
                     fp_pitch = best_hard_p[0]
-                    fp_zone = _best_zone_for(fp_pitch, best_hard_p[1])
+                    fp_zone = _early_zone(fp_pitch, best_hard_p[1])
                     fp_csw = best_hard_p[1].get("our_csw", 0) or 0
                     fp_reason = f"passive 1P ({fp_hard:.0f}%, {fp_pct:.0f}th %ile)"
-                    count_lines.append(f"**0-0**: {fp_pitch} {fp_zone or 'zone'} ({fp_csw:.0f}% CSW) — {fp_reason}")
+                    count_lines.append(f"**0-0**: {fp_pitch} {fp_zone} ({fp_csw:.0f}% CSW) — {fp_reason}")
                 elif fp_pct >= 70 and real_os:
                     # Top 30th %ile = aggressive vs hard → steal strike with offspeed
                     fp_pitch = real_os[0][0]
-                    fp_zone = _best_zone_for(fp_pitch, real_os[0][1])
+                    fp_zone = _early_zone(fp_pitch, real_os[0][1])
                     fp_reason = f"aggressive 1P ({fp_hard:.0f}%, {fp_pct:.0f}th %ile)"
-                    count_lines.append(f"**0-0**: {fp_pitch} {fp_zone or 'zone'} — {fp_reason}")
+                    count_lines.append(f"**0-0**: {fp_pitch} {fp_zone} — {fp_reason}")
                 elif not pd.isna(fp_ch) and fp_ch > 45 and real_os:
                     # Swings at offspeed 1P → use that aggressiveness
                     fp_pitch = real_os[0][0]
-                    fp_zone = _best_zone_for(fp_pitch, real_os[0][1])
+                    fp_zone = _early_zone(fp_pitch, real_os[0][1])
                     fp_reason = f"swings at offspeed 1P ({fp_ch:.0f}%)"
-                    count_lines.append(f"**0-0**: {fp_pitch} {fp_zone or 'zone'} — {fp_reason}")
+                    count_lines.append(f"**0-0**: {fp_pitch} {fp_zone} — {fp_reason}")
             if not fp_pitch and primary:
                 # Default: lead with primary pitch
                 fp_pitch = primary[0]
-                fp_zone = _best_zone_for(fp_pitch, primary[1])
+                fp_zone = _early_zone(fp_pitch, primary[1])
                 fp_csw = primary[1].get("our_csw", 0) or 0
-                count_lines.append(f"**0-0**: {fp_pitch} {fp_zone or 'zone'} ({fp_csw:.0f}% CSW)")
+                count_lines.append(f"**0-0**: {fp_pitch} {fp_zone} ({fp_csw:.0f}% CSW)")
+
+            # --- 1-0: Still early, pitcher behind — attack zone ---
+            # Same pitch philosophy as 0-0 but emphasize must-throw-strike
+            if best_hard_p:
+                bh_10 = best_hard_p[0]
+                bh_10_zone = _early_zone(bh_10, best_hard_p[1])
+                bh_10_csw = best_hard_p[1].get("our_csw", 0) or 0
+                count_lines.append(f"**1-0**: {bh_10} {bh_10_zone} ({bh_10_csw:.0f}% CSW) — attack zone")
 
             # --- 0-1 / 1-1: Bridge to putaway (got ahead, set up finish) ---
             if bridge:
@@ -4621,10 +4675,23 @@ def _pitching_plan_content(tm, team, data, season_filter):
                     br_zone = _best_zone_for(alt[0][0], alt[0][1])
                     count_lines.append(f"**0-1 / 1-1**: {alt[0][0]} {br_zone or 'expand'}")
 
+            # --- 2-1: Pitcher slightly behind — compete with best stuff ---
+            # Can still throw offspeed but need to be in/around the zone
+            if primary and len(real_ps) >= 2:
+                # Use primary pitch — this is a compete count, not a waste pitch
+                pri_name, pri_data = primary
+                pri_zone = _early_zone(pri_name, pri_data)
+                pri_csw = pri_data.get("our_csw", 0) or 0
+                # If bridge pitch is different from primary, mention it as option
+                alt_note = ""
+                if bridge and bridge[0] != pri_name:
+                    alt_note = f" or {bridge[0]} edge"
+                count_lines.append(f"**2-1**: {pri_name} {pri_zone} ({pri_csw:.0f}% CSW){alt_note}")
+
             # --- 2-0 / 3-2: Must-compete count → best hard pitch in zone ---
             if best_hard_p:
-                bh_zone = _best_zone_for(best_hard_p[0], best_hard_p[1])
-                count_lines.append(f"**2-0 / 3-2**: {best_hard_p[0]} {bh_zone or 'compete'}")
+                bh_zone = _early_zone(best_hard_p[0], best_hard_p[1])
+                count_lines.append(f"**2-0 / 3-2**: {best_hard_p[0]} {bh_zone} — must compete")
 
             # --- 0-2 / 1-2: Putaway with 2K vulnerability context ---
             if putaway:
@@ -4693,15 +4760,7 @@ def _pitching_plan_content(tm, team, data, season_filter):
                     notes.append(f"Aggressive vs **{label}** ({sw:.0f}%, {sw_pct:.0f}th %ile) — tunnel into it, expand")
                 elif sw_pct <= 25:
                     notes.append(f"Won't swing at **{label}** ({sw:.0f}%, {sw_pct:.0f}th %ile) — use for called strikes")
-            # 2K whiff context (if not already shown in putaway line)
-            if not pd.isna(pct_2k_os) and pct_2k_os >= 65:
-                os_names = [n for n in ps_dict if n not in _hard_pitches][:2]
-                if os_names:
-                    notes.append(f"2K OS whiff: **{their_2k_os:.0f}%** ({_pct_label(pct_2k_os)}, {pct_2k_os:.0f}th %ile) — finish with **{' / '.join(os_names)}**")
-            if not pd.isna(pct_2k_hard) and pct_2k_hard >= 65:
-                hard_names = [n for n in ps_dict if n in _hard_pitches][:2]
-                if hard_names:
-                    notes.append(f"2K hard whiff: **{their_2k_hard:.0f}%** ({_pct_label(pct_2k_hard)}, {pct_2k_hard:.0f}th %ile) — finish with **{' / '.join(hard_names)}**")
+            # 2K whiff context removed — already shown in 0-2 putaway line of count plan
             # Chase / discipline
             if not pd.isna(their_chase_val) and their_chase_val < 18:
                 notes.append(f"Elite discipline ({their_chase_val:.0f}% chase) — must throw strikes")
