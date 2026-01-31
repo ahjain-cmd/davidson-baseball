@@ -3430,13 +3430,29 @@ def _pitch_score_composite(pt_name, pt_data, hd, tun_df, platoon_label="Neutral"
         hitter_low = hd.get("low_pct", np.nan)
         hitter_in = hd.get("inside_pct", np.nan)
         hitter_out = hd.get("outside_pct", np.nan)
+        # Pitch-design zone multipliers (same logic as zone targets)
+        _ze_ivb = ars_pt.get("ivb", np.nan)
+        if is_hard:
+            if pt_name == "Sinker":
+                _ze_pzm = {"up": 0.5, "down": 1.4, "chase_low": 1.3}
+            elif not pd.isna(_ze_ivb) and _ze_ivb >= 16:
+                _ze_pzm = {"up": 1.4, "down": 0.7, "chase_low": 0.4}
+            else:
+                _ze_pzm = {"up": 1.15, "down": 0.9, "chase_low": 0.6}
+        else:
+            if pt_name in ("Curveball", "Knuckle Curve"):
+                _ze_pzm = {"up": 0.2, "down": 1.2, "chase_low": 1.5}
+            elif pt_name == "Changeup":
+                _ze_pzm = {"up": 0.2, "down": 1.4, "chase_low": 1.4}
+            else:
+                _ze_pzm = {"up": 0.3, "down": 1.2, "chase_low": 1.3}
         best_exploit = 0
         for zn, zd in ze.items():
             if zd.get("n", 0) < 8:
                 continue
             zone_whiff = zd.get("whiff_pct", 0) or 0
             zone_csw = zd.get("csw_pct", 0) or 0
-            zone_quality = zone_whiff * 0.5 + zone_csw * 0.5
+            zone_quality = (zone_whiff * 0.5 + zone_csw * 0.5) * _ze_pzm.get(zn, 1.0)
             # Boost if hitter sees lots of pitches in this zone (more exploitable)
             exposure_boost = 1.0
             if zn == "up" and not pd.isna(hitter_high) and hitter_high > 30:
@@ -4388,11 +4404,29 @@ def _pitching_plan_content(tm, team, data, season_filter):
                 ars_pt = arsenal["pitches"].get(pt_name, {})
                 ivb_val = ars_pt.get("ivb", np.nan)
                 eff_velo_val = ars_pt.get("eff_velo", np.nan)
-                # Best zone for this pitch (highest whiff%)
+                # Best zone for this pitch (whiff% adjusted by pitch-design constraints)
                 ze = ars_pt.get("zone_eff", {})
                 best_zone_str = "-"
                 if ze:
-                    best_z = max(ze.items(), key=lambda x: x[1].get("whiff_pct", 0) or 0, default=None)
+                    _ivb = ars_pt.get("ivb", np.nan)
+                    if is_hard:
+                        if pt_name == "Sinker":
+                            _pzm = {"up": 0.5, "down": 1.4, "chase_low": 1.3}
+                        elif not pd.isna(_ivb) and _ivb >= 16:
+                            _pzm = {"up": 1.4, "down": 0.7, "chase_low": 0.4}
+                        else:
+                            _pzm = {"up": 1.15, "down": 0.9, "chase_low": 0.6}
+                    else:
+                        if pt_name in ("Curveball", "Knuckle Curve"):
+                            _pzm = {"up": 0.2, "down": 1.2, "chase_low": 1.5}
+                        elif pt_name == "Changeup":
+                            _pzm = {"up": 0.2, "down": 1.4, "chase_low": 1.4}
+                        else:
+                            _pzm = {"up": 0.3, "down": 1.2, "chase_low": 1.3}
+                    best_z = max(ze.items(),
+                                 key=lambda x: (x[1].get("whiff_pct", 0) or 0) * _pzm.get(x[0], 1.0)
+                                 if x[1].get("n", 0) >= 8 else 0,
+                                 default=None)
                     if best_z and best_z[1].get("n", 0) >= 8:
                         bz_whiff = best_z[1].get("whiff_pct", np.nan)
                         if not pd.isna(bz_whiff) and bz_whiff > 0:
@@ -4486,24 +4520,56 @@ def _pitching_plan_content(tm, team, data, season_filter):
                     ars_pt = arsenal["pitches"].get(pt_name, {})
                     ze = ars_pt.get("zone_eff", {})
                 targets = []
-                # Find best zone by whiff%/CSW%, boosted by hitter zone tendencies
+                # ── Pitch-design zone multipliers ──
+                # Hard stuff: IVB/EffVelo determine up vs down preference
+                pt_ivb = pt_data.get("ivb", np.nan) if isinstance(pt_data, dict) else np.nan
+                pt_eff = pt_data.get("eff_velo", np.nan) if isinstance(pt_data, dict) else np.nan
+                pitch_zone_mult = {}  # zone -> multiplier based on pitch design
+                if is_hard:
+                    if pt_name == "Sinker":
+                        # Sinkers are designed to go down — penalize up, boost down
+                        pitch_zone_mult = {"up": 0.5, "down": 1.4, "chase_low": 1.3, "glove": 1.0, "arm": 1.0}
+                    elif not pd.isna(pt_ivb) and pt_ivb >= 16:
+                        # High-IVB fastball — designed to elevate
+                        pitch_zone_mult = {"up": 1.4, "down": 0.7, "chase_low": 0.4, "glove": 1.0, "arm": 1.0}
+                    elif not pd.isna(pt_ivb) and pt_ivb < 12:
+                        # Low-IVB hard stuff — more effective down
+                        pitch_zone_mult = {"up": 0.7, "down": 1.3, "chase_low": 1.1, "glove": 1.0, "arm": 1.0}
+                    else:
+                        # Average IVB fastball/cutter — slight up preference
+                        pitch_zone_mult = {"up": 1.15, "down": 0.9, "chase_low": 0.6, "glove": 1.0, "arm": 1.0}
+                    # High EffVelo boosts up-and-in potential
+                    if not pd.isna(pt_eff) and pt_eff >= 93:
+                        pitch_zone_mult["arm"] = pitch_zone_mult.get("arm", 1.0) * 1.2  # in on hands
+                else:
+                    # Offspeed: CH/CB/SL/SP/SW — should be down/chase, never up
+                    if pt_name in ("Curveball", "Knuckle Curve"):
+                        pitch_zone_mult = {"up": 0.2, "down": 1.2, "chase_low": 1.5, "glove": 0.8, "arm": 0.8}
+                    elif pt_name == "Changeup":
+                        pitch_zone_mult = {"up": 0.2, "down": 1.4, "chase_low": 1.4, "glove": 1.1, "arm": 1.0}
+                    else:
+                        # Slider, Sweeper, Splitter — glove-side and down
+                        pitch_zone_mult = {"up": 0.3, "down": 1.2, "chase_low": 1.3, "glove": 1.3, "arm": 0.8}
+                # Find best zone by whiff%/CSW%, with pitch-design + hitter tendency adjustments
                 best_zone, best_val = None, 0
                 for zn, zd in ze.items():
                     csw = zd.get("csw_pct", 0) or 0
                     wh = zd.get("whiff_pct", 0) or 0
                     combined = csw * 0.6 + wh * 0.4
+                    # Apply pitch-design constraint
+                    combined *= pitch_zone_mult.get(zn, 1.0)
                     # Boost if hitter sees many pitches in this zone (exploitable tendency)
                     h_boost = 1.0
                     if zn == "up" and not pd.isna(hitter_high) and hitter_high > 30:
-                        h_boost = 1.25
+                        h_boost = 1.2
                     elif zn == "down" and not pd.isna(hitter_low) and hitter_low > 35:
-                        h_boost = 1.2
+                        h_boost = 1.15
                     elif zn == "arm" and not pd.isna(hitter_in) and hitter_in > 28:
-                        h_boost = 1.2
+                        h_boost = 1.15
                     elif zn == "glove" and not pd.isna(hitter_out) and hitter_out > 28:
-                        h_boost = 1.2
+                        h_boost = 1.15
                     elif zn == "chase_low" and not pd.isna(hitter_chase) and hitter_chase > 28:
-                        h_boost = 1.35
+                        h_boost = 1.3
                     combined *= h_boost
                     if combined > best_val and zd.get("n", 0) >= 8:
                         best_val = combined
@@ -4522,12 +4588,14 @@ def _pitching_plan_content(tm, team, data, season_filter):
                     wh_str = f" ({wh_pct:.0f}% whiff)" if not pd.isna(wh_pct) and wh_pct > 0 else ""
                     targets.append(f"{label}{wh_str}")
                 else:
-                    # Fallback: use generic rules with handedness
+                    # Fallback: use pitch-design rules with handedness
                     if is_hard:
-                        if same_side:
-                            targets.append("up-and-in")
+                        if pt_name == "Sinker":
+                            targets.append("low in zone" if same_side else "low-and-away")
+                        elif not pd.isna(pt_ivb) and pt_ivb >= 16:
+                            targets.append("up-and-in" if same_side else "up-and-away")
                         else:
-                            targets.append("up-and-away")
+                            targets.append("up-and-in" if same_side else "up-and-away")
                     else:
                         their_chase = hd.get("chase_pct", np.nan)
                         if not pd.isna(their_chase) and their_chase > 28:
