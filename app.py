@@ -432,10 +432,12 @@ def _load_truemedia():
             "pitch_types": _read(hit_dir, "Pitch Types.csv"),
             "pitch_locations": _read(hit_dir, "Pitch Locations.csv"),
             "pitch_counts": _read(hit_dir, "Pitch Counts.csv"),
+            "pitch_type_counts": _read(hit_dir, "Pitch Type Counts.csv"),
             "pitch_calls": _read(hit_dir, "Pitch Calls.csv"),
             "speed": _read(hit_dir, "Speed Score.csv"),
             "stolen_bases": _read(hit_dir, "Stolen Bases.csv"),
             "home_runs": _read(hit_dir, "Home Runs.csv"),
+            "run_expectancy": _read(hit_dir, "Run Expectancy.csv"),
         },
         "pitching": {
             "traditional": _read(pit_dir, "Traditional.csv"),
@@ -450,6 +452,15 @@ def _load_truemedia():
             "counting": _read(pit_dir, "Counting.csv"),
             "pitch_counts": _read(pit_dir, "Pitch Counts.csv"),
             "pitch_locations": _read(pit_dir, "Pitch Locations.csv"),
+            "baserunning": _read(pit_dir, "Baserunning.csv"),
+            "stolen_bases": _read(pit_dir, "Stolen Bases.csv"),
+            "home_runs": _read(pit_dir, "Home Runs.csv"),
+            "expected_hit_rates": _read(pit_dir, "Expected Hit Rates.csv"),
+            "pitch_calls": _read(pit_dir, "Pitch Calls.csv"),
+            "pitch_type_counts": _read(pit_dir, "Pitch Type Counts.csv"),
+            "expected_counting": _read(pit_dir, "Expected Counting.csv"),
+            "pitching_counting": _read(pit_dir, "Pitching Counting.csv"),
+            "bids": _read(pit_dir, "Bids.csv"),
         },
         "catching": {
             "defense": _read(pit_dir, "Catcher Defense.csv"),
@@ -457,7 +468,12 @@ def _load_truemedia():
             "opposing": _read(pit_dir, "Catcher Opposing Batters.csv"),
             "pitch_rates": _read(pit_dir, "Catcher Pitch Rates.csv"),
             "pitch_types_rates": _read(pit_dir, "Catcher Pitch Types Rates.csv"),
+            "pitch_types": _read(pit_dir, "Catcher Pitch Types.csv"),
             "throws": _read(pit_dir, "All Tracked Throws.csv"),
+            "sba2_throws": _read(pit_dir, "SBA2 Tracked Throws.csv"),
+            "pickoffs": _read(pit_dir, "Pickoffs.csv"),
+            "pb_wp": _read(pit_dir, "Passed Balls & Wild Pitches.csv"),
+            "pitch_counts": _read(pit_dir, "Catcher Pitch Counts.csv"),
         },
     }
     return tm
@@ -866,9 +882,11 @@ def render_savant_percentile_section(metrics_data, title=None, legend=None):
     for label, val, pct, fmt, hib in metrics_data:
         color = savant_color(pct, hib)
         txt_color = _pctile_text_color(color)
-        display_pct = int(round(pct)) if not pd.isna(pct) else "-"
+        # For "lower is better" metrics, invert position & displayed number
+        effective_pct = pct if hib else (100 - pct) if not pd.isna(pct) else pct
+        display_pct = int(round(effective_pct)) if not pd.isna(pct) else "-"
         display_val = f"{val:{fmt}}" if not pd.isna(val) else "-"
-        bar_left = max(min(pct, 100), 0) if not pd.isna(pct) else 50
+        bar_left = max(min(effective_pct, 100), 0) if not pd.isna(pct) else 50
 
         st.markdown(
             f'<div style="display:flex;align-items:center;margin:4px 0;height:30px;background:white;'
@@ -3092,10 +3110,10 @@ def _scouting_hitter_report(tm, team, trackman_data):
         if not ht.empty:
             section_header("Batted Ball Types")
             bb_metrics = [
-                ("GB %", _safe_num(ht, "Ground%"), _tm_pctile(ht, "Ground%", all_h_ht), ".1f", False),
+                ("GB %", _safe_num(ht, "Ground%"), _tm_pctile(ht, "Ground%", all_h_ht), ".1f", True),
                 ("FB %", _safe_num(ht, "Fly%"), _tm_pctile(ht, "Fly%", all_h_ht), ".1f", True),
                 ("LD %", _safe_num(ht, "Line%"), _tm_pctile(ht, "Line%", all_h_ht), ".1f", True),
-                ("Popup %", _safe_num(ht, "Popup%"), _tm_pctile(ht, "Popup%", all_h_ht), ".1f", False),
+                ("Popup %", _safe_num(ht, "Popup%"), _tm_pctile(ht, "Popup%", all_h_ht), ".1f", True),
             ]
             bb_metrics = [(l, v, p, f, h) for l, v, p, f, h in bb_metrics if not pd.isna(v)]
             render_savant_percentile_section(bb_metrics, legend=("LESS OFTEN", "AVERAGE", "MORE OFTEN"))
@@ -3130,6 +3148,113 @@ def _scouting_hitter_report(tm, team, trackman_data):
             fig.update_layout(**CHART_LAYOUT, height=280, yaxis_title="% Seen", showlegend=False,
                               yaxis=dict(range=[0, vdf["Usage"].max() * 1.3]))
             st.plotly_chart(fig, use_container_width=True)
+
+    # ── Pitch Location Zone Map ──
+    if not pl.empty:
+        section_header("Pitch Location Tendencies")
+        st.caption("Where pitchers have thrown to this hitter (% of pitches)")
+        # Build 3x3 zone grid from TrueMedia pitch location data
+        zone_data = {}
+        for lbl, col_name in [
+            ("UpHalf%", "UpHalf%"), ("LowHalf%", "LowHalf%"),
+            ("InHalf%", "InHalf%"), ("OutHalf%", "OutHalf%"),
+            ("High%", "High%"), ("VMid%", "VMid%"), ("Low%", "Low%"),
+            ("Inside%", "Inside%"), ("HMid%", "HMid%"), ("Outside%", "Outside%"),
+            ("InZone%", "InZone%"),
+        ]:
+            zone_data[lbl] = _safe_num(pl, col_name)
+
+        # 3x3 heatmap: rows = High/Mid/Low, cols = Inside/Middle/Outside
+        z_vals = [
+            [zone_data.get("High%", np.nan), zone_data.get("High%", np.nan), zone_data.get("High%", np.nan)],
+            [zone_data.get("VMid%", np.nan), zone_data.get("VMid%", np.nan), zone_data.get("VMid%", np.nan)],
+            [zone_data.get("Low%", np.nan), zone_data.get("Low%", np.nan), zone_data.get("Low%", np.nan)],
+        ]
+        # Better: use specific zone combos if available
+        col_zone, col_disc = st.columns(2)
+        with col_zone:
+            zone_tbl = []
+            for lbl, col_name in [("In Zone", "InZone%"), ("High", "High%"), ("Mid (V)", "VMid%"),
+                                   ("Low", "Low%"), ("Inside", "Inside%"), ("Mid (H)", "HMid%"),
+                                   ("Outside", "Outside%"), ("Up Half", "UpHalf%"), ("Low Half", "LowHalf%")]:
+                v = _safe_num(pl, col_name)
+                if not pd.isna(v):
+                    zone_tbl.append({"Zone": lbl, "% Pitches": f"{v:.1f}%"})
+            if zone_tbl:
+                st.dataframe(pd.DataFrame(zone_tbl), use_container_width=True, hide_index=True)
+        with col_disc:
+            # Pitch discipline by zone
+            disc_metrics = [
+                ("In Zone %", _safe_num(pl, "InZone%"), _tm_pctile(pl, "InZone%", tm["hitting"]["pitch_locations"]), ".1f", True),
+                ("High %", _safe_num(pl, "High%"), _tm_pctile(pl, "High%", tm["hitting"]["pitch_locations"]), ".1f", True),
+                ("Low %", _safe_num(pl, "Low%"), _tm_pctile(pl, "Low%", tm["hitting"]["pitch_locations"]), ".1f", True),
+                ("Inside %", _safe_num(pl, "Inside%"), _tm_pctile(pl, "Inside%", tm["hitting"]["pitch_locations"]), ".1f", True),
+                ("Outside %", _safe_num(pl, "Outside%"), _tm_pctile(pl, "Outside%", tm["hitting"]["pitch_locations"]), ".1f", True),
+            ]
+            disc_metrics = [(l, v, p, f, h) for l, v, p, f, h in disc_metrics if not pd.isna(v)]
+            if disc_metrics:
+                render_savant_percentile_section(disc_metrics, legend=("LESS OFTEN", "AVERAGE", "MORE OFTEN"))
+
+    # ── Expected Hit Rates ──
+    xhr = _tm_player(_tm_team(tm["hitting"]["expected_hit_rates"], team), hitter)
+    if not xhr.empty:
+        section_header("Expected Hit Rates")
+        xhr_metrics = []
+        for lbl, col_act, col_exp, col_diff in [
+            ("1B", "1B%", "x1B%", "x1B%Df"), ("2B", "2B%", "x2B%", "x2B%Df"),
+            ("3B", "3B%", "x3B%", "x3B%Df"), ("HR", "HR%", "xHR%", "xHR%Df"),
+        ]:
+            actual = _safe_num(xhr, col_act)
+            expected = _safe_num(xhr, col_exp)
+            diff = _safe_num(xhr, col_diff)
+            if not pd.isna(actual) and not pd.isna(expected):
+                xhr_metrics.append({"Hit Type": lbl, "Actual": f"{actual:.1f}%",
+                                    "Expected": f"{expected:.1f}%",
+                                    "Diff": f"{diff:+.1f}%" if not pd.isna(diff) else "-"})
+        if xhr_metrics:
+            st.dataframe(pd.DataFrame(xhr_metrics), use_container_width=True, hide_index=True)
+
+    # ── Power Profile ──
+    if not hrs.empty:
+        hr_val = _safe_num(hrs, "HR")
+        if not pd.isna(hr_val) and hr_val > 0:
+            section_header("Power Profile")
+            all_h_hrs = tm["hitting"]["home_runs"]
+            hr_metrics = [
+                ("HR", _safe_num(hrs, "HR"), _tm_pctile(hrs, "HR", all_h_hrs), ".0f", True),
+                ("HR/FB", _safe_num(hrs, "HR/FB"), _tm_pctile(hrs, "HR/FB", all_h_hrs), ".1f", True),
+                ("HR Dist", _safe_num(hrs, "HRDst"), _tm_pctile(hrs, "HRDst", all_h_hrs), ".0f", True),
+                ("FB Dist", _safe_num(hrs, "FBDst"), _tm_pctile(hrs, "FBDst", all_h_hrs), ".0f", True),
+            ]
+            hr_metrics = [(l, v, p, f, h) for l, v, p, f, h in hr_metrics if not pd.isna(v)]
+            if hr_metrics:
+                render_savant_percentile_section(hr_metrics)
+            # HR direction
+            hr_pull = _safe_num(hrs, "HRPull")
+            hr_ctr = _safe_num(hrs, "HRCtr")
+            hr_opp = _safe_num(hrs, "HROpp")
+            if not pd.isna(hr_pull):
+                st.caption(f"HR Direction: Pull {int(hr_pull)} | Center {int(hr_ctr) if not pd.isna(hr_ctr) else 0} | Oppo {int(hr_opp) if not pd.isna(hr_opp) else 0}")
+
+    # ── Stolen Base Detail ──
+    if not sb.empty:
+        sb2 = _safe_num(sb, "SB2")
+        sb3 = _safe_num(sb, "SB3")
+        cs2 = _safe_num(sb, "CS2")
+        if not pd.isna(sb2) or not pd.isna(sb3):
+            section_header("Stolen Base Breakdown")
+            sb_data = []
+            sb2_pct = _safe_num(sb, "SB2%")
+            sb3_pct = _safe_num(sb, "SB3%")
+            if not pd.isna(sb2):
+                sb_data.append({"Base": "2nd", "SB": int(sb2), "CS": int(cs2) if not pd.isna(cs2) else 0,
+                                "SB%": f"{sb2_pct:.1f}%" if not pd.isna(sb2_pct) else "-"})
+            if not pd.isna(sb3):
+                cs3 = _safe_num(sb, "CS3")
+                sb_data.append({"Base": "3rd", "SB": int(sb3), "CS": int(cs3) if not pd.isna(cs3) else 0,
+                                "SB%": f"{sb3_pct:.1f}%" if not pd.isna(sb3_pct) else "-"})
+            if sb_data:
+                st.dataframe(pd.DataFrame(sb_data), use_container_width=True, hide_index=True)
 
     # ── How to Attack ──
     section_header("How to Attack")
@@ -3180,6 +3305,12 @@ def _scouting_pitcher_report(tm, team, trackman_data):
     xrate = _tm_player(_tm_team(tm["pitching"]["expected_rate"], team), pitcher)
     ht = _tm_player(_tm_team(tm["pitching"]["hit_types"], team), pitcher)
     hl = _tm_player(_tm_team(tm["pitching"]["hit_locations"], team), pitcher)
+    ploc = _tm_player(_tm_team(tm["pitching"]["pitch_locations"], team), pitcher)
+    p_sb = _tm_player(_tm_team(tm["pitching"]["stolen_bases"], team), pitcher)
+    p_hr = _tm_player(_tm_team(tm["pitching"]["home_runs"], team), pitcher)
+    p_xhit = _tm_player(_tm_team(tm["pitching"]["expected_hit_rates"], team), pitcher)
+    p_cnt = _tm_player(_tm_team(tm["pitching"]["counting"], team), pitcher)
+    p_pcalls = _tm_player(_tm_team(tm["pitching"]["pitch_calls"], team), pitcher)
 
     # All D1 data for percentile context
     all_p_trad = tm["pitching"]["traditional"]
@@ -3187,6 +3318,11 @@ def _scouting_pitcher_report(tm, team, trackman_data):
     all_p_pr = tm["pitching"]["pitch_rates"]
     all_p_exit = tm["pitching"]["exit"]
     all_p_ht = tm["pitching"]["hit_types"]
+    all_p_ploc = tm["pitching"]["pitch_locations"]
+    all_p_sb = tm["pitching"]["stolen_bases"]
+    all_p_hr = tm["pitching"]["home_runs"]
+    all_p_hl = tm["pitching"]["hit_locations"]
+    all_p_xrate = tm["pitching"]["expected_rate"]
 
     # Header
     throws = trad.iloc[0].get("throwsHand", "?") if not trad.empty else "?"
@@ -3248,6 +3384,150 @@ def _scouting_pitcher_report(tm, team, trackman_data):
                               yaxis=dict(range=[0, vdf["Usage"].max() * 1.3]))
             st.plotly_chart(fig, use_container_width=True)
 
+    # ── Movement Profile ──
+    if not mov.empty:
+        section_header("Movement Profile")
+        mov_data = []
+        for lbl, col, fmt in [
+            ("Velocity", "Vel", ".1f"), ("Max Velocity", "MxVel", ".1f"),
+            ("Horiz Break", "HorzBrk", ".1f"), ("Vert Break", "VertBrk", ".1f"),
+            ("Induced Vert Break", "IndVertBrk", ".1f"), ("Spin (rpm)", "Spin", ".0f"),
+            ("Extension (ft)", "Extension", ".1f"), ("Effective Velo", "EffectVel", ".1f"),
+        ]:
+            v = _safe_num(mov, col)
+            if not pd.isna(v):
+                mov_data.append({"Metric": lbl, "Value": f"{v:{fmt}}"})
+        # Add approach angles if available
+        for lbl, col in [("VAA", "VAA"), ("HAA", "HAA"), ("RelHt", "RelHt"), ("RelSide", "RelSide")]:
+            v = _safe_num(mov, col)
+            if not pd.isna(v):
+                mov_data.append({"Metric": lbl, "Value": f"{v:.1f}"})
+        if mov_data:
+            st.dataframe(pd.DataFrame(mov_data), use_container_width=True, hide_index=True)
+
+    # ── Pitch Location Zones ──
+    if not ploc.empty:
+        section_header("Pitch Location Tendencies")
+        st.caption("Where this pitcher locates — % of pitches in each zone")
+        loc_cols_labels = [
+            ("InZone%", "In Zone"), ("High%", "High"), ("VMid%", "Vert Mid"), ("Low%", "Low"),
+            ("UpHalf%", "Up Half"), ("LowHalf%", "Low Half"),
+            ("Inside%", "Inside"), ("HMid%", "Horiz Mid"), ("Outside%", "Outside"),
+            ("InHalf%", "In Half"), ("OutHalf%", "Out Half"),
+        ]
+        loc_data = []
+        for col, lbl in loc_cols_labels:
+            v = _safe_num(ploc, col)
+            pct = _tm_pctile(ploc, col, all_p_ploc) if not pd.isna(v) else np.nan
+            if not pd.isna(v):
+                loc_data.append({"Zone": lbl, "Rate": f"{v:.1f}%", "D1 Pctile": f"{int(pct)}" if not pd.isna(pct) else "-"})
+        if loc_data:
+            st.dataframe(pd.DataFrame(loc_data), use_container_width=True, hide_index=True)
+
+    # ── Expected Rates Against ──
+    if not xrate.empty:
+        section_header("Expected Rates Against")
+        xr_metrics = [
+            ("xAVG", _safe_num(xrate, "xAVG"), _tm_pctile(xrate, "xAVG", all_p_xrate), ".3f", False),
+            ("xSLG", _safe_num(xrate, "xSLG"), _tm_pctile(xrate, "xSLG", all_p_xrate), ".3f", False),
+            ("xWOBA", _safe_num(xrate, "xwOBA"), _tm_pctile(xrate, "xwOBA", all_p_xrate), ".3f", False),
+        ]
+        xr_metrics = [(l, v, p, f, h) for l, v, p, f, h in xr_metrics if not pd.isna(v)]
+        if xr_metrics:
+            render_savant_percentile_section(xr_metrics)
+
+    # ── Hit Locations Against ──
+    if not hl.empty:
+        section_header("Spray Direction Against")
+        spray_data = []
+        for lbl, col in [("Pull %", "Pull%"), ("Center %", "Center%"), ("Oppo %", "Oppo%")]:
+            v = _safe_num(hl, col)
+            pct = _tm_pctile(hl, col, all_p_hl) if not pd.isna(v) else np.nan
+            if not pd.isna(v):
+                spray_data.append({"Direction": lbl, "Rate": f"{v:.1f}%", "D1 Pctile": f"{int(pct)}" if not pd.isna(pct) else "-"})
+        if spray_data:
+            st.dataframe(pd.DataFrame(spray_data), use_container_width=True, hide_index=True)
+
+    # ── Batted Ball Types Against ──
+    if not ht.empty:
+        section_header("Batted Ball Types Against")
+        bb_metrics = [
+            ("GB %", _safe_num(ht, "Ground%"), _tm_pctile(ht, "Ground%", all_p_ht), ".1f", True),
+            ("FB %", _safe_num(ht, "Fly%"), _tm_pctile(ht, "Fly%", all_p_ht), ".1f", True),
+            ("LD %", _safe_num(ht, "Line%"), _tm_pctile(ht, "Line%", all_p_ht), ".1f", True),
+            ("Popup %", _safe_num(ht, "Popup%"), _tm_pctile(ht, "Popup%", all_p_ht), ".1f", True),
+        ]
+        bb_metrics = [(l, v, p, f, h) for l, v, p, f, h in bb_metrics if not pd.isna(v)]
+        if bb_metrics:
+            render_savant_percentile_section(bb_metrics, legend=("LESS OFTEN", "AVERAGE", "MORE OFTEN"))
+
+    # ── Expected Hit Rates Against ──
+    if not p_xhit.empty:
+        section_header("Expected Hit Rates Against")
+        xhit_data = []
+        for lbl, col in [("x1B%", "x1B%"), ("x2B%", "x2B%"), ("x3B%", "x3B%"), ("xHR%", "xHR%"), ("xXBH%", "xXBH%")]:
+            v = _safe_num(p_xhit, col)
+            if not pd.isna(v):
+                xhit_data.append({"Type": lbl, "Rate": f"{v:.1f}%"})
+        if xhit_data:
+            st.dataframe(pd.DataFrame(xhit_data), use_container_width=True, hide_index=True)
+
+    # ── HR Profile Allowed ──
+    if not p_hr.empty:
+        section_header("Home Run Profile Allowed")
+        hr_metrics = [
+            ("HR/FB", _safe_num(p_hr, "HR/FB"), _tm_pctile(p_hr, "HR/FB", all_p_hr), ".1f", False),
+            ("HR Dist", _safe_num(p_hr, "HRDst"), _tm_pctile(p_hr, "HRDst", all_p_hr), ".0f", False),
+        ]
+        hr_metrics = [(l, v, p, f, h) for l, v, p, f, h in hr_metrics if not pd.isna(v)]
+        if hr_metrics:
+            render_savant_percentile_section(hr_metrics)
+        # HR direction breakdown
+        hr_dir = []
+        for lbl, col in [("Pull HR", "HRPull"), ("Center HR", "HRCtr"), ("Oppo HR", "HROpp")]:
+            v = _safe_num(p_hr, col)
+            if not pd.isna(v):
+                hr_dir.append({"Direction": lbl, "Count": f"{int(v)}"})
+        if hr_dir:
+            st.dataframe(pd.DataFrame(hr_dir), use_container_width=True, hide_index=True)
+
+    # ── Baserunning Allowed ──
+    if not p_sb.empty:
+        section_header("Baserunning Allowed")
+        sb_data = []
+        for lbl, col, fmt in [
+            ("SB Allowed", "SB", "d"), ("CS", "CS", "d"), ("SB%", "SB%", ".1f"),
+            ("SBA", "SBA", "d"), ("SB2 Allowed", "SB2", "d"), ("CS2", "CS2", "d"),
+            ("SB2%", "SB2%", ".1f"), ("Pop Time (SBA2)", "PopTimeSBA2", ".2f"),
+        ]:
+            v = _safe_num(p_sb, col)
+            if not pd.isna(v):
+                val_str = f"{int(v)}" if fmt == "d" else f"{v:{fmt}}"
+                sb_data.append({"Metric": lbl, "Value": val_str})
+        if sb_data:
+            st.dataframe(pd.DataFrame(sb_data), use_container_width=True, hide_index=True)
+        # SB% percentile
+        sb_pct_val = _safe_num(p_sb, "SB%")
+        if not pd.isna(sb_pct_val):
+            sb_pct_rank = _tm_pctile(p_sb, "SB%", all_p_sb)
+            if not pd.isna(sb_pct_rank):
+                if sb_pct_rank >= 70:
+                    st.caption(f"⚠️ High SB% allowed ({sb_pct_val:.1f}%) — runners will be aggressive on the bases.")
+                elif sb_pct_rank <= 30:
+                    st.caption(f"✅ Low SB% allowed ({sb_pct_val:.1f}%) — controls the running game well.")
+
+    # ── Counting Stats ──
+    if not p_cnt.empty:
+        section_header("Counting Stats")
+        cnt_data = []
+        for lbl, col in [("H", "H"), ("HR", "HR"), ("BB", "BB"), ("K", "K"), ("HBP", "HBP"),
+                          ("2B", "2B"), ("3B", "3B"), ("XBH", "XBH"), ("GDP", "GDP")]:
+            v = _safe_num(p_cnt, col)
+            if not pd.isna(v):
+                cnt_data.append({"Stat": lbl, "Count": f"{int(v)}"})
+        if cnt_data:
+            st.dataframe(pd.DataFrame(cnt_data), use_container_width=True, hide_index=True)
+
     # ── How to Attack ──
     section_header("How to Attack")
     notes = _pitcher_attack_plan(trad, mov, pr, ht)
@@ -3278,19 +3558,28 @@ def _trackman_pitcher_overlay(data, pitcher_name):
 
 
 def _scouting_catcher_report(tm, team):
-    """Their Catchers tab — arm, framing, defense with percentile context."""
+    """Their Catchers tab — arm, framing, defense, pickoffs, pitch calling with percentile context."""
     c_def = _tm_team(tm["catching"]["defense"], team)
     c_frm = _tm_team(tm["catching"]["framing"], team)
     c_throws = _tm_team(tm["catching"]["throws"], team)
     c_pr = _tm_team(tm["catching"]["pitch_rates"], team)
+    c_pt_rates = _tm_team(tm["catching"]["pitch_types_rates"], team)
+    c_pt = _tm_team(tm["catching"]["pitch_types"], team)
+    c_opp = _tm_team(tm["catching"]["opposing"], team)
+    c_sba2 = _tm_team(tm["catching"]["sba2_throws"], team)
+    c_pk = _tm_team(tm["catching"]["pickoffs"], team)
+    c_pbwp = _tm_team(tm["catching"]["pb_wp"], team)
+    c_pcnts = _tm_team(tm["catching"]["pitch_counts"], team)
 
     all_c_def = tm["catching"]["defense"]
     all_c_frm = tm["catching"]["framing"]
     all_c_throws = tm["catching"]["throws"]
+    all_c_pbwp = tm["catching"]["pb_wp"]
+    all_c_pr = tm["catching"]["pitch_rates"]
 
     # Merge available catchers
     all_catchers = set()
-    for df in [c_def, c_frm, c_throws]:
+    for df in [c_def, c_frm, c_throws, c_pbwp, c_pk]:
         if not df.empty and "playerFullName" in df.columns:
             all_catchers.update(df["playerFullName"].unique())
     if not all_catchers:
@@ -3304,6 +3593,13 @@ def _scouting_catcher_report(tm, team):
     cf = _tm_player(c_frm, catcher)
     ct = _tm_player(c_throws, catcher)
     cr = _tm_player(c_pr, catcher)
+    c_ptr = _tm_player(c_pt_rates, catcher)
+    c_ptc = _tm_player(c_pt, catcher)
+    c_op = _tm_player(c_opp, catcher)
+    c_s2 = _tm_player(c_sba2, catcher)
+    c_pick = _tm_player(c_pk, catcher)
+    c_pw = _tm_player(c_pbwp, catcher)
+    c_pc = _tm_player(c_pcnts, catcher)
 
     st.markdown(f"### {catcher}")
 
@@ -3316,7 +3612,6 @@ def _scouting_catcher_report(tm, team):
 
     if not pd.isna(pop):
         pop_pct = _tm_pctile(ct, "PopTime", all_c_throws)
-        # Lower pop time is better — invert
         pop_rank = 100 - pop_pct if not pd.isna(pop_pct) else np.nan
         if pop_rank >= 75:
             narrative_parts.append(f"**{catcher} has an elite arm** ({pop:.2f}s pop time, {int(pop_rank)}th percentile).")
@@ -3327,17 +3622,29 @@ def _scouting_catcher_report(tm, team):
 
     if not pd.isna(frm_raa):
         frm_pct = _tm_pctile(cf, "FrmRAA", all_c_frm)
-        if frm_pct >= 75:
-            narrative_parts.append(f"Elite framer ({frm_raa:+.1f} FrmRAA, {int(frm_pct)}th pctile) — expect extra called strikes on borderline pitches.")
-        elif frm_pct <= 25:
-            narrative_parts.append(f"Below-average framer ({frm_raa:+.1f} FrmRAA) — borderline pitches may go our way.")
+        if not pd.isna(frm_pct):
+            if frm_pct >= 75:
+                narrative_parts.append(f"Elite framer ({frm_raa:+.1f} FrmRAA, {int(frm_pct)}th pctile) — expect extra called strikes on borderline pitches.")
+            elif frm_pct <= 25:
+                narrative_parts.append(f"Below-average framer ({frm_raa:+.1f} FrmRAA) — borderline pitches may go our way.")
 
     if not pd.isna(cs_pct):
         cs_rank = _tm_pctile(cd, "CS%", all_c_def)
-        if cs_rank >= 70:
-            narrative_parts.append(f"Strong CS% ({cs_pct:.1f}%) — be selective with steal attempts.")
-        elif cs_rank <= 30:
-            narrative_parts.append(f"Low CS% ({cs_pct:.1f}%) — green light to run.")
+        if not pd.isna(cs_rank):
+            if cs_rank >= 70:
+                narrative_parts.append(f"Strong CS% ({cs_pct:.1f}%) — be selective with steal attempts.")
+            elif cs_rank <= 30:
+                narrative_parts.append(f"Low CS% ({cs_pct:.1f}%) — green light to run.")
+
+    # Add PB/WP narrative
+    pbwp_raa = _safe_num(c_pw, "PBWPRAA")
+    if not pd.isna(pbwp_raa):
+        pbwp_pct = _tm_pctile(c_pw, "PBWPRAA", all_c_pbwp)
+        if not pd.isna(pbwp_pct):
+            if pbwp_pct >= 75:
+                narrative_parts.append(f"Elite blocker ({pbwp_raa:+.1f} PBWPRAA) — rarely lets balls get by.")
+            elif pbwp_pct <= 25:
+                narrative_parts.append(f"Struggles blocking ({pbwp_raa:+.1f} PBWPRAA) — extra bases available on balls in the dirt.")
 
     if narrative_parts:
         st.markdown(" ".join(narrative_parts))
@@ -3349,8 +3656,10 @@ def _scouting_catcher_report(tm, team):
         ("Throw Velo", _safe_num(ct, "CThrowSpd"), _tm_pctile(ct, "CThrowSpd", all_c_throws), ".1f", True),
         ("FrmRAA", _safe_num(cf, "FrmRAA"), _tm_pctile(cf, "FrmRAA", all_c_frm), ".1f", True),
         ("SLAA", _safe_num(cf, "SLAA"), _tm_pctile(cf, "SLAA", all_c_frm), ".1f", True),
+        ("SL+", _safe_num(cf, "SL+"), _tm_pctile(cf, "SL+", all_c_frm), ".0f", True),
         ("CS %", _safe_num(cd, "CS%"), _tm_pctile(cd, "CS%", all_c_def), ".1f", True),
         ("FldRAA", _safe_num(cd, "FldRAA"), _tm_pctile(cd, "FldRAA", all_c_def), ".1f", True),
+        ("PBWPRAA", _safe_num(c_pw, "PBWPRAA"), _tm_pctile(c_pw, "PBWPRAA", all_c_pbwp), ".1f", True),
     ]
     catcher_metrics = [(l, v, p, f, h) for l, v, p, f, h in catcher_metrics if not pd.isna(v)]
     if catcher_metrics:
@@ -3358,7 +3667,7 @@ def _scouting_catcher_report(tm, team):
         st.caption(f"vs. {n_catchers:,} D1 catchers")
         render_savant_percentile_section(catcher_metrics)
 
-    # ── Additional Details ──
+    # ── Arm Details + Defense Details (side by side) ──
     col_arm, col_def = st.columns(2)
     with col_arm:
         if not ct.empty:
@@ -3368,9 +3677,9 @@ def _scouting_catcher_report(tm, team):
                 v = _safe_num(ct, col_name)
                 if not pd.isna(v):
                     arm_data.append({"Metric": lbl, "Value": f"{v:{fmt}}"})
-            on_tgt = ct.iloc[0].get("CThrowsOnTrgt")
-            total = ct.iloc[0].get("CThrows")
-            if on_tgt is not None and total is not None and not pd.isna(on_tgt) and not pd.isna(total) and total > 0:
+            on_tgt = _safe_num(ct, "CThrowsOnTrgt")
+            total = _safe_num(ct, "CThrows")
+            if not pd.isna(on_tgt) and not pd.isna(total) and total > 0:
                 arm_data.append({"Metric": "On-Target %", "Value": f"{on_tgt/total*100:.1f}%"})
             if arm_data:
                 st.dataframe(pd.DataFrame(arm_data), use_container_width=True, hide_index=True)
@@ -3378,12 +3687,133 @@ def _scouting_catcher_report(tm, team):
         if not cd.empty:
             section_header("Defense Details")
             def_data = []
-            for lbl, col_name, fmt in [("PB", "PB", "d"), ("WP", "WP", "d"), ("Blocks", "CatBlock", "d")]:
+            for lbl, col_name in [("PB", "PB"), ("WP", "WP"), ("Blocks", "CatBlock")]:
                 v = _safe_num(cd, col_name)
                 if not pd.isna(v):
                     def_data.append({"Metric": lbl, "Value": f"{int(v)}"})
             if def_data:
                 st.dataframe(pd.DataFrame(def_data), use_container_width=True, hide_index=True)
+
+    # ── SBA2 Throw Details ──
+    if not c_s2.empty:
+        section_header("SBA2 Throw Breakdown")
+        sba2_data = []
+        for lbl, col_name, fmt in [
+            ("SB2 Allowed", "SB2", "d"), ("CS2", "CS2", "d"),
+            ("SBA2 Throws", "CSBA2Throws", "d"), ("On-Target", "CSBA2ThrowsOnTrgt", "d"),
+            ("Off-Target", "CSBA2ThrowsOffTrgt", "d"),
+            ("SBA2 Throw Velo", "CSBA2ThrowSpd", ".1f"),
+            ("SBA2 Pop Time", "PopTimeSBA2", ".2f"),
+            ("SBA2 Exchange", "CSBA2ExchTime", ".2f"),
+            ("SBA2 Time to Base", "CSBA2TimeToBase", ".2f"),
+        ]:
+            v = _safe_num(c_s2, col_name)
+            if not pd.isna(v):
+                val_str = f"{int(v)}" if fmt == "d" else f"{v:{fmt}}"
+                sba2_data.append({"Metric": lbl, "Value": val_str})
+        if sba2_data:
+            st.dataframe(pd.DataFrame(sba2_data), use_container_width=True, hide_index=True)
+
+    # ── Pickoff Activity ──
+    if not c_pick.empty:
+        section_header("Pickoff Activity")
+        pk_data = []
+        for lbl, col_name in [
+            ("Total PK Attempts", "CatcherPKAtt"), ("Pickoffs", "CatcherPK"), ("PK Errors", "CatcherPKErr"),
+            ("PK to 1B Att", "PK1Att"), ("PK to 1B", "PK1"), ("PK1 Err", "PK1Err"),
+            ("PK to 2B Att", "PK2Att"), ("PK to 2B", "PK2"), ("PK2 Err", "PK2Err"),
+            ("PK to 3B Att", "PK3Att"), ("PK to 3B", "PK3"), ("PK3 Err", "PK3Err"),
+        ]:
+            v = _safe_num(c_pick, col_name)
+            if not pd.isna(v) and v > 0:
+                pk_data.append({"Metric": lbl, "Value": f"{int(v)}"})
+        if pk_data:
+            st.dataframe(pd.DataFrame(pk_data), use_container_width=True, hide_index=True)
+
+    # ── Passed Balls & Wild Pitches ──
+    if not c_pw.empty:
+        section_header("Passed Balls & Wild Pitches")
+        pw_data = []
+        for lbl, col_name, fmt in [
+            ("PB", "PB", "d"), ("WP", "WP", "d"), ("PB+WP", "PBWP", "d"),
+            ("xPB+WP", "xPBWP", ".1f"), ("PB+WP Above Avg", "PBWPAA", ".1f"),
+            ("PBWP+", "PBWP+", ".0f"), ("PBWPRAA", "PBWPRAA", ".1f"), ("PBWPWAR", "PBWPWAR", ".1f"),
+        ]:
+            v = _safe_num(c_pw, col_name)
+            if not pd.isna(v):
+                val_str = f"{int(v)}" if fmt == "d" else f"{v:{fmt}}"
+                pw_data.append({"Metric": lbl, "Value": val_str})
+        if pw_data:
+            st.dataframe(pd.DataFrame(pw_data), use_container_width=True, hide_index=True)
+
+    # ── Framing Details ──
+    if not cf.empty:
+        section_header("Framing Details")
+        frm_data = []
+        for lbl, col_name, fmt in [
+            ("SLAA", "SLAA", ".1f"), ("SL+", "SL+", ".0f"), ("FrmRAA", "FrmRAA", ".1f"),
+            ("FrmCntRAA", "FrmCntRAA", ".1f"), ("Strikes Framed", "StrkFrmd", "d"),
+            ("Balls Framed", "BallFrmd", "d"),
+        ]:
+            v = _safe_num(cf, col_name)
+            if not pd.isna(v):
+                val_str = f"{int(v)}" if fmt == "d" else f"{v:{fmt}}"
+                frm_data.append({"Metric": lbl, "Value": val_str})
+        if frm_data:
+            st.dataframe(pd.DataFrame(frm_data), use_container_width=True, hide_index=True)
+
+    # ── Pitch Calling / Game Management ──
+    if not cr.empty:
+        section_header("Pitch Calling")
+        st.caption("How this catcher calls the game — pitch rates when behind the plate")
+        call_metrics = [
+            ("InZone %", _safe_num(cr, "InZone%"), _tm_pctile(cr, "InZone%", all_c_pr), ".1f", True),
+            ("Chase %", _safe_num(cr, "Chase%"), _tm_pctile(cr, "Chase%", all_c_pr), ".1f", True),
+            ("Miss %", _safe_num(cr, "Miss%"), _tm_pctile(cr, "Miss%", all_c_pr), ".1f", True),
+            ("SwStrk %", _safe_num(cr, "SwStrk%"), _tm_pctile(cr, "SwStrk%", all_c_pr), ".1f", True),
+            ("CompLoc %", _safe_num(cr, "CompLoc%"), _tm_pctile(cr, "CompLoc%", all_c_pr), ".1f", True),
+        ]
+        call_metrics = [(l, v, p, f, h) for l, v, p, f, h in call_metrics if not pd.isna(v)]
+        if call_metrics:
+            render_savant_percentile_section(call_metrics)
+
+    # ── Pitch Mix Called ──
+    if not c_ptr.empty:
+        section_header("Pitch Mix Called")
+        pitch_cols = ["4Seam%", "Sink2Seam%", "Cutter%", "Slider%", "Curve%", "Change%", "Split%", "Sweeper%"]
+        pitch_labels = ["4-Seam", "Sinker", "Cutter", "Slider", "Curve", "Change", "Splitter", "Sweeper"]
+        vals = []
+        for col_name, lbl in zip(pitch_cols, pitch_labels):
+            v = _safe_num(c_ptr, col_name) if col_name in c_ptr.columns else np.nan
+            if not pd.isna(v) and v > 0:
+                vals.append({"Pitch": lbl, "Usage": v})
+        if vals:
+            vdf = pd.DataFrame(vals)
+            fig = go.Figure(go.Bar(
+                x=vdf["Pitch"], y=vdf["Usage"],
+                marker_color=[PITCH_COLORS.get(p.replace("-", ""), "#888") for p in vdf["Pitch"]],
+                text=[f"{u:.1f}%" for u in vdf["Usage"]], textposition="outside",
+            ))
+            fig.update_layout(**CHART_LAYOUT, height=280, yaxis_title="Usage %", showlegend=False,
+                              yaxis=dict(range=[0, vdf["Usage"].max() * 1.3]))
+            st.plotly_chart(fig, use_container_width=True)
+
+    # ── Opposing Batters ──
+    if not c_op.empty:
+        section_header("Opposing Batters (When Catching)")
+        opp_data = []
+        for lbl, col_name, fmt in [
+            ("AVG Against", "AVG", ".3f"), ("OBP Against", "OBP", ".3f"),
+            ("SLG Against", "SLG", ".3f"), ("OPS Against", "OPS", ".3f"),
+            ("H Allowed", "H", "d"), ("HR Allowed", "HR", "d"),
+            ("K", "K", "d"), ("BB", "BB", "d"), ("HBP", "HBP", "d"),
+        ]:
+            v = _safe_num(c_op, col_name)
+            if not pd.isna(v):
+                val_str = f"{int(v)}" if fmt == "d" else f"{v:{fmt}}"
+                opp_data.append({"Stat": lbl, "Value": val_str})
+        if opp_data:
+            st.dataframe(pd.DataFrame(opp_data), use_container_width=True, hide_index=True)
 
 
 def _scouting_ai_report(tm, team):
