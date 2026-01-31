@@ -3232,7 +3232,7 @@ def page_pitch_design_lab(data):
                     fig_loc.update_layout(
                         title="Plate Locations", xaxis_title="Plate Side (ft)",
                         yaxis_title="Plate Height (ft)", height=350,
-                        xaxis=dict(range=[-2.5, 2.5]), yaxis=dict(range=[0, 5]),
+                        xaxis=dict(range=[-2.5, 2.5], scaleanchor="y"), yaxis=dict(range=[0, 5]),
                         **CHART_LAYOUT,
                     )
                     st.plotly_chart(fig_loc, use_container_width=True)
@@ -3620,7 +3620,7 @@ def page_pitch_design_lab(data):
                     fig_front.update_layout(
                         height=500,
                         xaxis=dict(range=[-2.5, 2.5], title="Horizontal (ft)",
-                                   zeroline=False, showgrid=True, gridcolor="#eee"),
+                                   zeroline=False, showgrid=True, gridcolor="#eee", scaleanchor="y"),
                         yaxis=dict(range=[-0.5, 5.5], title="Height (ft)",
                                    zeroline=False, showgrid=True, gridcolor="#eee"),
                         legend=dict(orientation="h", yanchor="bottom", y=1.02),
@@ -3875,7 +3875,7 @@ def page_pitch_design_lab(data):
                 add_strike_zone(fig_loc)
                 fig_loc.update_layout(
                     height=480,
-                    xaxis=dict(range=[-2.5, 2.5], title="Plate Side (ft)"),
+                    xaxis=dict(range=[-2.5, 2.5], title="Plate Side (ft)", scaleanchor="y"),
                     yaxis=dict(range=[0, 5.5], title="Plate Height (ft)"),
                     legend=dict(orientation="h", yanchor="bottom", y=1.02),
                     **CHART_LAYOUT,
@@ -3924,8 +3924,14 @@ def page_pitch_design_lab(data):
 # HITTERS LAB HELPERS
 # ──────────────────────────────────────────────
 
-def _create_zone_grid_data(df, metric="swing_rate"):
-    """Create 5x5 zone grid data for heatmaps."""
+def _create_zone_grid_data(df, metric="swing_rate", batter_side="Right"):
+    """Create 5x5 zone grid data for heatmaps.
+
+    For RHH: negative PlateLocSide = inside, positive = outside.
+    For LHH: negative PlateLocSide = outside, positive = inside.
+    Returns (grid, annot, h_labels, v_labels) oriented from batter's perspective
+    so column 0 = Inside for the given batter side.
+    """
     h_edges = [-2, -0.83, -0.28, 0.28, 0.83, 2]
     v_edges = [0.5, 1.5, 2.17, 2.83, 3.5, 4.5]
     grid = np.full((5, 5), np.nan)
@@ -3959,7 +3965,14 @@ def _create_zone_grid_data(df, metric="swing_rate"):
                     val = batted["ExitSpeed"].mean()
                     annot[j][i] = f"{val:.0f}"
             grid[j, i] = val
-    return grid, annot
+    # For RHH: col 0 = most negative PlateLocSide = inside (towards batter)
+    # For LHH: col 0 = most negative = outside, so flip columns
+    if batter_side == "Left":
+        grid = grid[:, ::-1]
+        annot = [row[::-1] for row in annot]
+    h_labels = ["Far In", "Inside", "Middle", "Outside", "Far Out"]
+    v_labels = ["Low+", "Low", "Mid", "High", "High+"]
+    return grid, annot, h_labels, v_labels
 
 
 def _compute_expected_outcomes(batted_df):
@@ -4337,9 +4350,7 @@ def page_hitters_lab(data):
             render_savant_percentile_section(disc_metrics, title="Discipline Percentiles")
         with col_disc_grid:
             section_header("Swing Rate by Zone")
-            grid_swing, annot_swing = _create_zone_grid_data(bdf, metric="swing_rate")
-            h_labels = ["Far In", "Inside", "Middle", "Outside", "Far Out"]
-            v_labels = ["Low+", "Low", "Mid", "High", "High+"]
+            grid_swing, annot_swing, h_labels, v_labels = _create_zone_grid_data(bdf, metric="swing_rate", batter_side=side)
             fig_grid = go.Figure(data=go.Heatmap(
                 z=grid_swing, text=annot_swing, texttemplate="%{text}",
                 x=h_labels, y=v_labels,
@@ -4355,10 +4366,10 @@ def page_hitters_lab(data):
         col_ev_grid, col_chase = st.columns(2)
         with col_ev_grid:
             section_header("Avg EV by Zone")
-            grid_ev, annot_ev = _create_zone_grid_data(bdf, metric="avg_ev")
+            grid_ev, annot_ev, h_labels_ev, v_labels_ev = _create_zone_grid_data(bdf, metric="avg_ev", batter_side=side)
             fig_ev_grid = go.Figure(data=go.Heatmap(
                 z=grid_ev, text=annot_ev, texttemplate="%{text}",
-                x=h_labels, y=v_labels,
+                x=h_labels_ev, y=v_labels_ev,
                 colorscale=[[0, "#1f77b4"], [0.5, "#f7f7f7"], [1, "#d22d49"]],
                 zmin=60, zmax=100, showscale=True,
                 colorbar=dict(title="EV", len=0.8),
@@ -4383,7 +4394,7 @@ def page_hitters_lab(data):
                                         labels={"PlateLocSide": "Horizontal", "PlateLocHeight": "Vertical"})
                 add_strike_zone(fig_chase)
                 fig_chase.update_layout(**CHART_LAYOUT, height=380,
-                                         xaxis=dict(range=[-2.5, 2.5]), yaxis=dict(range=[0, 5]),
+                                         xaxis=dict(range=[-2.5, 2.5], scaleanchor="y"), yaxis=dict(range=[0, 5]),
                                          legend=dict(orientation="h", y=1.08, x=0.5, xanchor="center", font=dict(size=10)))
                 st.plotly_chart(fig_chase, use_container_width=True)
             else:
@@ -4432,7 +4443,7 @@ def page_hitters_lab(data):
                         showlegend=False, hoverinfo="skip"))
                     add_strike_zone(fig_contact)
                     fig_contact.update_layout(**CHART_LAYOUT, height=400,
-                                               xaxis=dict(range=[-2.5, 2.5], title="Horizontal"),
+                                               xaxis=dict(range=[-2.5, 2.5], title="Horizontal", scaleanchor="y"),
                                                yaxis=dict(range=[0, 5], title="Vertical"))
                     st.plotly_chart(fig_contact, use_container_width=True)
 
@@ -4457,7 +4468,7 @@ def page_hitters_lab(data):
                             customdata=barrel_loc[["ExitSpeed"]].values))
                     add_strike_zone(fig_damage)
                     fig_damage.update_layout(**CHART_LAYOUT, height=400,
-                                              xaxis=dict(range=[-2.5, 2.5], title="Horizontal"),
+                                              xaxis=dict(range=[-2.5, 2.5], title="Horizontal", scaleanchor="y"),
                                               yaxis=dict(range=[0, 5], title="Vertical"),
                                               legend=dict(orientation="h", y=1.08, x=0.5, xanchor="center", font=dict(size=10)))
                     st.plotly_chart(fig_damage, use_container_width=True)
@@ -4465,9 +4476,7 @@ def page_hitters_lab(data):
             col_whiff_hz, _ = st.columns(2)
             with col_whiff_hz:
                 section_header("Whiff Zone Map")
-                grid_whiff, annot_whiff = _create_zone_grid_data(bdf, metric="whiff_rate")
-                h_lbl = ["Far In", "Inside", "Middle", "Outside", "Far Out"]
-                v_lbl = ["Low+", "Low", "Mid", "High", "High+"]
+                grid_whiff, annot_whiff, h_lbl, v_lbl = _create_zone_grid_data(bdf, metric="whiff_rate", batter_side=side)
                 fig_wz = go.Figure(data=go.Heatmap(
                     z=grid_whiff, text=annot_whiff, texttemplate="%{text}",
                     x=h_lbl, y=v_lbl,
@@ -5222,7 +5231,7 @@ def page_hitters_lab(data):
                         ))
                     add_strike_zone(fig_barrel)
                     fig_barrel.update_layout(**CHART_LAYOUT, height=420,
-                                              xaxis=dict(range=[-2.5, 2.5], title="Horizontal"),
+                                              xaxis=dict(range=[-2.5, 2.5], title="Horizontal", scaleanchor="y"),
                                               yaxis=dict(range=[0, 5], title="Vertical"),
                                               title="Contact Quality (EV) by Location",
                                               legend=dict(orientation="h", y=1.08, x=0.5, xanchor="center"))
@@ -5252,7 +5261,7 @@ def page_hitters_lab(data):
                             ))
                         add_strike_zone(fig_whiff)
                         fig_whiff.update_layout(**CHART_LAYOUT, height=420,
-                                                  xaxis=dict(range=[-2.5, 2.5], title="Horizontal"),
+                                                  xaxis=dict(range=[-2.5, 2.5], title="Horizontal", scaleanchor="y"),
                                                   yaxis=dict(range=[0, 5], title="Vertical"),
                                                   title="Whiff Density vs Contact Points",
                                                   legend=dict(orientation="h", y=1.08, x=0.5, xanchor="center"))
@@ -5282,7 +5291,7 @@ def page_hitters_lab(data):
                     ))
                     add_strike_zone(fig_dec)
                     fig_dec.update_layout(**CHART_LAYOUT, height=400,
-                                           xaxis=dict(range=[-2.5, 2.5], title="Horizontal"),
+                                           xaxis=dict(range=[-2.5, 2.5], title="Horizontal", scaleanchor="y"),
                                            yaxis=dict(range=[0, 5], title="Vertical"),
                                            title="All Pitches: Swing vs Take",
                                            legend=dict(orientation="h", y=1.08, x=0.5, xanchor="center"))
@@ -5305,7 +5314,7 @@ def page_hitters_lab(data):
                     ))
                     add_strike_zone(fig_prob)
                     fig_prob.update_layout(**CHART_LAYOUT, height=400,
-                                            xaxis=dict(range=[-2.5, 2.5], title="Horizontal"),
+                                            xaxis=dict(range=[-2.5, 2.5], title="Horizontal", scaleanchor="y"),
                                             yaxis=dict(range=[0, 5], title="Vertical"),
                                             title="Swing Probability by Location")
                     st.plotly_chart(fig_prob, use_container_width=True)
@@ -6443,7 +6452,7 @@ def page_game_planning(data):
                 ))
                 add_strike_zone(fig_effv)
                 fig_effv.update_layout(**CHART_LAYOUT, height=420,
-                                        xaxis=dict(range=[-2.5, 2.5], title="Horizontal"),
+                                        xaxis=dict(range=[-2.5, 2.5], title="Horizontal", scaleanchor="y"),
                                         yaxis=dict(range=[0, 5], title="Vertical"))
                 st.plotly_chart(fig_effv, use_container_width=True)
 
@@ -6464,7 +6473,7 @@ def page_game_planning(data):
                 ))
                 add_strike_zone(fig_diff)
                 fig_diff.update_layout(**CHART_LAYOUT, height=420,
-                                        xaxis=dict(range=[-2.5, 2.5], title="Horizontal"),
+                                        xaxis=dict(range=[-2.5, 2.5], title="Horizontal", scaleanchor="y"),
                                         yaxis=dict(range=[0, 5], title="Vertical"))
                 st.plotly_chart(fig_diff, use_container_width=True)
 
