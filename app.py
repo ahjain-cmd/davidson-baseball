@@ -385,14 +385,24 @@ def _pct_to_float(s):
 
 
 def _clean_pct_cols(df):
-    """Strip '%' suffix from all object columns that look like percentages."""
+    """Strip '%' suffix and coerce numeric-looking object columns."""
+    skip = {"playerId", "abbrevName", "playerFullName", "player", "playerFirstName",
+            "pos", "newestTeamName", "newestTeamAbbrevName", "newestTeamId",
+            "newestTeamLocation", "newestTeamLevel", "batsHand", "throwsHand"}
     for col in df.select_dtypes(include="object").columns:
+        if col in skip:
+            continue
         sample = df[col].dropna().head(20)
         if sample.empty:
             continue
         if sample.astype(str).str.endswith("%").mean() > 0.5:
             df[col] = df[col].apply(_pct_to_float)
             df[col] = pd.to_numeric(df[col], errors="coerce")
+        else:
+            # Try to coerce numeric-looking strings (e.g. "86.9", "2300")
+            converted = pd.to_numeric(sample, errors="coerce")
+            if converted.notna().mean() > 0.5:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
 
 
@@ -614,13 +624,6 @@ def _pitcher_narrative(name, trad, mov, pr, ht, exit_d, all_p_trad, all_p_mov, a
         else:
             lines.append(f"**{name} has been hittable** ({era:.2f} ERA, {int(era_rank)}th percentile) — an opportunity for the offense.")
 
-    # ERA vs FIP divergence
-    if not pd.isna(era) and not pd.isna(fip):
-        if fip > era + 0.5:
-            lines.append(f"His FIP ({fip:.2f}) is notably worse than his ERA ({era:.2f}) — he may be due for regression.")
-        elif era > fip + 0.5:
-            lines.append(f"His ERA ({era:.2f}) is worse than his FIP ({fip:.2f}) suggests — he may have been unlucky.")
-
     # Stuff
     vel = _safe_num(mov, "Vel")
     ivb = _safe_num(mov, "IndVertBrk")
@@ -834,25 +837,35 @@ def savant_color(pct, higher_is_better=True):
     return "#14365d"
 
 
-def render_savant_percentile_section(metrics_data, title=None):
+def _pctile_text_color(bg_color):
+    """Return white or dark text depending on background brightness."""
+    # Light backgrounds: gray, orange, gold
+    light_bgs = {"#9e9e9e", "#d4a017", "#ee7e1e", "#6a9bc3", "#aaa"}
+    return "#1a1a2e" if bg_color in light_bgs else "#ffffff"
+
+
+def render_savant_percentile_section(metrics_data, title=None, legend=None):
     """Render Baseball Savant style percentile ranking section.
     metrics_data: list of (label, value, percentile, fmt, higher_is_better)
+    legend: optional tuple of (left_label, center_label, right_label) to override POOR/AVERAGE/GREAT
     """
     if title:
         st.markdown(f'<div class="section-header">{title}</div>', unsafe_allow_html=True)
 
-    # POOR / AVERAGE / GREAT legend
+    # Legend
+    l_left, l_center, l_right = legend or ("POOR", "AVERAGE", "GREAT")
     st.markdown(
         '<div style="display:flex;justify-content:space-between;margin-bottom:8px;padding:0 4px;">'
-        '<span style="font-size:10px;font-weight:700;color:#14365d !important;letter-spacing:0.5px;">POOR</span>'
-        '<span style="font-size:10px;font-weight:700;color:#9e9e9e !important;letter-spacing:0.5px;">AVERAGE</span>'
-        '<span style="font-size:10px;font-weight:700;color:#be0000 !important;letter-spacing:0.5px;">GREAT</span>'
+        f'<span style="font-size:10px;font-weight:700;color:#14365d !important;letter-spacing:0.5px;">{l_left}</span>'
+        f'<span style="font-size:10px;font-weight:700;color:#9e9e9e !important;letter-spacing:0.5px;">{l_center}</span>'
+        f'<span style="font-size:10px;font-weight:700;color:#be0000 !important;letter-spacing:0.5px;">{l_right}</span>'
         '</div>',
         unsafe_allow_html=True,
     )
 
     for label, val, pct, fmt, hib in metrics_data:
         color = savant_color(pct, hib)
+        txt_color = _pctile_text_color(color)
         display_pct = int(round(pct)) if not pd.isna(pct) else "-"
         display_val = f"{val:{fmt}}" if not pd.isna(val) else "-"
         bar_left = max(min(pct, 100), 0) if not pd.isna(pct) else 50
@@ -870,7 +883,7 @@ def render_savant_percentile_section(metrics_data, title=None):
             f'<div style="position:absolute;left:{bar_left}%;top:50%;transform:translate(-50%,-50%);'
             f'width:28px;height:28px;border-radius:50%;background:{color};border:3px solid white;'
             f'box-shadow:0 1px 4px rgba(0,0,0,0.3);display:flex;align-items:center;justify-content:center;'
-            f'font-size:10px;font-weight:800;color:white !important;">{display_pct}</div>'
+            f'font-size:10px;font-weight:800;color:{txt_color} !important;">{display_pct}</div>'
             f'</div>'
             # Value
             f'<div style="min-width:50px;text-align:right;font-size:12px;font-weight:700;color:#1a1a2e !important;">'
@@ -2812,11 +2825,8 @@ def _pitcher_attack_plan(trad, mov, pr, ht):
     notes = []
     era = trad.iloc[0].get("ERA") if not trad.empty and "ERA" in trad.columns else None
     fip = trad.iloc[0].get("FIP") if not trad.empty and "FIP" in trad.columns else None
-    if era is not None and fip is not None and not pd.isna(era) and not pd.isna(fip):
-        if fip > era + 0.5:
-            notes.append(f"ERA ({era:.2f}) outperforming FIP ({fip:.2f}) — likely due for regression, be patient")
-        elif era > 5.0:
-            notes.append(f"High ERA ({era:.2f}) — hittable, aggressive early in counts")
+    if era is not None and not pd.isna(era) and era > 5.0:
+        notes.append(f"High ERA ({era:.2f}) — hittable, aggressive early in counts")
     bb9 = trad.iloc[0].get("BB/9") if not trad.empty and "BB/9" in trad.columns else None
     if bb9 is not None and not pd.isna(bb9) and bb9 > 4.0:
         notes.append(f"Control issues ({bb9:.1f} BB/9) — take pitches early, work counts")
@@ -3088,7 +3098,7 @@ def _scouting_hitter_report(tm, team, trackman_data):
                 ("Popup %", _safe_num(ht, "Popup%"), _tm_pctile(ht, "Popup%", all_h_ht), ".1f", False),
             ]
             bb_metrics = [(l, v, p, f, h) for l, v, p, f, h in bb_metrics if not pd.isna(v)]
-            render_savant_percentile_section(bb_metrics)
+            render_savant_percentile_section(bb_metrics, legend=("LESS OFTEN", "AVERAGE", "MORE OFTEN"))
     with col_sp:
         if not hl.empty:
             section_header("Spray Direction")
