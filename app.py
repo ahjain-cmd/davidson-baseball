@@ -4376,6 +4376,13 @@ def _pitching_plan_content(tm, team, data, season_filter):
     # ── Bullpen Cards ──
     st.markdown("---")
     section_header("Bullpen Cards")
+    # D1 swing stats for percentile computation
+    _all_sw = tm["hitting"].get("swing_stats", pd.DataFrame())
+    _throws_key = "RHP" if arsenal["throws"] == "Right" else "LHP"
+    _2k_hard_col = f"2K Whiff vs {_throws_key} Hard"
+    _2k_os_col = f"2K Whiff vs {_throws_key} OS"
+    _2k_hard_series = pd.to_numeric(_all_sw[_2k_hard_col], errors="coerce").dropna() if _2k_hard_col in _all_sw.columns else pd.Series(dtype=float)
+    _2k_os_series = pd.to_numeric(_all_sw[_2k_os_col], errors="coerce").dropna() if _2k_os_col in _all_sw.columns else pd.Series(dtype=float)
 
     for matchup in all_matchups:
         hd = matchup.get("hitter_data", {})
@@ -4459,24 +4466,28 @@ def _pitching_plan_content(tm, team, data, season_filter):
                     "Chase%": _hfmt(pt_data.get("our_chase")),
                     "Brl%Ag": _hfmt(brl_ag_val, ".1f"),
                     "Best Zone": best_zone_str,
-                    "2K Whiff": _hfmt(their_2k),
                     "Sw%": _hfmt(their_sw),
                     "Tunnel": tun_info,
                 })
             st.dataframe(pd.DataFrame(pitch_rows), use_container_width=True, hide_index=True)
             # ── Hitter Vulnerabilities (tie scouting data to actionable advice) ──
             vuln_lines = []
-            # 2K Whiff vulnerability
+            # 2K Whiff vulnerability — with D1 percentile context
             their_2k_hard = hd.get("whiff_2k_hard", np.nan)
             their_2k_os = hd.get("whiff_2k_os", np.nan)
-            if not pd.isna(their_2k_os) and their_2k_os >= 30:
+            # Compute percentiles against all D1 hitters
+            pct_2k_os = percentileofscore(_2k_os_series, their_2k_os, kind="rank") if not pd.isna(their_2k_os) and len(_2k_os_series) > 10 else np.nan
+            pct_2k_hard = percentileofscore(_2k_hard_series, their_2k_hard, kind="rank") if not pd.isna(their_2k_hard) and len(_2k_hard_series) > 10 else np.nan
+            if not pd.isna(their_2k_os) and not pd.isna(pct_2k_os) and pct_2k_os >= 60:
                 os_names = [n for n, _ in sorted_ps if n not in _hard_pitches][:2]
+                pct_label = "elite" if pct_2k_os >= 85 else "above avg" if pct_2k_os >= 70 else "exploitable"
                 if os_names:
-                    vuln_lines.append(f"🎯 Whiffs **{their_2k_os:.0f}%** on offspeed with 2 strikes — attack with **{' / '.join(os_names)}**")
-            if not pd.isna(their_2k_hard) and their_2k_hard >= 30:
+                    vuln_lines.append(f"🎯 2K offspeed whiff: **{their_2k_os:.0f}%** ({pct_label}, {pct_2k_os:.0f}th %ile) — attack with **{' / '.join(os_names)}**")
+            if not pd.isna(their_2k_hard) and not pd.isna(pct_2k_hard) and pct_2k_hard >= 60:
                 hard_names = [n for n, _ in sorted_ps if n in _hard_pitches][:2]
+                pct_label = "elite" if pct_2k_hard >= 85 else "above avg" if pct_2k_hard >= 70 else "exploitable"
                 if hard_names:
-                    vuln_lines.append(f"🎯 Whiffs **{their_2k_hard:.0f}%** on hard stuff with 2 strikes — finish with **{' / '.join(hard_names)}**")
+                    vuln_lines.append(f"🎯 2K hard whiff: **{their_2k_hard:.0f}%** ({pct_label}, {pct_2k_hard:.0f}th %ile) — finish with **{' / '.join(hard_names)}**")
             # Swing tendencies by pitch type (from scouting report data)
             swing_map_items = [
                 ("swing_vs_hard", "Fastball", True), ("swing_vs_sl", "Slider", False),
@@ -4707,10 +4718,11 @@ def _pitching_plan_content(tm, team, data, season_filter):
                 whiff_val = whiff_val if not pd.isna(whiff_val) else 0
                 is_put_hard = putaway[0] in _hard_pitches
                 put_2k = hd.get("whiff_2k_hard" if is_put_hard else "whiff_2k_os", np.nan)
+                put_2k_pct = pct_2k_hard if is_put_hard else pct_2k_os
                 tun_pair = _best_tunnel_partner(putaway[0])
                 put_str = f"**0-2 / 1-2**: {putaway[0]} bury ({whiff_val:.0f}% whiff)"
-                if not pd.isna(put_2k) and put_2k >= 25:
-                    put_str += f" — they whiff {put_2k:.0f}% on 2K {'hard' if is_put_hard else 'offspeed'}"
+                if not pd.isna(put_2k) and not pd.isna(put_2k_pct) and put_2k_pct >= 60:
+                    put_str += f" — {put_2k_pct:.0f}th %ile 2K {'hard' if is_put_hard else 'OS'} whiff"
                 put_str += tun_pair
                 count_plan_lines.append(put_str)
             # Discipline adaptation
