@@ -720,39 +720,10 @@ def section_header(text):
 # ──────────────────────────────────────────────
 # PAGE: HITTER CARD (Statcast Style)
 # ──────────────────────────────────────────────
-def page_hitter_card(data):
-    hitting = filter_davidson(data, "batter")
-    if hitting.empty:
-        st.warning("No hitting data found.")
-        return
-
-    batters = sorted(hitting["Batter"].unique())
-    c1, c2 = st.columns([2, 3])
-    with c1:
-        selected = st.selectbox("Select Hitter", batters, key="hc_b")
-    with c2:
-        all_seasons = sorted(data["Season"].dropna().unique())
-        sel_seasons = st.multiselect("Season", all_seasons, default=all_seasons, key="hc_s")
-
-    all_stats = compute_batter_stats(data, season_filter=sel_seasons)
-    if all_stats.empty or selected not in all_stats["Batter"].values:
-        st.info("Not enough data for this player.")
-        return
-
-    pr = all_stats[all_stats["Batter"] == selected].iloc[0]
-    bdf = hitting[(hitting["Batter"] == selected) & (hitting["Season"].isin(sel_seasons))]
+def _hitting_overview(data, batter, season_filter, bdf, batted, pr, all_batter_stats):
+    """Content from the original Hitter Card, rendered inside the Overview tab."""
     in_play = bdf[bdf["PitchCall"] == "InPlay"]
-    batted = in_play.dropna(subset=["ExitSpeed"])
-
-    jersey = JERSEY.get(selected, "")
-    pos = POSITION.get(selected, "")
-    side = safe_mode(bdf["BatterSide"], "")
-    bats = {"Right": "R", "Left": "L", "Switch": "S"}.get(side, side)
-
-    player_header(selected, jersey, pos,
-                  f"{pos}  |  Bats: {bats}  |  Davidson Wildcats",
-                  f"{int(pr['PA'])} PA  |  {int(pr['BBE'])} Batted Balls  |  "
-                  f"Seasons: {', '.join(str(int(s)) for s in sorted(sel_seasons))}")
+    all_stats = all_batter_stats  # alias for brevity in this section
 
     # ── ROW 1: Percentile Rankings + Spray Chart + Batted Ball Stats ──
     col1, col2 = st.columns([1, 1], gap="medium")
@@ -1245,6 +1216,62 @@ def page_hitter_card(data):
 
 
 # ──────────────────────────────────────────────
+# PAGE: HITTING (merged Hitter Card + Hitters Lab)
+# ──────────────────────────────────────────────
+def page_hitting(data):
+    hitting = filter_davidson(data, "batter")
+    if hitting.empty:
+        st.warning("No hitting data found.")
+        return
+
+    batters = sorted(hitting["Batter"].unique())
+    c1, c2 = st.columns([2, 3])
+    with c1:
+        batter = st.selectbox("Select Hitter", batters, format_func=display_name, key="hitting_batter")
+    with c2:
+        all_seasons = sorted(data["Season"].dropna().unique())
+        season_filter = st.multiselect("Season", all_seasons, default=all_seasons, key="hitting_season")
+
+    bdf = hitting[(hitting["Batter"] == batter) & (hitting["Season"].isin(season_filter))]
+    if len(bdf) < 20:
+        st.warning("Not enough pitches (need 20+) to analyze.")
+        return
+
+    all_batter_stats = compute_batter_stats(data, season_filter=season_filter)
+    if all_batter_stats.empty or batter not in all_batter_stats["Batter"].values:
+        st.info("Not enough data for this player.")
+        return
+    pr = all_batter_stats[all_batter_stats["Batter"] == batter].iloc[0]
+
+    batted = bdf[bdf["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
+
+    # Player header
+    jersey = JERSEY.get(batter, "")
+    pos = POSITION.get(batter, "")
+    side = safe_mode(bdf["BatterSide"], "")
+    bats = {"Right": "R", "Left": "L", "Switch": "S"}.get(side, side)
+    player_header(batter, jersey, pos,
+                  f"{pos}  |  Bats: {bats}  |  Davidson Wildcats",
+                  f"{int(pr['PA'])} PA  |  {int(pr['BBE'])} Batted Balls  |  "
+                  f"Seasons: {', '.join(str(int(s)) for s in sorted(season_filter))}")
+
+    # 9 tabs: Overview + 8 lab tabs
+    (tab_overview, tab_quality, tab_discipline, tab_coverage, tab_approach,
+     tab_pitch_type, tab_spray, tab_swing, tab_ai) = st.tabs([
+        "Overview", "Batted Ball Quality", "Plate Discipline", "Zone Coverage",
+        "Approach Analysis", "Pitch Type Performance", "Spray Lab", "Swing Path", "AI Report"
+    ])
+
+    with tab_overview:
+        _hitting_overview(data, batter, season_filter, bdf, batted, pr, all_batter_stats)
+
+    # Tabs 2-9: delegate to lab content
+    _hitting_lab_content(data, batter, season_filter, bdf, batted, pr, all_batter_stats,
+                         tab_quality, tab_discipline, tab_coverage, tab_approach,
+                         tab_pitch_type, tab_spray, tab_swing, tab_ai)
+
+
+# ──────────────────────────────────────────────
 # SAVANT MOVEMENT PROFILE (concentric circles)
 # ──────────────────────────────────────────────
 def make_movement_profile(pdf, height=520):
@@ -1374,51 +1401,12 @@ def make_pitch_location_heatmap(pitch_data, title, color, height=380):
 
 
 # ──────────────────────────────────────────────
-# PAGE: PITCHER CARD (Statcast Style)
+# PITCHING OVERVIEW (used by page_pitching)
 # ──────────────────────────────────────────────
-def page_pitcher_card(data):
-    pitching = filter_davidson(data, "pitcher")
-    if pitching.empty:
-        st.warning("No pitching data found.")
-        return
-
-    pitchers = sorted(pitching["Pitcher"].unique())
-    c1, c2 = st.columns([2, 3])
-    with c1:
-        selected = st.selectbox("Select Pitcher", pitchers, key="pc_p")
-    with c2:
-        all_seasons = sorted(data["Season"].dropna().unique())
-        sel_seasons = st.multiselect("Season", all_seasons, default=all_seasons, key="pc_s")
-
-    all_stats = compute_pitcher_stats(data, season_filter=sel_seasons)
-    if all_stats.empty or selected not in all_stats["Pitcher"].values:
-        st.info("Not enough data.")
-        return
-
-    pr = all_stats[all_stats["Pitcher"] == selected].iloc[0]
-    pdf_raw = pitching[(pitching["Pitcher"] == selected) & (pitching["Season"].isin(sel_seasons))]
-    # Filter to main pitches only (>= 5% usage)
-    pdf = filter_minor_pitches(pdf_raw)
-    if pdf.empty:
-        st.info("Not enough pitch data after filtering.")
-        return
-
-    jersey = JERSEY.get(selected, "")
-    pos = POSITION.get(selected, "")
-    throws = safe_mode(pdf["PitcherThrows"], "")
-    thr = {"Right": "R", "Left": "L"}.get(throws, throws)
-
-    # Arsenal summary line
-    pitch_counts = pdf["TaggedPitchType"].value_counts()
+def _pitching_overview(data, pitcher, season_filter, pdf, pdf_raw, pr, all_pitcher_stats):
+    """Content from the original Pitcher Card, rendered inside the Overview tab."""
+    all_stats = all_pitcher_stats  # alias for brevity
     total_pitches = len(pdf)
-    arsenal_summary = " | ".join(
-        f"{pt} ({count / total_pitches * 100:.0f}%)" for pt, count in pitch_counts.items()
-    )
-
-    player_header(selected, jersey, pos,
-                  f"{pos}  |  Throws: {thr}  |  Davidson Wildcats",
-                  f"{total_pitches} pitches  |  {int(pr['PA'])} PA faced  |  "
-                  f"Seasons: {', '.join(str(int(s)) for s in sorted(sel_seasons))}")
 
     # ── ROW 1: Percentile Rankings + Movement Profile ──
     col1, col2 = st.columns([1, 1], gap="medium")
@@ -1484,7 +1472,7 @@ def page_pitcher_card(data):
     # Arsenal summary text
     st.markdown(
         f'<p style="font-size:13px;color:#555;margin-top:4px;">'
-        f'{display_name(selected)} relies on {len(main_pitches)} pitches: {arsenal_summary}</p>',
+        f'{display_name(pitcher)} relies on {len(main_pitches)} pitches: {arsenal_summary}</p>',
         unsafe_allow_html=True,
     )
 
@@ -1906,6 +1894,65 @@ def page_pitcher_card(data):
                         f'<b>{ts_whiff_pct:.1f}%</b> on {len(ts_sw)} swings</p>',
                         unsafe_allow_html=True,
                     )
+
+
+# ──────────────────────────────────────────────
+# PAGE: PITCHING (merged Pitcher Card + Pitch Design Lab)
+# ──────────────────────────────────────────────
+def page_pitching(data):
+    pitching = filter_davidson(data, "pitcher")
+    if pitching.empty:
+        st.warning("No pitching data found.")
+        return
+
+    pitchers = sorted(pitching["Pitcher"].unique())
+    c1, c2 = st.columns([2, 3])
+    with c1:
+        pitcher = st.selectbox("Select Pitcher", pitchers, format_func=display_name, key="pitching_pitcher")
+    with c2:
+        all_seasons = sorted(data["Season"].dropna().unique())
+        season_filter = st.multiselect("Season", all_seasons, default=all_seasons, key="pitching_season")
+
+    all_pitcher_stats = compute_pitcher_stats(data, season_filter=season_filter)
+    if all_pitcher_stats.empty or pitcher not in all_pitcher_stats["Pitcher"].values:
+        st.info("Not enough data for this pitcher.")
+        return
+
+    pr = all_pitcher_stats[all_pitcher_stats["Pitcher"] == pitcher].iloc[0]
+    pdf_raw = pitching[(pitching["Pitcher"] == pitcher) & (pitching["Season"].isin(season_filter))]
+    pdf = filter_minor_pitches(pdf_raw)
+    if pdf.empty or len(pdf) < 20:
+        st.warning("Not enough pitch data (need 20+).")
+        return
+
+    # Player header
+    jersey = JERSEY.get(pitcher, "")
+    pos = POSITION.get(pitcher, "")
+    throws = safe_mode(pdf["PitcherThrows"], "")
+    thr = {"Right": "R", "Left": "L"}.get(throws, throws)
+    total_pitches = len(pdf)
+    player_header(pitcher, jersey, pos,
+                  f"{pos}  |  Throws: {thr}  |  Davidson Wildcats",
+                  f"{total_pitches} pitches  |  {int(pr['PA'])} PA faced  |  "
+                  f"Seasons: {', '.join(str(int(s)) for s in sorted(season_filter))}")
+
+    # Compute Stuff+ for lab tabs
+    stuff_df = _compute_stuff_plus(pdf, baseline=data)
+
+    # Tabs: Overview + 7 lab tabs
+    (tab_overview, tab_stuff, tab_tunnel, tab_seq, tab_loc,
+     tab_sim, tab_cmd, tab_ai) = st.tabs([
+        "Overview", "Stuff+ Grades", "Pitch Tunnels", "Sequencing",
+        "Location Lab", "Hitter's Eye", "Command+", "AI Report"
+    ])
+
+    with tab_overview:
+        _pitching_overview(data, pitcher, season_filter, pdf, pdf_raw, pr, all_pitcher_stats)
+
+    # Tabs 2-8: delegate to lab content
+    _pitching_lab_content(data, pitcher, season_filter, pdf, stuff_df,
+                          tab_stuff, tab_tunnel, tab_seq, tab_loc,
+                          tab_sim, tab_cmd, tab_ai)
 
 
 # ──────────────────────────────────────────────
@@ -3017,50 +3064,14 @@ def _generate_ai_report(pdf, pitcher_name, stuff_df, tunnel_df, pair_df, all_dat
     return "\n".join(lines)
 
 
-def page_pitch_design_lab(data):
-    st.markdown('<div class="section-header">Pitch Design Lab</div>', unsafe_allow_html=True)
-    st.caption("AI-powered pitch analysis: Stuff+ grades, tunnel scores, sequencing optimization, and actionable recommendations")
-
-    dav_pitching = filter_davidson(data, role="pitcher")
-    if dav_pitching.empty:
-        st.warning("No Davidson pitching data found.")
+def _pitching_lab_content(data, pitcher, season_filter, pdf, stuff_df,
+                          tab_stuff, tab_tunnel, tab_seq, tab_loc,
+                          tab_sim, tab_cmd, tab_ai):
+    """Render the Pitch Design Lab tabs. Called from page_pitching()."""
+    if stuff_df is None or "StuffPlus" not in stuff_df.columns:
+        with tab_stuff:
+            st.error("Could not compute Stuff+ scores. Not enough data for this pitcher.")
         return
-
-    pitchers = sorted(dav_pitching["Pitcher"].unique())
-    col_sel1, col_sel2 = st.columns([2, 1])
-    with col_sel1:
-        pitcher = st.selectbox("Select Pitcher", pitchers,
-                               format_func=display_name, key="pdl_pitcher")
-    with col_sel2:
-        seasons = sorted(dav_pitching["Season"].dropna().unique())
-        season_filter = st.multiselect("Season", seasons, default=seasons, key="pdl_season")
-
-    pdf = dav_pitching[dav_pitching["Pitcher"] == pitcher].copy()
-    if season_filter:
-        pdf = pdf[pdf["Season"].isin(season_filter)]
-    pdf = filter_minor_pitches(pdf)
-
-    if len(pdf) < 20:
-        st.warning("Not enough pitches (need 20+) to analyze.")
-        return
-
-    jersey = JERSEY.get(pitcher, "")
-    pos = POSITION.get(pitcher, "P")
-    player_header(pitcher, jersey, pos,
-                  f"{len(pdf)} pitches analyzed | Seasons: {', '.join(str(s) for s in sorted(pdf['Season'].dropna().unique()))}",
-                  "Pitch Design Lab")
-
-    # Compute Stuff+
-    stuff_df = _compute_stuff_plus(pdf, baseline=data)
-    if "StuffPlus" not in stuff_df.columns:
-        st.error("Could not compute Stuff+ scores.")
-        return
-
-    # ─── TAB LAYOUT ───
-    tab_stuff, tab_tunnel, tab_seq, tab_loc, tab_sim, tab_cmd, tab_ai = st.tabs([
-        "Stuff+ Grades", "Pitch Tunnels", "Sequencing", "Location Lab",
-        "Hitter's Eye", "Command+", "AI Report"
-    ])
 
     # ═══════════════════════════════════════════
     # TAB 1: STUFF+ GRADES
@@ -4226,58 +4237,15 @@ def _generate_hitter_ai_report(bdf, batter_name, all_data, season_filter):
 
 
 # ──────────────────────────────────────────────
-# PAGE: HITTERS LAB
+# HITTING LAB TAB CONTENT (used by page_hitting)
 # ──────────────────────────────────────────────
-def page_hitters_lab(data):
-    st.markdown('<div class="section-header">Hitters Lab</div>', unsafe_allow_html=True)
-
-
-    dav_hitting = filter_davidson(data, role="batter")
-    if dav_hitting.empty:
-        st.warning("No Davidson hitting data found.")
-        return
-
-    batters = sorted(dav_hitting["Batter"].unique())
-    col_sel1, col_sel2 = st.columns([2, 1])
-    with col_sel1:
-        batter = st.selectbox("Select Hitter", batters, format_func=display_name, key="hl_batter")
-    with col_sel2:
-        seasons = sorted(dav_hitting["Season"].dropna().unique())
-        season_filter = st.multiselect("Season", seasons, default=seasons, key="hl_season")
-
-    bdf = dav_hitting[dav_hitting["Batter"] == batter].copy()
-    if season_filter:
-        bdf = bdf[bdf["Season"].isin(season_filter)]
-
-    if len(bdf) < 20:
-        st.warning("Not enough pitches (need 20+) to analyze.")
-        return
-
-    jersey = JERSEY.get(batter, "")
-    pos = POSITION.get(batter, "")
+def _hitting_lab_content(data, batter, season_filter, bdf, batted, pr, all_batter_stats,
+                         tab_quality, tab_discipline, tab_coverage, tab_approach,
+                         tab_pitch_type, tab_spray, tab_swing, tab_ai):
+    """Render the 8 Hitters Lab tabs. Called from page_hitting()."""
     side = safe_mode(bdf["BatterSide"], "")
-    bats_str = {"Right": "R", "Left": "L", "Switch": "S"}.get(side, side)
-
-    player_header(batter, jersey, pos,
-                  f"{pos} | Bats: {bats_str} | Davidson Wildcats",
-                  f"{len(bdf):,} pitches faced | Seasons: {', '.join(str(int(s)) for s in sorted(bdf['Season'].dropna().unique()))}")
-
-    # Pre-compute common data
-    batted = bdf[bdf["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
     _iz_mask = in_zone_mask(bdf)
     out_zone_mask = ~_iz_mask & bdf["PlateLocSide"].notna() & bdf["PlateLocHeight"].notna()
-
-    all_batter_stats = compute_batter_stats(data, season_filter=season_filter)
-    player_row = all_batter_stats[all_batter_stats["Batter"] == batter]
-    if player_row.empty:
-        st.warning("Insufficient PA to compute stats.")
-        return
-    pr = player_row.iloc[0]
-
-    tab_quality, tab_discipline, tab_coverage, tab_approach, tab_pitch_type, tab_spray, tab_swing, tab_ai = st.tabs([
-        "Batted Ball Quality", "Plate Discipline", "Zone Coverage",
-        "Approach Analysis", "Pitch Type Performance", "Spray Lab", "Swing Path", "AI Report"
-    ])
 
     # ─── Tab 1: Batted Ball Quality ─────────────────────
     with tab_quality:
@@ -7317,12 +7285,10 @@ def main():
 
     page = st.sidebar.radio("Navigation", [
         "Team Overview",
-        "Hitter Card",
-        "Pitcher Card",
+        "Hitting",
+        "Pitching",
         "Catcher Analytics",
         "Player Development",
-        "Pitch Design Lab",
-        "Hitters Lab",
         "Matchup Optimizer",
         "Game Planning",
         "Defensive Positioning",
@@ -7343,20 +7309,16 @@ def main():
                         f'<b style="color:#cc0000 !important;">{len(ROSTER_2026)}</b> rostered players'
                         f'</div>', unsafe_allow_html=True)
 
-    if page == "Hitter Card":
-        page_hitter_card(data)
-    elif page == "Pitcher Card":
-        page_pitcher_card(data)
+    if page == "Hitting":
+        page_hitting(data)
+    elif page == "Pitching":
+        page_pitching(data)
     elif page == "Catcher Analytics":
         page_catcher(data)
     elif page == "Team Overview":
         page_team(data)
     elif page == "Player Development":
         page_development(data)
-    elif page == "Pitch Design Lab":
-        page_pitch_design_lab(data)
-    elif page == "Hitters Lab":
-        page_hitters_lab(data)
     elif page == "Matchup Optimizer":
         page_matchup_optimizer(data)
     elif page == "Game Planning":
