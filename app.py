@@ -6107,7 +6107,7 @@ def _compute_tunnel_score(pdf):
             tunnel = round(min(raw, 100), 1)
 
             # Letter grade with strict thresholds
-            if tunnel >= 75:
+            if tunnel >= 70:
                 grade = "A"
             elif tunnel >= 60:
                 grade = "B"
