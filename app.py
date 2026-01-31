@@ -4245,6 +4245,53 @@ def _game_plan_tab(tm, team, data):
             st.code(traceback.format_exc())
 
 
+_ZONE_LABELS = {"up": "up in zone", "down": "down in zone", "glove": "glove side",
+                 "arm": "arm side", "chase_low": "below zone"}
+
+def _best_putaway_zone(pitch_name, ars_pt):
+    """Find the best putaway location for a pitch using zone_eff + PZM.
+    Returns (zone_label, whiff_pct) or (None, None) if no data."""
+    ze = ars_pt.get("zone_eff", {})
+    if not ze:
+        return None, None
+    ivb = ars_pt.get("ivb", np.nan)
+    is_hard = pitch_name in _hard_pitches
+    # Pitch-design zone multipliers (same as composite scorer)
+    if is_hard:
+        if pitch_name == "Sinker":
+            pzm = {"up": 0.5, "down": 1.4, "chase_low": 1.3, "glove": 1.0, "arm": 1.0}
+        elif not pd.isna(ivb) and ivb >= 16:
+            pzm = {"up": 1.4, "down": 0.7, "chase_low": 0.4, "glove": 1.0, "arm": 1.0}
+        elif not pd.isna(ivb) and ivb < 12:
+            pzm = {"up": 0.7, "down": 1.3, "chase_low": 1.1, "glove": 1.0, "arm": 1.0}
+        else:
+            pzm = {"up": 1.15, "down": 0.9, "chase_low": 0.6, "glove": 1.0, "arm": 1.0}
+    else:
+        if pitch_name in ("Slider", "Sweeper"):
+            pzm = {"up": 0.3, "down": 1.2, "chase_low": 1.4, "glove": 1.3, "arm": 0.8}
+        elif pitch_name in ("Curveball", "Knuckle Curve"):
+            pzm = {"up": 0.2, "down": 1.3, "chase_low": 1.5, "glove": 1.0, "arm": 1.0}
+        elif pitch_name in ("Changeup", "Splitter"):
+            pzm = {"up": 0.3, "down": 1.3, "chase_low": 1.3, "glove": 1.1, "arm": 0.9}
+        else:
+            pzm = {"up": 0.5, "down": 1.2, "chase_low": 1.3, "glove": 1.0, "arm": 1.0}
+    # For putaway, heavily weight whiff_pct (we want swings and misses)
+    best_zone, best_score = None, -1
+    for zn, zdata in ze.items():
+        w = zdata.get("whiff_pct", np.nan)
+        n = zdata.get("n", 0)
+        if pd.isna(w) or n < 5:
+            continue
+        # PZM-weighted whiff score
+        score = w * pzm.get(zn, 1.0)
+        if score > best_score:
+            best_score = score
+            best_zone = zn
+    if best_zone is None:
+        return None, None
+    return _ZONE_LABELS.get(best_zone, best_zone), ze[best_zone].get("whiff_pct", np.nan)
+
+
 def _pitching_plan_content(tm, team, data, season_filter):
     """Our Pitching Plan: how each of our pitchers should attack their lineup."""
     h_rate = _tm_team(tm["hitting"]["rate"], team)
@@ -4374,11 +4421,10 @@ def _pitching_plan_content(tm, team, data, season_filter):
         # Use cached sequences from summary table (avoid recomputation)
         top_seqs = matchup.get("_cached_seqs") or _build_3pitch_sequences(sorted_ps, hd, tunnels, sequences)
         # Expander label: clean and simple
-        best_c = max(composites.items(), key=lambda x: x[1]) if composites else ("?", 0)
         with st.expander(
             f"{'🟢' if score > 60 else '🟡' if score > 48 else '🔴'} "
             f"{display_name(matchup['hitter'])} ({matchup['bats']}) — {matchup['platoon']} — "
-            f"Go-To: {best_c[0]}"
+            f"Score: {score:.0f}"
         ):
             # ── Pitch Arsenal Table (streamlined for actionability) ──
             pitch_rows = []
@@ -4453,6 +4499,14 @@ def _pitching_plan_content(tm, team, data, season_filter):
                     os_seqs = [s for s in top_seqs if s["p1"] not in _hard_pitches]
                     if os_seqs:
                         active_seq = os_seqs[0]
+                        seq_p1, seq_p2, seq_p3 = active_seq["p1"], active_seq["p2"], active_seq["p3"]
+                        _, g12 = _lookup_tunnel(seq_p1, seq_p2, tunnels)
+                        _, g23 = _lookup_tunnel(seq_p2, seq_p3, tunnels)
+                # Passive-1P override: force hard-pitch-starting seq (attack zone)
+                elif fp_context == "passive" and seq_p1 not in _hard_pitches and real_hard:
+                    hard_seqs = [s for s in top_seqs if s["p1"] in _hard_pitches]
+                    if hard_seqs:
+                        active_seq = hard_seqs[0]
                         seq_p1, seq_p2, seq_p3 = active_seq["p1"], active_seq["p2"], active_seq["p3"]
                         _, g12 = _lookup_tunnel(seq_p1, seq_p2, tunnels)
                         _, g23 = _lookup_tunnel(seq_p2, seq_p3, tunnels)
@@ -4546,12 +4600,46 @@ def _pitching_plan_content(tm, team, data, season_filter):
                 # 2-0 / 3-2: Must-strike with best hard pitch
                 if best_hard_p:
                     plan_lines.append(f"**2-0 / 3-2**: {best_hard_p[0]} — must throw strike")
-                # 0-2 / 1-2: P3 putaway from sequence
-                tun_23 = f" ({g23} tunnel from {seq_p2})" if g23 not in ("-", "F", None) else ""
-                pw_str = f"**0-2 / 1-2**: {seq_p3} ({pw_whiff:.0f}% whiff){tun_23}"
-                if not pd.isna(pw_2k) and not pd.isna(pw_2k_pct) and pw_2k_pct >= 60:
-                    pw_str += f" — {pw_2k:.0f}% 2K {'hard' if is_pw_hard else 'OS'} ({_pct_label(pw_2k_pct)})"
-                plan_lines.append(pw_str)
+                # 0-2 / 1-2: Putaway options with locations from zone_eff + tunneling
+                # Collect unique putaway pitches from all sequences + fallback
+                pw_options = []
+                seen_pw = set()
+                # Option sources: sequences first, then any remaining offspeed
+                pw_candidates = []
+                for s in top_seqs:
+                    if s["p3"] not in seen_pw:
+                        pw_candidates.append((s["p3"], s["p2"], s))
+                        seen_pw.add(s["p3"])
+                # Add any offspeed not already covered (strong putaway candidates)
+                for n, d in real_os:
+                    if n not in seen_pw:
+                        pw_candidates.append((n, None, None))
+                        seen_pw.add(n)
+                for pw_name, setup_name, seq_obj in pw_candidates[:3]:
+                    pw_d = ps_dict.get(pw_name, {})
+                    pw_w = pw_d.get("our_whiff", 0) or 0
+                    ars_pw = arsenal["pitches"].get(pw_name, {})
+                    # Best zone location from Trackman zone_eff
+                    loc_label, loc_whiff = _best_putaway_zone(pw_name, ars_pw)
+                    loc_str = f" — {loc_label}" if loc_label else ""
+                    # Tunnel grade from setup pitch
+                    if setup_name:
+                        _, tg = _lookup_tunnel(setup_name, pw_name, tunnels)
+                        tun_str = f" ({tg} tunnel from {setup_name})" if tg not in ("-", "F", None) else ""
+                    else:
+                        tun_str = ""
+                    # Hitter 2K vulnerability
+                    is_h = pw_name in _hard_pitches
+                    t2k = hd.get("whiff_2k_hard" if is_h else "whiff_2k_os", np.nan)
+                    t2k_p = pct_2k_hard if is_h else pct_2k_os
+                    vuln_str = ""
+                    if not pd.isna(t2k) and not pd.isna(t2k_p) and t2k_p >= 60:
+                        vuln_str = f" — {t2k:.0f}% 2K {'hard' if is_h else 'OS'} ({_pct_label(t2k_p)})"
+                    pw_options.append(f"{pw_name} ({pw_w:.0f}% whiff){loc_str}{tun_str}{vuln_str}")
+                if pw_options:
+                    plan_lines.append(f"**0-2 / 1-2**:")
+                    for i, opt in enumerate(pw_options):
+                        plan_lines.append(f"&nbsp;&nbsp;{i+1}. {opt}")
                 st.markdown("**Game Plan**")
                 for pl in plan_lines:
                     st.markdown(f"- {pl}")
