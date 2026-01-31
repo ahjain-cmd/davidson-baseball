@@ -3462,67 +3462,81 @@ def _pitch_score_composite(pt_name, pt_data, hd, tun_df, platoon_label="Neutral"
 
 def _build_3pitch_sequences(sorted_ps, hd, tun_df, seq_df):
     """Build best 3-pitch sequences: setup → bridge → putaway.
-    HITTER-AWARE: Uses per-pitch composite scores (which already factor in this
-    hitter's specific weaknesses) so sequences differ by matchup.
-    Excludes pitches thrown fewer than 10 times.
-    Enforces minimum tunnel quality gate: both tunnels cannot be F-grade."""
+    HITTER-AWARE: Picks the putaway pitch based on the hitter's specific
+    vulnerability, then finds the best setup/bridge path to get there.
+    Returns up to 3 sequences with different putaway pitches."""
     pitches = [name for name, data in sorted_ps if data.get("count", 0) >= 10]
     pitch_data = {name: data for name, data in sorted_ps if data.get("count", 0) >= 10}
-    # Also build a composite score lookup from sorted_ps (already hitter-specific)
     comp_scores = {name: data.get("score", 50) for name, data in sorted_ps}
     if len(pitches) < 2:
         return []
-    seqs = []
-    for p1 in pitches:
+
+    # ── Step 1: Rank putaway candidates by hitter-specific vulnerability ──
+    putaway_scores = {}
+    for p in pitches:
+        is_hard = p in _hard_pitches
+        their_2k = hd.get("whiff_2k_hard" if is_hard else "whiff_2k_os", np.nan)
+        comp = comp_scores.get(p, 50)
+        whiff = pitch_data.get(p, {}).get("our_whiff", np.nan)
+        chase = pitch_data.get(p, {}).get("our_chase", np.nan)
+        # Putaway score: composite (already hitter-specific) + 2K whiff + our whiff/chase
+        score = comp * 0.50
+        if not pd.isna(their_2k):
+            score += min(their_2k / 40 * 100, 100) * 0.25
+        if not pd.isna(whiff):
+            score += min(whiff / 50 * 100, 100) * 0.15
+        if not pd.isna(chase):
+            score += min(chase / 40 * 100, 100) * 0.10
+        putaway_scores[p] = score
+    # Sort putaway candidates
+    ranked_putaways = sorted(putaway_scores.items(), key=lambda x: x[1], reverse=True)
+
+    # ── Step 2: For each putaway, find best setup → bridge path ──
+    results = []
+    for p3, p3_score in ranked_putaways:
+        best_path = None
+        best_path_score = -1
         for p2 in pitches:
-            if p1 == p2:
-                continue
-            for p3 in pitches:
-                if p2 == p3:
-                    t_self, _ = _lookup_tunnel(p2, p3, tun_df)
-                    if pd.isna(t_self) or t_self <= 70:
-                        continue
+            if p2 == p3:
+                t_self, _ = _lookup_tunnel(p2, p3, tun_df)
+                if pd.isna(t_self) or t_self <= 70:
+                    continue
+            for p1 in pitches:
+                if p1 == p2:
+                    continue
                 t12, g12 = _lookup_tunnel(p1, p2, tun_df)
                 t23, g23 = _lookup_tunnel(p2, p3, tun_df)
-                # Minimum tunnel gate: skip if BOTH tunnels are F-grade (< 30)
+                # Minimum tunnel gate
                 t12_bad = pd.isna(t12) or t12 < 30
                 t23_bad = pd.isna(t23) or t23 < 30
                 if t12_bad and t23_bad:
                     continue
                 sw12, ch12 = _lookup_seq(p1, p2, seq_df)
                 sw23, ch23 = _lookup_seq(p2, p3, seq_df)
-                is_hard_p3 = p3 in _hard_pitches
-                their_2k = hd.get("whiff_2k_hard" if is_hard_p3 else "whiff_2k_os", np.nan)
                 parts, wts = [], []
-                # ── Hitter-specific composite scores (25% total) ──
-                # These differ per hitter because the composite already factors in
-                # the hitter's 2K whiff, chase tendency, platoon, wOBA split, etc.
-                p3_comp = comp_scores.get(p3, 50)
-                p2_comp = comp_scores.get(p2, 50)
-                p1_comp = comp_scores.get(p1, 50)
-                parts.append(p3_comp); wts.append(14)  # Putaway pitch quality vs THIS hitter
-                parts.append(p2_comp); wts.append(6)   # Bridge pitch quality vs THIS hitter
-                parts.append(p1_comp); wts.append(5)   # Setup pitch quality vs THIS hitter
-                # ── Tunnel quality between pairs (30% total) ──
+                # Tunnel quality (35%)
                 if not pd.isna(t12):
-                    parts.append(t12); wts.append(12)
+                    parts.append(t12); wts.append(14)
                 if not pd.isna(t23):
-                    parts.append(t23); wts.append(18)
-                # ── Sequence whiff rates (20% total) ──
+                    parts.append(t23); wts.append(21)
+                # Sequence whiff (20%)
                 if not pd.isna(sw12):
                     parts.append(min(sw12 / 50 * 100, 100)); wts.append(6)
                 if not pd.isna(sw23):
                     parts.append(min(sw23 / 50 * 100, 100)); wts.append(14)
-                # ── Chase% from sequence data (6% total) ──
+                # Chase% (6%)
                 if not pd.isna(ch23):
                     parts.append(min(ch23 / 40 * 100, 100)); wts.append(4)
                 if not pd.isna(ch12):
                     parts.append(min(ch12 / 40 * 100, 100)); wts.append(2)
-                # ── Pitch class variety bonus (3%) ──
+                # Setup/bridge composite scores (14%)
+                parts.append(comp_scores.get(p2, 50)); wts.append(8)
+                parts.append(comp_scores.get(p1, 50)); wts.append(6)
+                # Pitch class variety (3%)
                 classes = set("H" if p in _hard_pitches else "O" for p in (p1, p2, p3))
                 if len(classes) == 2:
                     parts.append(70); wts.append(3)
-                # ── EffVelo sequencing bonus (5%) ──
+                # EffVelo gap (5%)
                 p1_effv = pitch_data.get(p1, {}).get("eff_velo", np.nan)
                 p3_effv = pitch_data.get(p3, {}).get("eff_velo", np.nan)
                 if not pd.isna(p1_effv) and not pd.isna(p3_effv):
@@ -3536,26 +3550,24 @@ def _build_3pitch_sequences(sorted_ps, hd, tun_df, seq_df):
                         parts.append(min(25 + gap * 5, 100)); wts.append(4)
                 if not wts:
                     continue
-                combo = sum(p*w for p,w in zip(parts, wts)) / sum(wts)
-                # Store EffVelo gap for display
-                ev_gap = abs(p1_effv - p3_effv) if not pd.isna(p1_effv) and not pd.isna(p3_effv) else np.nan
-                seqs.append({
-                    "seq": f"{p1} → {p2} → {p3}", "p1": p1, "p2": p2, "p3": p3,
-                    "score": round(combo, 1),
-                    "t12": t12, "t23": t23, "sw23": sw23, "their_2k": their_2k,
-                    "effv_gap": ev_gap,
-                })
-    seqs.sort(key=lambda x: x["score"], reverse=True)
-    # Dedupe: ensure variety — unique putaway pitch (P3)
-    seen_p3 = set()
-    top = []
-    for s in seqs:
-        if s["p3"] not in seen_p3:
-            top.append(s)
-            seen_p3.add(s["p3"])
-        if len(top) >= 3:
+                path_score = sum(p*w for p,w in zip(parts, wts)) / sum(wts)
+                if path_score > best_path_score:
+                    best_path_score = path_score
+                    ev_gap = abs(p1_effv - p3_effv) if not pd.isna(p1_effv) and not pd.isna(p3_effv) else np.nan
+                    is_hard_p3 = p3 in _hard_pitches
+                    their_2k = hd.get("whiff_2k_hard" if is_hard_p3 else "whiff_2k_os", np.nan)
+                    best_path = {
+                        "seq": f"{p1} → {p2} → {p3}", "p1": p1, "p2": p2, "p3": p3,
+                        "score": round(p3_score * 0.45 + best_path_score * 0.55, 1),
+                        "t12": t12, "t23": t23, "sw23": sw23, "their_2k": their_2k,
+                        "effv_gap": ev_gap,
+                    }
+        if best_path:
+            results.append(best_path)
+        if len(results) >= 3:
             break
-    return top
+    results.sort(key=lambda x: x["score"], reverse=True)
+    return results
 
 
 def _score_pitcher_vs_hitter(arsenal, hitter_profile):
@@ -4317,12 +4329,21 @@ def _pitching_plan_content(tm, team, data, season_filter):
         # Build top 3-pitch seq for summary
         top_seqs = _build_3pitch_sequences(sorted_ps, hd, tunnels, sequences)
         seq_str = top_seqs[0]["seq"] if top_seqs else (f"{sorted_ps[0][0]}→{sorted_ps[1][0]}" if len(sorted_ps) >= 2 else "-")
+        # Putaway pitch reasoning
+        putaway_note = ""
+        if top_seqs:
+            p3 = top_seqs[0]["p3"]
+            is_hard_p3 = p3 in _hard_pitches
+            t2k = hd.get("whiff_2k_hard" if is_hard_p3 else "whiff_2k_os", np.nan)
+            if not pd.isna(t2k):
+                putaway_note = f" ({t2k:.0f}% 2K {'hard' if is_hard_p3 else 'OS'})"
         summary_rows.append({
             "Hitter": display_name(m["hitter"]), "B": m["bats"],
             "Platoon": m["platoon"],
             "Score": round(m["overall_score"], 1),
             "Go-To": best_pt,
             "Best Sequence": seq_str,
+            "Putaway Why": putaway_note,
         })
     sum_df = pd.DataFrame(summary_rows).sort_values("Score", ascending=False)
     st.dataframe(sum_df, use_container_width=True, hide_index=True)
