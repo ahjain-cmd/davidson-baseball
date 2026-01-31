@@ -3146,6 +3146,7 @@ def _score_pitcher_vs_hitter(arsenal, hitter_profile):
             "spin": pt_data.get("avg_spin", np.nan),
             "ivb": pt_data.get("ivb", np.nan),
             "hb": pt_data.get("hb", np.nan),
+            "count": pt_data.get("count", 0),
         }
     sorted_pitches = sorted(pitch_scores.items(), key=lambda x: x[1]["score"], reverse=True)
     recommendations = []
@@ -3548,9 +3549,11 @@ def _pitching_plan_content(tm, team, data, season_filter):
 
     def _build_3pitch_sequences(sorted_ps, hd, tun_df, seq_df):
         """Build best 3-pitch sequences: setup → bridge → putaway.
-        Enforces variety: no consecutive same pitch, dedupes by full sequence pattern."""
-        pitches = [name for name, _ in sorted_ps]
-        pitch_data = dict(sorted_ps)
+        Enforces variety: no consecutive same pitch, dedupes by full sequence pattern.
+        Excludes pitches thrown fewer than 10 times."""
+        # Only include pitches with >= 10 throws
+        pitches = [name for name, data in sorted_ps if data.get("count", 0) >= 10]
+        pitch_data = {name: data for name, data in sorted_ps if data.get("count", 0) >= 10}
         if len(pitches) < 2:
             return []
         seqs = []
