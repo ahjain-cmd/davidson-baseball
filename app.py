@@ -4198,9 +4198,19 @@ def _game_plan_tab(tm, team, data):
     season_filter = st.multiselect("Our Trackman Seasons", seasons, default=seasons, key="gpl_season")
     tab_pitch, tab_hit = st.tabs(["Our Pitching Plan", "Our Hitting Plan"])
     with tab_pitch:
-        _pitching_plan_content(tm, team, data, season_filter)
+        try:
+            _pitching_plan_content(tm, team, data, season_filter)
+        except Exception as e:
+            st.error(f"Pitching plan error: {e}")
+            import traceback
+            st.code(traceback.format_exc())
     with tab_hit:
-        _hitting_plan_content(tm, team, data, season_filter)
+        try:
+            _hitting_plan_content(tm, team, data, season_filter)
+        except Exception as e:
+            st.error(f"Hitting plan error: {e}")
+            import traceback
+            st.code(traceback.format_exc())
 
 
 def _pitching_plan_content(tm, team, data, season_filter):
