@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 import plotly.io as pio
 import glob
 import os
+import math
 import numpy as np
 from scipy.stats import percentileofscore
 
@@ -3034,6 +3035,437 @@ def _scouting_team_overview(tm, team):
             d["ERA %ile"] = d["ERA %ile"].apply(lambda x: f"{int(x)}" if pd.notna(x) else "-")
             st.dataframe(d, use_container_width=True, hide_index=True)
 
+    # ── Feature #9: Lineup Builder / Batting Order Analysis ──
+    section_header("Lineup Analysis")
+    h_exit = _tm_team(tm["hitting"]["exit"], team)
+    h_speed = _tm_team(tm["hitting"]["speed"], team)
+    h_prates = _tm_team(tm["hitting"]["pitch_rates"], team)
+    h_htypes = _tm_team(tm["hitting"]["hit_types"], team)
+    h_hlocs = _tm_team(tm["hitting"]["hit_locations"], team)
+
+    if not h_rate.empty and not h_cnt.empty:
+        # Build unified lineup dataframe
+        lineup = h_cnt[["playerFullName", "PA", "AB", "H", "HR", "RBI", "BB", "K", "SB"]].copy()
+        lineup = lineup[lineup["PA"] >= 10].copy()  # min 10 PA
+
+        # Merge rate stats
+        if not h_rate.empty:
+            rate_cols = ["playerFullName"]
+            for c in ["BA", "OBP", "SLG", "OPS", "ISO", "wOBA", "BABIP"]:
+                if c in h_rate.columns:
+                    rate_cols.append(c)
+            lineup = lineup.merge(h_rate[rate_cols], on="playerFullName", how="left")
+
+        # Merge exit data
+        if not h_exit.empty and "ExitVel" in h_exit.columns:
+            ev_cols = ["playerFullName"]
+            for c in ["ExitVel", "Barrel%", "HardHit%"]:
+                if c in h_exit.columns:
+                    ev_cols.append(c)
+            lineup = lineup.merge(h_exit[ev_cols], on="playerFullName", how="left")
+
+        # Merge speed
+        if not h_speed.empty and "SpeedScore" in h_speed.columns:
+            lineup = lineup.merge(h_speed[["playerFullName", "SpeedScore"]], on="playerFullName", how="left")
+
+        # Merge K%, BB% from pitch rates
+        if not h_prates.empty:
+            pr_cols = ["playerFullName"]
+            for c in ["K%", "BB%", "Chase%", "SwStrk%"]:
+                if c in h_prates.columns:
+                    pr_cols.append(c)
+            lineup = lineup.merge(h_prates[pr_cols], on="playerFullName", how="left")
+
+        # Compute a composite "production score" for sorting
+        lineup["ProdScore"] = 0.0
+        if "wOBA" in lineup.columns:
+            woba_med = lineup["wOBA"].median()
+            lineup["ProdScore"] += lineup["wOBA"].fillna(woba_med) * 100
+        elif "OPS" in lineup.columns:
+            ops_med = lineup["OPS"].median()
+            lineup["ProdScore"] += lineup["OPS"].fillna(ops_med) * 50
+        if "ExitVel" in lineup.columns:
+            lineup["ProdScore"] += lineup["ExitVel"].fillna(80) * 0.3
+        if "SpeedScore" in lineup.columns:
+            lineup["ProdScore"] += lineup["SpeedScore"].fillna(3) * 2
+
+        lineup = lineup.sort_values("ProdScore", ascending=False)
+
+        # Classify hitters into roles
+        def _classify_hitter(row):
+            roles = []
+            if pd.notna(row.get("ISO")) and row["ISO"] >= 0.180:
+                roles.append("Power")
+            elif pd.notna(row.get("HR")) and row["HR"] >= 5:
+                roles.append("Power")
+            if pd.notna(row.get("SpeedScore")) and row["SpeedScore"] >= 5.0:
+                roles.append("Speed")
+            elif pd.notna(row.get("SB")) and row["SB"] >= 5:
+                roles.append("Speed")
+            if pd.notna(row.get("BB%")) and row["BB%"] >= 10:
+                roles.append("Patient")
+            if pd.notna(row.get("Chase%")) and row["Chase%"] <= 20:
+                roles.append("Disciplined")
+            if pd.notna(row.get("BA")) and row["BA"] >= 0.300:
+                roles.append("Contact")
+            elif pd.notna(row.get("K%")) and row["K%"] <= 15:
+                roles.append("Contact")
+            if pd.notna(row.get("ExitVel")) and row["ExitVel"] >= 90:
+                roles.append("Hard-Hit")
+            if not roles:
+                roles.append("Utility")
+            return ", ".join(roles)
+
+        lineup["Role"] = lineup.apply(_classify_hitter, axis=1)
+
+        # Display lineup table
+        display_cols = ["playerFullName", "PA"]
+        disp_names = {"playerFullName": "Player", "PA": "PA"}
+        for c, name, fmt in [
+            ("BA", "BA", ".3f"), ("OBP", "OBP", ".3f"), ("SLG", "SLG", ".3f"),
+            ("wOBA", "wOBA", ".3f"), ("ISO", "ISO", ".3f"),
+            ("HR", "HR", "d"), ("SB", "SB", "d"),
+            ("ExitVel", "EV", ".1f"), ("Barrel%", "Brl%", ".1f"),
+            ("SpeedScore", "Spd", ".1f"), ("Chase%", "Chase%", ".1f"),
+        ]:
+            if c in lineup.columns:
+                display_cols.append(c)
+                disp_names[c] = name
+        display_cols.append("Role")
+        disp_names["Role"] = "Profile"
+
+        disp = lineup[display_cols].head(15).copy()
+        disp = disp.rename(columns=disp_names)
+        # Format numeric columns
+        for c in disp.columns:
+            if c in ["BA", "OBP", "SLG", "wOBA", "ISO"]:
+                disp[c] = disp[c].apply(lambda x: f"{x:.3f}" if pd.notna(x) else "-")
+            elif c in ["EV", "Spd", "Brl%", "Chase%"]:
+                disp[c] = disp[c].apply(lambda x: f"{x:.1f}" if pd.notna(x) else "-")
+            elif c in ["HR", "SB", "PA"]:
+                disp[c] = disp[c].apply(lambda x: f"{int(x)}" if pd.notna(x) else "-")
+        st.dataframe(disp, use_container_width=True, hide_index=True)
+
+        # Lineup insights
+        insights = []
+        power_count = lineup[lineup.get("Role", pd.Series(dtype=str)).str.contains("Power", na=False)].shape[0] if "Role" in lineup.columns else 0
+        speed_count = lineup[lineup.get("Role", pd.Series(dtype=str)).str.contains("Speed", na=False)].shape[0] if "Role" in lineup.columns else 0
+        patient_count = lineup[lineup.get("Role", pd.Series(dtype=str)).str.contains("Patient|Disciplined", na=False)].shape[0] if "Role" in lineup.columns else 0
+
+        if power_count >= 4:
+            insights.append(f"⚡ **Power-heavy lineup** ({power_count} power hitters) — keep the ball down, avoid center-cut fastballs.")
+        elif power_count <= 1:
+            insights.append("Lacks power — pitchers can pitch to contact and let defense work.")
+        if speed_count >= 3:
+            insights.append(f"🏃 **Speed threat** ({speed_count} speed players) — quick deliveries, catcher awareness critical.")
+        if patient_count >= 4:
+            insights.append(f"👁️ **Disciplined lineup** ({patient_count} patient hitters) — must throw strikes early, avoid falling behind.")
+        elif patient_count <= 1:
+            insights.append("Aggressive lineup — expand the zone with offspeed, use putaway pitches.")
+
+        if "Chase%" in lineup.columns:
+            avg_chase = lineup["Chase%"].mean()
+            if pd.notna(avg_chase):
+                if avg_chase > 28:
+                    insights.append(f"High team chase rate ({avg_chase:.1f}%) — work off the plate aggressively.")
+                elif avg_chase < 20:
+                    insights.append(f"Low team chase rate ({avg_chase:.1f}%) — must compete in the zone.")
+
+        for ins in insights:
+            st.markdown(ins)
+    else:
+        st.info("Insufficient hitting data for lineup analysis.")
+
+    # ── Feature #10: Pitching Staff Depth Chart ──
+    section_header("Pitching Staff Depth Chart")
+    if not p_trad.empty:
+        p_rate = _tm_team(tm["pitching"]["rate"], team)
+        p_mov = _tm_team(tm["pitching"]["movement"], team)
+        p_pit_rates = _tm_team(tm["pitching"]["pitch_rates"], team)
+        p_exit_data = _tm_team(tm["pitching"]["exit"], team)
+        p_bids_team = _tm_team(tm["pitching"]["bids"], team)
+
+        staff = p_trad[["playerFullName", "G", "GS", "IP", "ERA", "FIP", "WHIP", "K/9", "BB/9"]].copy()
+        staff = staff[staff["IP"] >= 1].copy()
+
+        # Merge velocity from movement
+        if not p_mov.empty and "Vel" in p_mov.columns:
+            vel_cols = ["playerFullName"]
+            for c in ["Vel", "MxVel"]:
+                if c in p_mov.columns:
+                    vel_cols.append(c)
+            staff = staff.merge(p_mov[vel_cols], on="playerFullName", how="left")
+
+        # Merge SwStrk% from pitch rates
+        if not p_pit_rates.empty and "SwStrk%" in p_pit_rates.columns:
+            staff = staff.merge(p_pit_rates[["playerFullName", "SwStrk%"]], on="playerFullName", how="left")
+
+        # Merge ExitVel against
+        if not p_exit_data.empty and "ExitVel" in p_exit_data.columns:
+            staff = staff.merge(
+                p_exit_data[["playerFullName", "ExitVel"]].rename(columns={"ExitVel": "EV Against"}),
+                on="playerFullName", how="left"
+            )
+
+        # Classify starters vs relievers
+        def _classify_pitcher(row):
+            gs = row.get("GS", 0) or 0
+            g = row.get("G", 0) or 0
+            ip = row.get("IP", 0) or 0
+            if gs >= 3 or (gs > 0 and gs / max(g, 1) > 0.5):
+                return "Starter"
+            elif ip >= 5 or g >= 5:
+                return "Reliever"
+            else:
+                return "Spot/Mop-up"
+
+        staff["Role"] = staff.apply(_classify_pitcher, axis=1)
+
+        # Separate and display starters
+        starters = staff[staff["Role"] == "Starter"].sort_values("IP", ascending=False)
+        relievers = staff[staff["Role"].isin(["Reliever", "Spot/Mop-up"])].sort_values("IP", ascending=False)
+
+        col_s, col_r = st.columns(2)
+
+        def _format_staff_table(df, label):
+            display = df.copy()
+            cols_show = ["playerFullName", "G", "GS", "IP", "ERA", "FIP", "WHIP", "K/9", "BB/9"]
+            col_names = {"playerFullName": "Player", "G": "G", "GS": "GS", "IP": "IP",
+                         "ERA": "ERA", "FIP": "FIP", "WHIP": "WHIP", "K/9": "K/9", "BB/9": "BB/9"}
+            if "Vel" in display.columns:
+                cols_show.append("Vel")
+                col_names["Vel"] = "Velo"
+            if "SwStrk%" in display.columns:
+                cols_show.append("SwStrk%")
+                col_names["SwStrk%"] = "SwStr%"
+            if "EV Against" in display.columns:
+                cols_show.append("EV Against")
+                col_names["EV Against"] = "EV Agn"
+
+            avail = [c for c in cols_show if c in display.columns]
+            display = display[avail].rename(columns=col_names)
+            for c in ["ERA", "FIP", "WHIP"]:
+                if c in display.columns:
+                    display[c] = display[c].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "-")
+            for c in ["K/9", "BB/9", "Velo", "SwStr%", "EV Agn"]:
+                if c in display.columns:
+                    display[c] = display[c].apply(lambda x: f"{x:.1f}" if pd.notna(x) else "-")
+            for c in ["G", "GS"]:
+                if c in display.columns:
+                    display[c] = display[c].apply(lambda x: f"{int(x)}" if pd.notna(x) else "-")
+            if "IP" in display.columns:
+                display["IP"] = display["IP"].apply(lambda x: f"{x:.1f}" if pd.notna(x) else "-")
+            return display
+
+        with col_s:
+            st.markdown(f"**Starters ({len(starters)})**")
+            if not starters.empty:
+                st.dataframe(_format_staff_table(starters, "Starters"), use_container_width=True, hide_index=True)
+            else:
+                st.caption("No identified starters.")
+
+        with col_r:
+            st.markdown(f"**Bullpen ({len(relievers)})**")
+            if not relievers.empty:
+                st.dataframe(_format_staff_table(relievers, "Relievers"), use_container_width=True, hide_index=True)
+            else:
+                st.caption("No identified relievers.")
+
+        # Staff-level insights
+        staff_insights = []
+        if not starters.empty:
+            avg_era = starters["ERA"].mean()
+            avg_vel = starters["Vel"].mean() if "Vel" in starters.columns else np.nan
+            if pd.notna(avg_era):
+                staff_insights.append(f"Rotation ERA: **{avg_era:.2f}**")
+            if pd.notna(avg_vel):
+                staff_insights.append(f"Rotation avg velo: **{avg_vel:.1f}** mph")
+            top_sp = starters.iloc[0]
+            staff_insights.append(
+                f"Ace: **{top_sp['playerFullName']}** ({top_sp['IP']:.1f} IP, {top_sp['ERA']:.2f} ERA)"
+            )
+        if not relievers.empty:
+            avg_rel_era = relievers["ERA"].mean()
+            if pd.notna(avg_rel_era):
+                staff_insights.append(f"Bullpen ERA: **{avg_rel_era:.2f}**")
+            if "SwStrk%" in relievers.columns:
+                best_sw = relievers.loc[relievers["SwStrk%"].idxmax()] if relievers["SwStrk%"].notna().any() else None
+                if best_sw is not None and pd.notna(best_sw.get("SwStrk%")):
+                    staff_insights.append(
+                        f"Best swing & miss: **{best_sw['playerFullName']}** ({best_sw['SwStrk%']:.1f}% SwStr)")
+
+        if staff_insights:
+            st.markdown(" | ".join(staff_insights))
+    else:
+        st.info("No pitching data available for staff depth chart.")
+
+    # ── Feature #11: Team Tendencies Dashboard ──
+    section_header("Team Tendencies")
+
+    # Load additional team-level data
+    h_htypes_team = _tm_team(tm["hitting"]["hit_types"], team)
+    h_hlocs_team = _tm_team(tm["hitting"]["hit_locations"], team)
+    h_prates_team = _tm_team(tm["hitting"]["pitch_rates"], team)
+    h_exit_team = _tm_team(tm["hitting"]["exit"], team)
+    h_sb_team = _tm_team(tm["hitting"]["stolen_bases"], team)
+    h_speed_team = _tm_team(tm["hitting"]["speed"], team)
+    p_htypes_team = _tm_team(tm["pitching"]["hit_types"], team)
+    p_prates_team = _tm_team(tm["pitching"]["pitch_rates"], team)
+    p_ptypes_team = _tm_team(tm["pitching"]["pitch_types"], team)
+
+    tend_col1, tend_col2 = st.columns(2)
+
+    # ── Offensive Tendencies ──
+    with tend_col1:
+        st.markdown("**Offensive Tendencies**")
+
+        # Batted ball profile (team averages)
+        if not h_htypes_team.empty:
+            bb_data = []
+            for lbl, col in [("GB%", "Ground%"), ("FB%", "Fly%"), ("LD%", "Line%"), ("Popup%", "Popup%")]:
+                if col in h_htypes_team.columns:
+                    avg = h_htypes_team[col].mean()
+                    if pd.notna(avg):
+                        bb_data.append({"Type": lbl, "Team Avg": f"{avg:.1f}%"})
+            if bb_data:
+                st.dataframe(pd.DataFrame(bb_data), use_container_width=True, hide_index=True)
+
+        # Spray direction (team averages)
+        if not h_hlocs_team.empty:
+            spray_data = []
+            for lbl, col in [("Pull%", "HPull%"), ("Center%", "HCtr%"), ("Oppo%", "HOppFld%")]:
+                if col in h_hlocs_team.columns:
+                    avg = h_hlocs_team[col].mean()
+                    if pd.notna(avg):
+                        spray_data.append({"Direction": lbl, "Team Avg": f"{avg:.1f}%"})
+            if spray_data:
+                st.dataframe(pd.DataFrame(spray_data), use_container_width=True, hide_index=True)
+
+        # Plate discipline (team averages)
+        if not h_prates_team.empty:
+            disc_data = []
+            for lbl, col in [("Swing%", "Swing%"), ("Contact%", "Contact%"), ("Chase%", "Chase%"),
+                              ("SwStrk%", "SwStrk%"), ("InZone Swing%", "Z-Swing%")]:
+                if col in h_prates_team.columns:
+                    avg = h_prates_team[col].mean()
+                    if pd.notna(avg):
+                        disc_data.append({"Metric": lbl, "Team Avg": f"{avg:.1f}%"})
+            if disc_data:
+                st.dataframe(pd.DataFrame(disc_data), use_container_width=True, hide_index=True)
+
+        # Exit velocity / quality of contact
+        if not h_exit_team.empty:
+            qc_data = []
+            for lbl, col in [("Avg Exit Velo", "ExitVel"), ("Barrel%", "Barrel%"),
+                              ("Hard Hit%", "HardHit%"), ("Sweet Spot%", "SweetSpot%")]:
+                if col in h_exit_team.columns:
+                    avg = h_exit_team[col].mean()
+                    if pd.notna(avg):
+                        fmt = f"{avg:.1f}" if "%" not in lbl else f"{avg:.1f}%"
+                        if lbl == "Avg Exit Velo":
+                            fmt = f"{avg:.1f} mph"
+                        qc_data.append({"Metric": lbl, "Team Avg": fmt})
+            if qc_data:
+                st.dataframe(pd.DataFrame(qc_data), use_container_width=True, hide_index=True)
+
+        # Baserunning tendencies
+        sb_insights = []
+        if not h_sb_team.empty:
+            for col in ["SB2%", "SB3%"]:
+                if col in h_sb_team.columns:
+                    avg = h_sb_team[col].mean()
+                    if pd.notna(avg):
+                        sb_insights.append(f"{col}: {avg:.1f}%")
+        if not h_speed_team.empty and "SpeedScore" in h_speed_team.columns:
+            avg_spd = h_speed_team["SpeedScore"].mean()
+            if pd.notna(avg_spd):
+                sb_insights.append(f"Avg Speed Score: {avg_spd:.1f}")
+        if sb_insights:
+            st.caption("🏃 Baserunning: " + " | ".join(sb_insights))
+
+    # ── Pitching Staff Tendencies ──
+    with tend_col2:
+        st.markdown("**Pitching Staff Tendencies**")
+
+        # Pitch mix (team average)
+        if not p_ptypes_team.empty:
+            pitch_mix = []
+            for lbl, col in [("Fastball", "Fastball%"), ("Sinker", "Sinker%"), ("Cutter", "Cutter%"),
+                              ("Slider", "Slider%"), ("Curveball", "Curveball%"), ("Changeup", "Changeup%"),
+                              ("Sweeper", "Sweeper%"), ("Splitter", "Splitter%")]:
+                if col in p_ptypes_team.columns:
+                    avg = p_ptypes_team[col].mean()
+                    if pd.notna(avg) and avg > 0.5:
+                        pitch_mix.append({"Pitch": lbl, "Usage%": f"{avg:.1f}%"})
+            if pitch_mix:
+                pitch_mix_df = pd.DataFrame(pitch_mix).sort_values("Usage%", ascending=False, key=lambda s: s.str.rstrip("%").astype(float))
+                st.dataframe(pitch_mix_df, use_container_width=True, hide_index=True)
+
+        # Batted ball types allowed (pitching staff)
+        if not p_htypes_team.empty:
+            pbb_data = []
+            for lbl, col in [("GB%", "Ground%"), ("FB%", "Fly%"), ("LD%", "Line%"), ("Popup%", "Popup%")]:
+                if col in p_htypes_team.columns:
+                    avg = p_htypes_team[col].mean()
+                    if pd.notna(avg):
+                        pbb_data.append({"Type": lbl, "Staff Avg": f"{avg:.1f}%"})
+            if pbb_data:
+                st.dataframe(pd.DataFrame(pbb_data), use_container_width=True, hide_index=True)
+
+        # Staff pitch discipline induced
+        if not p_prates_team.empty:
+            pdisc_data = []
+            for lbl, col in [("Miss%", "Miss%"), ("Chase%", "Chase%"), ("SwStrk%", "SwStrk%"),
+                              ("CompLoc%", "CompLoc%"), ("InZone%", "InZone%")]:
+                if col in p_prates_team.columns:
+                    avg = p_prates_team[col].mean()
+                    if pd.notna(avg):
+                        pdisc_data.append({"Metric": lbl, "Staff Avg": f"{avg:.1f}%"})
+            if pdisc_data:
+                st.dataframe(pd.DataFrame(pdisc_data), use_container_width=True, hide_index=True)
+
+    # Team tendency narrative
+    tend_narrative = []
+    if not h_htypes_team.empty and "Ground%" in h_htypes_team.columns:
+        avg_gb = h_htypes_team["Ground%"].mean()
+        avg_fb = h_htypes_team["Fly%"].mean() if "Fly%" in h_htypes_team.columns else np.nan
+        if pd.notna(avg_gb) and avg_gb > 48:
+            tend_narrative.append(f"**Ground-ball hitting team** ({avg_gb:.1f}% GB) — infield defense matters, look for double-play opportunities.")
+        elif pd.notna(avg_fb) and avg_fb > 38:
+            tend_narrative.append(f"**Fly-ball hitting team** ({avg_fb:.1f}% FB) — outfield positioning critical, HR risk in elevated pitches.")
+
+    if not h_hlocs_team.empty and "HPull%" in h_hlocs_team.columns:
+        avg_pull = h_hlocs_team["HPull%"].mean()
+        avg_oppo = h_hlocs_team["HOppFld%"].mean() if "HOppFld%" in h_hlocs_team.columns else np.nan
+        if pd.notna(avg_pull) and avg_pull > 45:
+            tend_narrative.append(f"**Pull-heavy offense** ({avg_pull:.1f}% Pull) — shift infield, work away.")
+        elif pd.notna(avg_oppo) and avg_oppo > 28:
+            tend_narrative.append(f"**Good opposite-field approach** ({avg_oppo:.1f}% Oppo) — this team uses the whole field.")
+
+    if not h_prates_team.empty and "Chase%" in h_prates_team.columns:
+        avg_chase = h_prates_team["Chase%"].mean()
+        avg_contact = h_prates_team["Contact%"].mean() if "Contact%" in h_prates_team.columns else np.nan
+        if pd.notna(avg_chase) and avg_chase > 28:
+            tend_narrative.append(f"**Chase-prone lineup** ({avg_chase:.1f}% Chase) — expand zone aggressively with breaking balls.")
+        elif pd.notna(avg_chase) and avg_chase < 20:
+            tend_narrative.append(f"**Extremely selective lineup** ({avg_chase:.1f}% Chase) — compete in the zone, don't waste pitches.")
+        if pd.notna(avg_contact) and avg_contact > 82:
+            tend_narrative.append(f"**High-contact team** ({avg_contact:.1f}% Contact) — need swing-and-miss stuff or defensive excellence.")
+
+    if not p_prates_team.empty and "SwStrk%" in p_prates_team.columns:
+        avg_swstrk = p_prates_team["SwStrk%"].mean()
+        if pd.notna(avg_swstrk):
+            if avg_swstrk > 12:
+                tend_narrative.append(f"**High-strikeout staff** ({avg_swstrk:.1f}% SwStr) — two-strike approach critical, protect the plate.")
+            elif avg_swstrk < 8:
+                tend_narrative.append(f"**Low swing-and-miss staff** ({avg_swstrk:.1f}% SwStr) — hittable, be aggressive early in counts.")
+
+    if tend_narrative:
+        st.markdown("---")
+        st.markdown("**Key Tendencies:**")
+        for t in tend_narrative:
+            st.markdown(f"- {t}")
+
 
 def _scouting_hitter_report(tm, team, trackman_data):
     """Their Hitters tab — individual deep-dive scouting report with percentile context."""
@@ -3057,6 +3489,9 @@ def _scouting_hitter_report(tm, team, trackman_data):
     spd = _tm_player(_tm_team(tm["hitting"]["speed"], team), hitter)
     sb = _tm_player(_tm_team(tm["hitting"]["stolen_bases"], team), hitter)
     hrs = _tm_player(_tm_team(tm["hitting"]["home_runs"], team), hitter)
+    h_pcounts = _tm_player(_tm_team(tm["hitting"]["pitch_counts"], team), hitter)
+    h_ptcounts = _tm_player(_tm_team(tm["hitting"]["pitch_type_counts"], team), hitter)
+    h_re = _tm_player(_tm_team(tm["hitting"]["run_expectancy"], team), hitter)
 
     # All D1 data for percentile context
     all_h_rate = tm["hitting"]["rate"]
@@ -3065,6 +3500,7 @@ def _scouting_hitter_report(tm, team, trackman_data):
     all_h_ht = tm["hitting"]["hit_types"]
     all_h_hl = tm["hitting"]["hit_locations"]
     all_h_spd = tm["hitting"]["speed"]
+    all_h_re = tm["hitting"]["run_expectancy"]
 
     # Header
     pos = rate.iloc[0].get("pos", "?") if not rate.empty else "?"
@@ -3118,36 +3554,116 @@ def _scouting_hitter_report(tm, team, trackman_data):
             bb_metrics = [(l, v, p, f, h) for l, v, p, f, h in bb_metrics if not pd.isna(v)]
             render_savant_percentile_section(bb_metrics, legend=("LESS OFTEN", "AVERAGE", "MORE OFTEN"))
     with col_sp:
+        # Feature #7: Spray Chart Visualization (5-zone field diagram)
         if not hl.empty:
-            section_header("Spray Direction")
-            sp_data = []
-            for lbl, col_name in [("Pull%", "HPull%"), ("Center%", "HCtr%"), ("Oppo%", "HOppFld%")]:
-                v = _safe_num(hl, col_name)
-                if not pd.isna(v):
-                    sp_data.append({"Direction": lbl, "Value": f"{v:.1f}%"})
-            if sp_data:
-                st.dataframe(pd.DataFrame(sp_data), use_container_width=True, hide_index=True)
+            section_header("Spray Chart")
+            farlft = _safe_num(hl, "HFarLft%")
+            lftctr = _safe_num(hl, "HLftCtr%")
+            deadctr = _safe_num(hl, "HDeadCtr%")
+            rtctr = _safe_num(hl, "HRtCtr%")
+            farrt = _safe_num(hl, "HFarRt%")
+            zones = [farlft, lftctr, deadctr, rtctr, farrt]
+            zone_labels = ["Far Left", "Left-Ctr", "Dead Ctr", "Right-Ctr", "Far Right"]
+            if any(not pd.isna(z) for z in zones):
+                # Build a polar/fan spray chart
+                # go already imported at top level
+                # Compute angles for 5 zones: fan from ~20° to ~160°
+                angles_mid = [25, 55, 90, 125, 155]  # degrees from first-base line
+                angle_width = 28
+                fig_spray = go.Figure()
+                max_val = max((z for z in zones if not pd.isna(z)), default=1)
+                for i, (z, lbl, ang) in enumerate(zip(zones, zone_labels, angles_mid)):
+                    if pd.isna(z):
+                        continue
+                    # Normalize: radius proportional to percentage
+                    r = z / max(max_val, 1) * 100
+                    theta0 = math.radians(ang - angle_width / 2)
+                    theta1 = math.radians(ang + angle_width / 2)
+                    # Build wedge as filled shape
+                    n_pts = 15
+                    path_x = [0]
+                    path_y = [0]
+                    for j in range(n_pts + 1):
+                        t = theta0 + (theta1 - theta0) * j / n_pts
+                        path_x.append(r * math.cos(t))
+                        path_y.append(r * math.sin(t))
+                    path_x.append(0)
+                    path_y.append(0)
+                    # Color intensity based on value
+                    intensity = min(z / max(max_val, 1), 1.0)
+                    r_c = int(190 - intensity * 160)
+                    g_c = int(210 - intensity * 180)
+                    b_c = int(230 - intensity * 30)
+                    color = f"rgba({r_c},{g_c},{b_c},0.8)"
+                    fig_spray.add_trace(go.Scatter(
+                        x=path_x, y=path_y, fill="toself", fillcolor=color,
+                        line=dict(color="white", width=1),
+                        name=lbl, text=f"{lbl}: {z:.1f}%",
+                        hoverinfo="text", showlegend=False,
+                    ))
+                    # Label
+                    lbl_r = r * 0.6
+                    lbl_t = math.radians(ang)
+                    fig_spray.add_annotation(
+                        x=lbl_r * math.cos(lbl_t), y=lbl_r * math.sin(lbl_t),
+                        text=f"<b>{z:.0f}%</b>", showarrow=False,
+                        font=dict(size=11, color="#1a1a2e"), bgcolor="rgba(255,255,255,0.7)",
+                    )
+                fig_spray.update_layout(
+                    **CHART_LAYOUT, height=260,
+                    xaxis=dict(visible=False, range=[-110, 110]),
+                    yaxis=dict(visible=False, range=[-10, 115], scaleanchor="x"),
+                    showlegend=False,
+                )
+                st.plotly_chart(fig_spray, use_container_width=True)
+                # Pull/Center/Oppo summary
+                pull = _safe_num(hl, "HPull%")
+                ctr = _safe_num(hl, "HCtr%")
+                oppo = _safe_num(hl, "HOppFld%")
+                parts = []
+                if not pd.isna(pull):
+                    parts.append(f"Pull: {pull:.1f}%")
+                if not pd.isna(ctr):
+                    parts.append(f"Center: {ctr:.1f}%")
+                if not pd.isna(oppo):
+                    parts.append(f"Oppo: {oppo:.1f}%")
+                if parts:
+                    st.caption(" | ".join(parts))
 
-    # ── Pitch Type Breakdown ──
+    # ── Feature #6: Pitch-Type Matchup Matrix ──
     if not pt.empty:
-        section_header("Pitch Types Seen")
-        pitch_cols = ["4Seam%", "Sink2Seam%", "Cutter%", "Slider%", "Curve%", "Change%", "Sweeper%"]
-        pitch_labels = ["4-Seam", "Sinker", "Cutter", "Slider", "Curve", "Change", "Sweeper"]
+        section_header("Pitch Type Matchup")
+        st.caption("What pitches this hitter sees and how often — plan your attack around weaknesses")
+        pitch_cols = ["4Seam%", "Sink2Seam%", "Cutter%", "Slider%", "Curve%", "Change%", "Split%", "Sweeper%"]
+        pitch_labels = ["4-Seam", "Sinker", "Cutter", "Slider", "Curve", "Change", "Splitter", "Sweeper"]
+        count_cols = ["4Seam#", "Sink2Seam#", "Cutter#", "Slider#", "Curve#", "Change#", "Split#", "Sweeper#"]
         vals = []
-        for col_name, lbl in zip(pitch_cols, pitch_labels):
-            v = pt.iloc[0].get(col_name)
-            if v is not None and not pd.isna(v) and v > 0:
-                vals.append({"Pitch": lbl, "Usage": v})
+        for pct_col, cnt_col, lbl in zip(pitch_cols, count_cols, pitch_labels):
+            pct_v = pt.iloc[0].get(pct_col) if not pt.empty else None
+            cnt_v = h_ptcounts.iloc[0].get(cnt_col) if not h_ptcounts.empty and cnt_col in h_ptcounts.columns else None
+            if pct_v is not None and not pd.isna(pct_v) and pct_v > 0:
+                row = {"Pitch": lbl, "% Seen": f"{pct_v:.1f}%"}
+                if cnt_v is not None and not pd.isna(cnt_v):
+                    row["Count"] = f"{int(cnt_v)}"
+                else:
+                    row["Count"] = "-"
+                vals.append(row)
         if vals:
-            vdf = pd.DataFrame(vals)
-            fig = go.Figure(go.Bar(
-                x=vdf["Pitch"], y=vdf["Usage"],
-                marker_color=[PITCH_COLORS.get(p.replace("-", ""), "#888") for p in vdf["Pitch"]],
-                text=[f"{u:.1f}%" for u in vdf["Usage"]], textposition="outside",
-            ))
-            fig.update_layout(**CHART_LAYOUT, height=280, yaxis_title="% Seen", showlegend=False,
-                              yaxis=dict(range=[0, vdf["Usage"].max() * 1.3]))
-            st.plotly_chart(fig, use_container_width=True)
+            # Bar chart + table side by side
+            col_chart, col_tbl = st.columns([3, 2])
+            with col_chart:
+                vdf = pd.DataFrame(vals)
+                pct_vals = [float(v["% Seen"].rstrip("%")) for v in vals]
+                fig = go.Figure(go.Bar(
+                    x=[v["Pitch"] for v in vals], y=pct_vals,
+                    marker_color=[PITCH_COLORS.get(v["Pitch"].replace("-", ""), "#888") for v in vals],
+                    text=[v["% Seen"] for v in vals], textposition="outside",
+                ))
+                fig.update_layout(**CHART_LAYOUT, height=280, yaxis_title="% Seen", showlegend=False,
+                                  yaxis=dict(range=[0, max(pct_vals) * 1.3]))
+                st.plotly_chart(fig, use_container_width=True)
+            with col_tbl:
+                st.dataframe(pd.DataFrame(vals), use_container_width=True, hide_index=True)
 
     # ── Pitch Location Zone Map ──
     if not pl.empty:
@@ -3256,6 +3772,89 @@ def _scouting_hitter_report(tm, team, trackman_data):
             if sb_data:
                 st.dataframe(pd.DataFrame(sb_data), use_container_width=True, hide_index=True)
 
+    # ── Feature #2: Expected vs Actual Differential Flags ──
+    if not xrate.empty:
+        section_header("Expected vs Actual (Luck Indicator)")
+        st.caption("Positive diff = overperforming (lucky). Negative diff = underperforming (better than stats show).")
+        diff_rows = []
+        for lbl, act_col, x_col, df_col in [
+            ("AVG", "AVG", "xAVG", "xAVGDf"), ("SLG", "SLG", "xSLG", "xSLGDf"),
+            ("ISO", "ISO", "xISO", "xISODf"), ("wOBA", "wOBA", "xWOBA", "xWOBADf"),
+        ]:
+            act = _safe_num(xrate, act_col)
+            exp = _safe_num(xrate, x_col)
+            diff = _safe_num(xrate, df_col)
+            if not pd.isna(act) and not pd.isna(exp):
+                # Color code: green (underperforming, unlucky) / red (overperforming, lucky)
+                if not pd.isna(diff):
+                    if diff > 0.030:
+                        flag = "🔴 Overperforming"
+                    elif diff < -0.030:
+                        flag = "🟢 Underperforming"
+                    else:
+                        flag = "⚪ In line"
+                else:
+                    flag = "-"
+                diff_rows.append({
+                    "Stat": lbl, "Actual": f"{act:.3f}", "Expected": f"{exp:.3f}",
+                    "Diff": f"{diff:+.3f}" if not pd.isna(diff) else "-", "Signal": flag,
+                })
+        if diff_rows:
+            st.dataframe(pd.DataFrame(diff_rows), use_container_width=True, hide_index=True)
+
+    # ── Feature #5: Pitch Count Discipline Breakdown ──
+    if not h_pcounts.empty:
+        section_header("Plate Discipline Breakdown")
+        st.caption("Raw pitch counts showing how this hitter handles at-bats")
+        disc_data = []
+        total_p = _safe_num(h_pcounts, "P")
+        for lbl, col in [("Total Pitches", "P"), ("Swings", "Swing#"), ("Misses", "Miss#"),
+                          ("Strikes", "Strike#"), ("In Play", "InPlay#"), ("Fouls", "Foul#"),
+                          ("In Zone", "InZone#"), ("Chases", "Chase#"), ("Called Strikes", "CallStrk#")]:
+            v = _safe_num(h_pcounts, col)
+            if not pd.isna(v):
+                rate_str = ""
+                if not pd.isna(total_p) and total_p > 0 and col != "P":
+                    rate_str = f"{v / total_p * 100:.1f}%"
+                disc_data.append({"Metric": lbl, "Count": f"{int(v)}", "% of Pitches": rate_str})
+        if disc_data:
+            st.dataframe(pd.DataFrame(disc_data), use_container_width=True, hide_index=True)
+        # P/PA and max pitch PA
+        ppa = _safe_num(pr, "P/PA")
+        mxppa = _safe_num(pr, "MxPPA")
+        parts = []
+        if not pd.isna(ppa):
+            parts.append(f"P/PA: {ppa:.2f}")
+        if not pd.isna(mxppa):
+            parts.append(f"Max P/PA: {int(mxppa)}")
+        if parts:
+            st.caption(" | ".join(parts))
+
+    # ── Feature #3: Run Expectancy by Outs ──
+    if not h_re.empty:
+        section_header("Run Expectancy by Outs")
+        st.caption("How productive this hitter is in each out situation (higher = more valuable)")
+        re_data = []
+        for lbl, col in [("No Outs", "RE_NoOut"), ("1 Out", "RE_1Out"), ("2 Outs", "RE_2Out")]:
+            v = _safe_num(h_re, col)
+            if not pd.isna(v):
+                pct = _tm_pctile(h_re, col, all_h_re)
+                re_data.append({
+                    "Situation": lbl, "RE": f"{v:.3f}",
+                    "D1 Pctile": f"{int(pct)}" if not pd.isna(pct) else "-",
+                })
+        if re_data:
+            st.dataframe(pd.DataFrame(re_data), use_container_width=True, hide_index=True)
+            # Clutch narrative
+            re_2out = _safe_num(h_re, "RE_2Out")
+            re_0out = _safe_num(h_re, "RE_NoOut")
+            if not pd.isna(re_2out) and not pd.isna(re_0out):
+                re_2out_pct = _tm_pctile(h_re, "RE_2Out", all_h_re)
+                if not pd.isna(re_2out_pct) and re_2out_pct >= 75:
+                    st.caption(f"⚠️ Dangerous with 2 outs ({int(re_2out_pct)}th percentile) — don't let him beat you late in innings.")
+                elif not pd.isna(re_2out_pct) and re_2out_pct <= 25:
+                    st.caption(f"✅ Less productive with 2 outs ({int(re_2out_pct)}th percentile) — can be aggressive in 2-out situations.")
+
     # ── How to Attack ──
     section_header("How to Attack")
     notes = _hitter_attack_plan(rate, exit_d, pr, ht, hl)
@@ -3311,6 +3910,9 @@ def _scouting_pitcher_report(tm, team, trackman_data):
     p_xhit = _tm_player(_tm_team(tm["pitching"]["expected_hit_rates"], team), pitcher)
     p_cnt = _tm_player(_tm_team(tm["pitching"]["counting"], team), pitcher)
     p_pcalls = _tm_player(_tm_team(tm["pitching"]["pitch_calls"], team), pitcher)
+    p_ptcounts = _tm_player(_tm_team(tm["pitching"]["pitch_type_counts"], team), pitcher)
+    p_bids = _tm_player(_tm_team(tm["pitching"]["bids"], team), pitcher)
+    p_xrate_full = _tm_player(_tm_team(tm["pitching"]["expected_rate"], team), pitcher)
 
     # All D1 data for percentile context
     all_p_trad = tm["pitching"]["traditional"]
@@ -3363,66 +3965,149 @@ def _scouting_pitcher_report(tm, team, trackman_data):
     pitching_metrics = [(l, v, p, f, h) for l, v, p, f, h in pitching_metrics if not pd.isna(v)]
     render_savant_percentile_section(pitching_metrics)
 
-    # ── Arsenal Mix ──
+    # ── Feature #1: Arsenal Breakdown (usage + count + movement profile) ──
     if not pt.empty:
-        section_header("Arsenal Mix")
+        section_header("Arsenal Breakdown")
+        st.caption("Pitch mix, volume, and aggregate stuff profile")
         pitch_cols = ["4Seam%", "Sink2Seam%", "Cutter%", "Slider%", "Curve%", "Change%", "Split%", "Sweeper%"]
         pitch_labels = ["4-Seam", "Sinker", "Cutter", "Slider", "Curve", "Change", "Splitter", "Sweeper"]
-        vals = []
-        for col_name, lbl in zip(pitch_cols, pitch_labels):
-            v = pt.iloc[0].get(col_name)
-            if v is not None and not pd.isna(v) and v > 0:
-                vals.append({"Pitch": lbl, "Usage": v})
-        if vals:
-            vdf = pd.DataFrame(vals)
+        count_cols = ["4Seam#", "Sink2Seam#", "Cutter#", "Slider#", "Curve#", "Change#", "Split#", "Sweeper#"]
+        arsenal_rows = []
+        for pct_col, cnt_col, lbl in zip(pitch_cols, count_cols, pitch_labels):
+            pct_v = pt.iloc[0].get(pct_col) if not pt.empty else None
+            cnt_v = p_ptcounts.iloc[0].get(cnt_col) if not p_ptcounts.empty and cnt_col in p_ptcounts.columns else None
+            if pct_v is not None and not pd.isna(pct_v) and pct_v > 0:
+                arsenal_rows.append({"Pitch": lbl, "Usage": pct_v,
+                                     "Count": int(cnt_v) if cnt_v is not None and not pd.isna(cnt_v) else None})
+        if arsenal_rows:
+            # Bar chart
             fig = go.Figure(go.Bar(
-                x=vdf["Pitch"], y=vdf["Usage"],
-                marker_color=[PITCH_COLORS.get(p.replace("-", ""), "#888") for p in vdf["Pitch"]],
-                text=[f"{u:.1f}%" for u in vdf["Usage"]], textposition="outside",
+                x=[r["Pitch"] for r in arsenal_rows],
+                y=[r["Usage"] for r in arsenal_rows],
+                marker_color=[PITCH_COLORS.get(r["Pitch"].replace("-", ""), "#888") for r in arsenal_rows],
+                text=[f"{r['Usage']:.1f}%" for r in arsenal_rows], textposition="outside",
             ))
             fig.update_layout(**CHART_LAYOUT, height=280, yaxis_title="Usage %", showlegend=False,
-                              yaxis=dict(range=[0, vdf["Usage"].max() * 1.3]))
+                              yaxis=dict(range=[0, max(r["Usage"] for r in arsenal_rows) * 1.3]))
             st.plotly_chart(fig, use_container_width=True)
+            # Detail table with count
+            tbl_rows = []
+            for r in arsenal_rows:
+                row = {"Pitch": r["Pitch"], "Usage %": f"{r['Usage']:.1f}%"}
+                if r["Count"] is not None:
+                    row["# Thrown"] = f"{r['Count']}"
+                else:
+                    row["# Thrown"] = "-"
+                tbl_rows.append(row)
+            st.dataframe(pd.DataFrame(tbl_rows), use_container_width=True, hide_index=True)
 
-    # ── Movement Profile ──
+    # ── Movement / Stuff Profile ──
     if not mov.empty:
-        section_header("Movement Profile")
-        mov_data = []
-        for lbl, col, fmt in [
-            ("Velocity", "Vel", ".1f"), ("Max Velocity", "MxVel", ".1f"),
-            ("Horiz Break", "HorzBrk", ".1f"), ("Vert Break", "VertBrk", ".1f"),
-            ("Induced Vert Break", "IndVertBrk", ".1f"), ("Spin (rpm)", "Spin", ".0f"),
-            ("Extension (ft)", "Extension", ".1f"), ("Effective Velo", "EffectVel", ".1f"),
-        ]:
-            v = _safe_num(mov, col)
-            if not pd.isna(v):
-                mov_data.append({"Metric": lbl, "Value": f"{v:{fmt}}"})
-        # Add approach angles if available
-        for lbl, col in [("VAA", "VAA"), ("HAA", "HAA"), ("RelHt", "RelHt"), ("RelSide", "RelSide")]:
-            v = _safe_num(mov, col)
-            if not pd.isna(v):
-                mov_data.append({"Metric": lbl, "Value": f"{v:.1f}"})
-        if mov_data:
-            st.dataframe(pd.DataFrame(mov_data), use_container_width=True, hide_index=True)
+        section_header("Stuff Profile")
+        col_mov1, col_mov2 = st.columns(2)
+        with col_mov1:
+            mov_data = []
+            for lbl, col, fmt in [
+                ("Avg Velocity", "Vel", ".1f"), ("Max Velocity", "MxVel", ".1f"),
+                ("10th %ile Velo", "10thVel", ".1f"), ("90th %ile Velo", "90thVel", ".1f"),
+                ("Velo Range", "VelRange", ".1f"),
+                ("Spin (rpm)", "Spin", ".0f"), ("Max Spin", "MxSpin", ".0f"),
+                ("Extension (ft)", "Extension", ".1f"), ("Effective Velo", "EffectVel", ".1f"),
+            ]:
+                v = _safe_num(mov, col)
+                if not pd.isna(v):
+                    mov_data.append({"Metric": lbl, "Value": f"{v:{fmt}}"})
+            if mov_data:
+                st.dataframe(pd.DataFrame(mov_data), use_container_width=True, hide_index=True)
+        with col_mov2:
+            brk_data = []
+            for lbl, col, fmt in [
+                ("Horiz Break", "HorzBrk", ".1f"), ("Vert Break", "VertBrk", ".1f"),
+                ("Induced Vert Break", "IndVertBrk", ".1f"),
+                ("Vert Appr Angle", "VertApprAngle", ".2f"), ("Horiz Appr Angle", "HorzApprAngle", ".2f"),
+                ("Release Height", "RelZ", ".1f"), ("Release Side", "RelX", ".1f"),
+                ("Plate Velo", "PlateVel", ".1f"),
+            ]:
+                v = _safe_num(mov, col)
+                if not pd.isna(v):
+                    brk_data.append({"Metric": lbl, "Value": f"{v:{fmt}}"})
+            if brk_data:
+                st.dataframe(pd.DataFrame(brk_data), use_container_width=True, hide_index=True)
 
-    # ── Pitch Location Zones ──
+    # ── Feature #8: Pitcher Command Heatmap (3x3 strike zone grid) ──
     if not ploc.empty:
-        section_header("Pitch Location Tendencies")
-        st.caption("Where this pitcher locates — % of pitches in each zone")
-        loc_cols_labels = [
-            ("InZone%", "In Zone"), ("High%", "High"), ("VMid%", "Vert Mid"), ("Low%", "Low"),
-            ("UpHalf%", "Up Half"), ("LowHalf%", "Low Half"),
-            ("Inside%", "Inside"), ("HMid%", "Horiz Mid"), ("Outside%", "Outside"),
-            ("InHalf%", "In Half"), ("OutHalf%", "Out Half"),
-        ]
-        loc_data = []
-        for col, lbl in loc_cols_labels:
-            v = _safe_num(ploc, col)
-            pct = _tm_pctile(ploc, col, all_p_ploc) if not pd.isna(v) else np.nan
-            if not pd.isna(v):
-                loc_data.append({"Zone": lbl, "Rate": f"{v:.1f}%", "D1 Pctile": f"{int(pct)}" if not pd.isna(pct) else "-"})
-        if loc_data:
-            st.dataframe(pd.DataFrame(loc_data), use_container_width=True, hide_index=True)
+        section_header("Command Heatmap")
+        st.caption("Where this pitcher locates — darker = more pitches in that zone")
+        # Build 3x3 grid: rows=High/Mid/Low, cols=Inside/Mid/Outside
+        high = _safe_num(ploc, "High%")
+        vmid = _safe_num(ploc, "VMid%")
+        low = _safe_num(ploc, "Low%")
+        inside = _safe_num(ploc, "Inside%")
+        hmid = _safe_num(ploc, "HMid%")
+        outside = _safe_num(ploc, "Outside%")
+        inzone = _safe_num(ploc, "InZone%")
+        # Approximate 3x3 grid values by distributing vertical * horizontal proportions
+        vert = [high, vmid, low]
+        horiz = [inside, hmid, outside]
+        vert_valid = all(not pd.isna(v) for v in vert)
+        horiz_valid = all(not pd.isna(v) for v in horiz)
+        if vert_valid and horiz_valid:
+            vert_total = sum(vert)
+            horiz_total = sum(horiz)
+            z_matrix = []
+            for v_val in vert:
+                row = []
+                for h_val in horiz:
+                    # Proportional estimate
+                    cell_val = (v_val / max(vert_total, 1)) * (h_val / max(horiz_total, 1)) * 100
+                    row.append(round(cell_val, 1))
+                z_matrix.append(row)
+            col_hm, col_tbl = st.columns([3, 2])
+            with col_hm:
+                fig_hm = go.Figure(data=go.Heatmap(
+                    z=z_matrix,
+                    x=["Inside", "Middle", "Outside"],
+                    y=["High", "Middle", "Low"],
+                    colorscale=[[0, "#f0f4f8"], [0.5, "#3d7dab"], [1, "#14365d"]],
+                    showscale=False,
+                    text=[[f"{v:.1f}%" for v in row] for row in z_matrix],
+                    texttemplate="%{text}",
+                    textfont=dict(size=14, color="white"),
+                    hovertemplate="Zone: %{y} %{x}<br>Frequency: %{text}<extra></extra>",
+                ))
+                # Draw strike zone border
+                fig_hm.add_shape(type="rect", x0=-0.5, y0=-0.5, x1=2.5, y1=2.5,
+                                 line=dict(color="#1a1a2e", width=3))
+                fig_hm.update_layout(
+                    **CHART_LAYOUT, height=280,
+                    xaxis=dict(side="bottom"), yaxis=dict(autorange="reversed"),
+                    margin=dict(l=60, r=10, t=10, b=40),
+                )
+                st.plotly_chart(fig_hm, use_container_width=True)
+            with col_tbl:
+                # Detailed zone table
+                zone_tbl = []
+                for lbl, col_name in [("In Zone", "InZone%"), ("High", "High%"), ("Mid (V)", "VMid%"),
+                                       ("Low", "Low%"), ("Inside", "Inside%"), ("Mid (H)", "HMid%"),
+                                       ("Outside", "Outside%"), ("Up Half", "UpHalf%"), ("Low Half", "LowHalf%")]:
+                    v = _safe_num(ploc, col_name)
+                    if not pd.isna(v):
+                        pct = _tm_pctile(ploc, col_name, all_p_ploc)
+                        zone_tbl.append({"Zone": lbl, "Rate": f"{v:.1f}%",
+                                         "D1 %ile": f"{int(pct)}" if not pd.isna(pct) else "-"})
+                if zone_tbl:
+                    st.dataframe(pd.DataFrame(zone_tbl), use_container_width=True, hide_index=True)
+        else:
+            # Fallback to table if grid can't be built
+            loc_data = []
+            for col, lbl in [("InZone%", "In Zone"), ("High%", "High"), ("VMid%", "Vert Mid"), ("Low%", "Low"),
+                              ("Inside%", "Inside"), ("HMid%", "Horiz Mid"), ("Outside%", "Outside")]:
+                v = _safe_num(ploc, col)
+                pct = _tm_pctile(ploc, col, all_p_ploc) if not pd.isna(v) else np.nan
+                if not pd.isna(v):
+                    loc_data.append({"Zone": lbl, "Rate": f"{v:.1f}%", "D1 Pctile": f"{int(pct)}" if not pd.isna(pct) else "-"})
+            if loc_data:
+                st.dataframe(pd.DataFrame(loc_data), use_container_width=True, hide_index=True)
 
     # ── Expected Rates Against ──
     if not xrate.empty:
@@ -3527,6 +4212,60 @@ def _scouting_pitcher_report(tm, team, trackman_data):
                 cnt_data.append({"Stat": lbl, "Count": f"{int(v)}"})
         if cnt_data:
             st.dataframe(pd.DataFrame(cnt_data), use_container_width=True, hide_index=True)
+
+    # ── Durability / Bids Profile ──
+    if not p_bids.empty:
+        section_header("Durability & Deep-Game Profile")
+        row = p_bids.iloc[0]
+        gs_val = _safe_num(p_bids, "GS")
+        gs_str = f"{int(gs_val)}" if not pd.isna(gs_val) else "-"
+
+        # Core durability metrics
+        dur_metrics = []
+        for lbl, col in [("Games Started", "GS"), ("Complete Games", "CG"), ("Shutouts", "SHO")]:
+            v = _safe_num(p_bids, col)
+            if not pd.isna(v):
+                dur_metrics.append({"Metric": lbl, "Value": f"{int(v)}"})
+        if dur_metrics:
+            st.dataframe(pd.DataFrame(dur_metrics), use_container_width=True, hide_index=True)
+
+        # No-hitter and Perfect Game bids
+        bid_rows = []
+        for lbl, col in [
+            ("No-Hit Bids (6+ IP)", "NH6+"), ("No-Hit Bids (7+ IP)", "NH7+"),
+            ("No-Hit Bids (8+ IP)", "NH8+"), ("No-Hitters", "NH"),
+            ("PG Bids (6+ IP)", "PG6+"), ("PG Bids (7+ IP)", "PG7+"),
+            ("PG Bids (8+ IP)", "PG8+"), ("Perfect Games", "PG"),
+        ]:
+            v = _safe_num(p_bids, col)
+            if not pd.isna(v) and v > 0:
+                bid_rows.append({"Bid Type": lbl, "Count": f"{int(v)}"})
+        if bid_rows:
+            st.markdown("**Deep-Game Bids**")
+            st.dataframe(pd.DataFrame(bid_rows), use_container_width=True, hide_index=True)
+        else:
+            st.caption("No no-hit or perfect game bids this season.")
+
+        # Durability innings
+        nhip = _safe_num(p_bids, "NHIP")
+        pgip = _safe_num(p_bids, "PGIP")
+        dur_ip = []
+        if not pd.isna(nhip):
+            dur_ip.append(f"**{nhip:.1f}** no-hit innings")
+        if not pd.isna(pgip):
+            dur_ip.append(f"**{pgip:.1f}** perfect-game innings")
+        if dur_ip:
+            st.caption("Streak innings: " + " | ".join(dur_ip))
+
+        # Narrative
+        cg_val = _safe_num(p_bids, "CG")
+        nh6_val = _safe_num(p_bids, "NH6+")
+        if not pd.isna(cg_val) and cg_val >= 2:
+            st.caption(f"🔥 Workhorse — {int(cg_val)} complete games. Expect to face him deep into games.")
+        elif not pd.isna(nh6_val) and nh6_val >= 2:
+            st.caption(f"🔥 Dominant starter — {int(nh6_val)} no-hit bids through 6+. Can shut down lineups.")
+        elif not pd.isna(gs_val) and gs_val >= 10:
+            st.caption("Established rotation arm — consistent starter with durability.")
 
     # ── How to Attack ──
     section_header("How to Attack")
