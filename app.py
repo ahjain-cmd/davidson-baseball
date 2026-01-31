@@ -3462,11 +3462,14 @@ def _pitch_score_composite(pt_name, pt_data, hd, tun_df, platoon_label="Neutral"
 
 def _build_3pitch_sequences(sorted_ps, hd, tun_df, seq_df):
     """Build best 3-pitch sequences: setup → bridge → putaway.
-    Allows same pitch back-to-back only if tunnel score > 70.
+    HITTER-AWARE: Uses per-pitch composite scores (which already factor in this
+    hitter's specific weaknesses) so sequences differ by matchup.
     Excludes pitches thrown fewer than 10 times.
     Enforces minimum tunnel quality gate: both tunnels cannot be F-grade."""
     pitches = [name for name, data in sorted_ps if data.get("count", 0) >= 10]
     pitch_data = {name: data for name, data in sorted_ps if data.get("count", 0) >= 10}
+    # Also build a composite score lookup from sorted_ps (already hitter-specific)
+    comp_scores = {name: data.get("score", 50) for name, data in sorted_ps}
     if len(pitches) < 2:
         return []
     seqs = []
@@ -3491,49 +3494,41 @@ def _build_3pitch_sequences(sorted_ps, hd, tun_df, seq_df):
                 is_hard_p3 = p3 in _hard_pitches
                 their_2k = hd.get("whiff_2k_hard" if is_hard_p3 else "whiff_2k_os", np.nan)
                 parts, wts = [], []
-                # Tunnel quality between pairs — INCREASED weights (~40% of total)
+                # ── Hitter-specific composite scores (25% total) ──
+                # These differ per hitter because the composite already factors in
+                # the hitter's 2K whiff, chase tendency, platoon, wOBA split, etc.
+                p3_comp = comp_scores.get(p3, 50)
+                p2_comp = comp_scores.get(p2, 50)
+                p1_comp = comp_scores.get(p1, 50)
+                parts.append(p3_comp); wts.append(14)  # Putaway pitch quality vs THIS hitter
+                parts.append(p2_comp); wts.append(6)   # Bridge pitch quality vs THIS hitter
+                parts.append(p1_comp); wts.append(5)   # Setup pitch quality vs THIS hitter
+                # ── Tunnel quality between pairs (30% total) ──
                 if not pd.isna(t12):
-                    parts.append(t12); wts.append(18)
+                    parts.append(t12); wts.append(12)
                 if not pd.isna(t23):
-                    parts.append(t23); wts.append(22)
-                # Sequence whiff rates (actual data from our pitch pairs)
+                    parts.append(t23); wts.append(18)
+                # ── Sequence whiff rates (20% total) ──
                 if not pd.isna(sw12):
-                    parts.append(min(sw12 / 50 * 100, 100)); wts.append(8)
+                    parts.append(min(sw12 / 50 * 100, 100)); wts.append(6)
                 if not pd.isna(sw23):
-                    parts.append(min(sw23 / 50 * 100, 100)); wts.append(18)
-                # Chase% from sequence data — reward sequences that generate chases
+                    parts.append(min(sw23 / 50 * 100, 100)); wts.append(14)
+                # ── Chase% from sequence data (6% total) ──
                 if not pd.isna(ch23):
-                    parts.append(min(ch23 / 40 * 100, 100)); wts.append(6)
+                    parts.append(min(ch23 / 40 * 100, 100)); wts.append(4)
                 if not pd.isna(ch12):
-                    parts.append(min(ch12 / 40 * 100, 100)); wts.append(3)
-                # Hitter's 2K vulnerability on putaway pitch class
-                if not pd.isna(their_2k):
-                    parts.append(min(their_2k / 40 * 100, 100)); wts.append(16)
-                # Putaway pitch quality (Stuff+ of P3)
-                p3_stuff = pitch_data.get(p3, {}).get("stuff_plus", np.nan)
-                if not pd.isna(p3_stuff):
-                    parts.append(min(max((p3_stuff - 70) / 60 * 100, 0), 100)); wts.append(6)
-                # Bridge pitch quality (P2 matters for sequencing)
-                p2_stuff = pitch_data.get(p2, {}).get("stuff_plus", np.nan)
-                if not pd.isna(p2_stuff):
-                    parts.append(min(max((p2_stuff - 70) / 60 * 100, 0), 100)); wts.append(3)
-                # Setup pitch quality (Stuff+ of P1)
-                p1_stuff = pitch_data.get(p1, {}).get("stuff_plus", np.nan)
-                if not pd.isna(p1_stuff):
-                    parts.append(min(max((p1_stuff - 70) / 60 * 100, 0), 100)); wts.append(2)
-                # Pitch class variety bonus: reward mixing hard + offspeed
+                    parts.append(min(ch12 / 40 * 100, 100)); wts.append(2)
+                # ── Pitch class variety bonus (3%) ──
                 classes = set("H" if p in _hard_pitches else "O" for p in (p1, p2, p3))
                 if len(classes) == 2:
                     parts.append(70); wts.append(3)
-                # EffVelo sequencing bonus: big perceived velo gap between setup and putaway
+                # ── EffVelo sequencing bonus (5%) ──
                 p1_effv = pitch_data.get(p1, {}).get("eff_velo", np.nan)
                 p3_effv = pitch_data.get(p3, {}).get("eff_velo", np.nan)
                 if not pd.isna(p1_effv) and not pd.isna(p3_effv):
                     gap = abs(p1_effv - p3_effv)
-                    # 0 mph gap → 25, 5 mph → 50, 10+ mph → 75
                     parts.append(min(25 + gap * 5, 100)); wts.append(5)
                 else:
-                    # Fallback to raw velo if EffVelo not available
                     p1_velo = pitch_data.get(p1, {}).get("velo", np.nan)
                     p3_velo = pitch_data.get(p3, {}).get("velo", np.nan)
                     if not pd.isna(p1_velo) and not pd.isna(p3_velo):
@@ -3551,14 +3546,13 @@ def _build_3pitch_sequences(sorted_ps, hd, tun_df, seq_df):
                     "effv_gap": ev_gap,
                 })
     seqs.sort(key=lambda x: x["score"], reverse=True)
-    # Dedupe: ensure variety — unique (P3 putaway, P1 setup) pairs
-    seen = set()
+    # Dedupe: ensure variety — unique putaway pitch (P3)
+    seen_p3 = set()
     top = []
     for s in seqs:
-        key = (s["p3"], s["p1"])
-        if key not in seen:
+        if s["p3"] not in seen_p3:
             top.append(s)
-            seen.add(key)
+            seen_p3.add(s["p3"])
         if len(top) >= 3:
             break
     return top
