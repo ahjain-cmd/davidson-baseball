@@ -3427,51 +3427,51 @@ def _pitch_score_composite(pt_name, pt_data, hd, tun_df, platoon_label="Neutral"
         components.append(min(max((ext - 5.0) / 2.0 * 100, 0), 100)); weights.append(2)
 
     # 17. Zone Exploitation (5%) — cross our best zone with their zone weakness
+    #     Uses SAME formula as _best_zone_for: csw*0.6 + whiff*0.4, same PZM,
+    #     same hitter boost thresholds — so composite rewards the zone we recommend.
     ze = ars_pt.get("zone_eff", {})
     if ze and hd:
-        # Find our best zone for this pitch and check if hitter has weakness there
         hitter_high = hd.get("high_pct", np.nan)
         hitter_low = hd.get("low_pct", np.nan)
         hitter_in = hd.get("inside_pct", np.nan)
         hitter_out = hd.get("outside_pct", np.nan)
-        # Pitch-design zone multipliers (same logic as zone targets)
+        # Pitch-design zone multipliers — mirrors _get_pzm exactly (incl glove/arm)
         _ze_ivb = ars_pt.get("ivb", np.nan)
         if is_hard:
             if pt_name == "Sinker":
-                _ze_pzm = {"up": 0.5, "down": 1.4, "chase_low": 1.3}
+                _ze_pzm = {"up": 0.5, "down": 1.4, "chase_low": 1.3, "glove": 1.0, "arm": 1.0}
             elif not pd.isna(_ze_ivb) and _ze_ivb >= 16:
-                _ze_pzm = {"up": 1.4, "down": 0.7, "chase_low": 0.4}
+                _ze_pzm = {"up": 1.4, "down": 0.7, "chase_low": 0.4, "glove": 1.0, "arm": 1.0}
+            elif not pd.isna(_ze_ivb) and _ze_ivb < 12:
+                _ze_pzm = {"up": 0.7, "down": 1.3, "chase_low": 1.1, "glove": 1.0, "arm": 1.0}
             else:
-                _ze_pzm = {"up": 1.15, "down": 0.9, "chase_low": 0.6}
+                _ze_pzm = {"up": 1.15, "down": 0.9, "chase_low": 0.6, "glove": 1.0, "arm": 1.0}
         else:
             if pt_name in ("Curveball", "Knuckle Curve"):
-                _ze_pzm = {"up": 0.2, "down": 1.2, "chase_low": 1.5}
+                _ze_pzm = {"up": 0.2, "down": 1.2, "chase_low": 1.5, "glove": 0.8, "arm": 0.8}
             elif pt_name == "Changeup":
-                _ze_pzm = {"up": 0.2, "down": 1.4, "chase_low": 1.4}
+                _ze_pzm = {"up": 0.2, "down": 1.4, "chase_low": 1.4, "glove": 1.1, "arm": 1.0}
             else:
-                _ze_pzm = {"up": 0.3, "down": 1.2, "chase_low": 1.3}
+                _ze_pzm = {"up": 0.3, "down": 1.2, "chase_low": 1.3, "glove": 1.3, "arm": 0.8}
+        # Map hitter inside/outside to pitcher arm/glove based on platoon
+        _same = "Adv" in platoon_label
+        _in_z = "arm" if _same else "glove"
+        _out_z = "glove" if _same else "arm"
         best_exploit = 0
         for zn, zd in ze.items():
             if zd.get("n", 0) < 5:
                 continue
             zone_whiff = zd.get("whiff_pct", 0) or 0
             zone_csw = zd.get("csw_pct", 0) or 0
-            zone_quality = (zone_whiff * 0.5 + zone_csw * 0.5) * _ze_pzm.get(zn, 1.0)
-            # Boost if hitter sees lots of pitches in this zone (more exploitable)
-            # Map hitter inside/outside to pitcher arm/glove based on platoon
-            # "Platoon Adv" = same side: hitter inside = pitcher arm side
-            # Otherwise (opposite/neutral): hitter inside = pitcher glove side
-            _same = "Adv" in platoon_label
-            _in_z = "arm" if _same else "glove"
-            _out_z = "glove" if _same else "arm"
+            zone_quality = (zone_csw * 0.6 + zone_whiff * 0.4) * _ze_pzm.get(zn, 1.0)
             exposure_boost = 1.0
             if zn == "up" and not pd.isna(hitter_high) and hitter_high > 30:
                 exposure_boost = 1.2
-            elif zn == "down" and not pd.isna(hitter_low) and hitter_low > 30:
-                exposure_boost = 1.2
-            elif zn == _in_z and not pd.isna(hitter_in) and hitter_in > 25:
+            elif zn == "down" and not pd.isna(hitter_low) and hitter_low > 35:
                 exposure_boost = 1.15
-            elif zn == _out_z and not pd.isna(hitter_out) and hitter_out > 25:
+            elif zn == _in_z and not pd.isna(hitter_in) and hitter_in > 28:
+                exposure_boost = 1.15
+            elif zn == _out_z and not pd.isna(hitter_out) and hitter_out > 28:
                 exposure_boost = 1.15
             elif zn == "chase_low":
                 chase_pct = hd.get("chase_pct", np.nan)
@@ -3548,11 +3548,14 @@ def _build_3pitch_sequences(sorted_ps, hd, tun_df, seq_df):
                     parts.append(t12); wts.append(14)
                 if not pd.isna(t23):
                     parts.append(t23); wts.append(21)
-                # Sequence whiff (20%)
+                # Sequence whiff (20%) — penalize missing putaway data
                 if not pd.isna(sw12):
                     parts.append(min(sw12 / 50 * 100, 100)); wts.append(6)
                 if not pd.isna(sw23):
                     parts.append(min(sw23 / 50 * 100, 100)); wts.append(14)
+                else:
+                    # No putaway whiff data = unproven transition, score at 30
+                    parts.append(30); wts.append(14)
                 # Chase% (6%)
                 if not pd.isna(ch23):
                     parts.append(min(ch23 / 40 * 100, 100)); wts.append(4)
@@ -4497,14 +4500,21 @@ def _pitching_plan_content(tm, team, data, season_filter):
             primary = max(real_ps, key=lambda x: x[1].get("usage", 0) or 0) if real_ps else None
             # Best hard pitch by composite
             best_hard_p = real_hard[0] if real_hard else (real_ps[0] if real_ps else None)
-            # Putaway: best whiff% × 2K vulnerability blend
+            # Putaway: mirrors sequence builder putaway formula
+            # composite*0.50 + their_2k*0.25 + whiff*0.15 + chase*0.10
             def _putaway_score(item):
                 n, d = item
+                comp = d.get("score", 50)
                 our_w = d.get("our_whiff", 0) or 0
+                our_ch = d.get("our_chase", 0) or 0
                 is_h = n in _hard_pitches
                 their_2k = hd.get("whiff_2k_hard" if is_h else "whiff_2k_os", np.nan)
-                t2k = their_2k if not pd.isna(their_2k) else 0
-                return our_w * 0.5 + t2k * 0.5
+                sc = comp * 0.50
+                if not pd.isna(their_2k):
+                    sc += min(their_2k / 40 * 100, 100) * 0.25
+                sc += min(our_w / 50 * 100, 100) * 0.15
+                sc += min(our_ch / 40 * 100, 100) * 0.10
+                return sc
             putaway = max(real_ps, key=_putaway_score) if real_ps else None
             # Best bridge to putaway: pitch with best tunnel grade to putaway pitch
             bridge = None
@@ -4647,13 +4657,14 @@ def _pitching_plan_content(tm, team, data, season_filter):
                 count_lines.append(f"**1-0**: {best_hard_p[0]} {_early_zone(best_hard_p[0], best_hard_p[1])} — attack zone")
 
             # --- 0-1: Bridge pitch from sequence (tunnels P1→P2→P3) ---
+            # Use _early_zone — at 0-1 we want to expand but not "bury"
             if seq_p2 and seq_p3:
-                br_zone = _best_zone_for(seq_p2, ps_dict.get(seq_p2, {}))
+                br_zone = _early_zone(seq_p2, ps_dict.get(seq_p2, {}))
                 tun_tag = f" ({seq_t23_grade} tunnel → {seq_p3})" if seq_t23_grade not in ("-", "F") else f" (sets up {seq_p3})"
                 count_lines.append(f"**0-1**: {seq_p2} {br_zone or 'expand'}{tun_tag}")
             elif bridge:
                 br_name, _, br_grade = bridge
-                br_zone = _best_zone_for(br_name, ps_dict.get(br_name, {}))
+                br_zone = _early_zone(br_name, ps_dict.get(br_name, {}))
                 count_lines.append(f"**0-1**: {br_name} {br_zone or 'expand'} ({br_grade} tunnel → {putaway[0]})")
 
             # --- 2-1 / 1-1: Compete with primary ---
