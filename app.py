@@ -3371,12 +3371,12 @@ def _pitch_score_composite(pt_name, pt_data, hd, tun_df, platoon_label="Neutral"
         # 82 → 0, 88 → 50, 94+ → 100
         components.append(min(max((eff_velo - 82) / 12 * 100, 0), 100)); weights.append(3)
 
-    # 16. Our Usage (8%) — pitches we actually throw should rank higher; low-usage pitches
+    # 16. Our Usage (12%) — pitches we actually throw should rank higher; low-usage pitches
     #     have small samples and shouldn't be recommended as go-to options
     usage_pct = ars_pt.get("usage_pct", pt_data.get("usage", np.nan))
     if not pd.isna(usage_pct):
-        # 0% → 0, 15% → 40, 30% → 65, 50%+ → 90
-        components.append(min(max(usage_pct / 55 * 100, 0), 100)); weights.append(8)
+        # 0% → 0, 15% → 27, 30% → 55, 50%+ → 91
+        components.append(min(max(usage_pct / 55 * 100, 0), 100)); weights.append(12)
 
     # 17. Zone Exploitation (5%) — cross our best zone with their zone weakness
     ze = ars_pt.get("zone_eff", {})
@@ -4267,45 +4267,27 @@ def _pitching_plan_content(tm, team, data, season_filter):
                     "Tunnel": tun_info,
                 })
             st.dataframe(pd.DataFrame(pitch_rows), use_container_width=True, hide_index=True)
-            # ── 1st Pitch Plan ──
+            # ── 1st Pitch Plan (usage-aware) ──
             fp_hard = hd.get("fp_swing_hard", np.nan)
             fp_ch = hd.get("fp_swing_ch", np.nan)
             fp_lines = []
-            # Find best pitch per class by composite score
-            best_hard = max(
-                [(n, composites.get(n, 0)) for n, _ in sorted_ps if n in _hard_pitches and composites.get(n, 0) > 0],
-                key=lambda x: x[1], default=None,
-            )
-            best_os = max(
-                [(n, composites.get(n, 0)) for n, _ in sorted_ps if n not in _hard_pitches and composites.get(n, 0) > 0],
-                key=lambda x: x[1], default=None,
-            )
-            # Sort pitches by CSW% for 0-0 pitch selection (not overall composite)
-            csw_sorted = sorted(sorted_ps, key=lambda x: x[1].get("our_csw", 0) or 0, reverse=True)
-            best_csw_pitch = csw_sorted[0] if csw_sorted else None
-            # Use composite score thresholds: if our best OS has comp > 55, it's a viable 1P option
-            if not pd.isna(fp_hard):
-                if fp_hard > 55:
-                    # Aggressive hitter — exploit with best offspeed if comp > 50, else use best CSW pitch on edges
-                    if best_os and best_os[1] > 50:
-                        fp_lines.append(f"Aggressive vs Hard 1P ({fp_hard:.0f}% swing) → **{best_os[0]}** ({best_os[1]:.0f}) to steal strike or get chase")
-                    elif best_csw_pitch:
-                        fp_lines.append(f"Aggressive vs Hard 1P ({fp_hard:.0f}% swing) → **{best_csw_pitch[0]}** ({best_csw_pitch[1].get('our_csw', 0):.0f}% CSW) on edges")
+            # Only consider real pitches (>= 10% usage) for 1st pitch recs
+            real_sorted = [(n, d) for n, d in sorted_ps if d.get("usage", 0) >= 10]
+            if not real_sorted:
+                real_sorted = sorted_ps[:3]
+            lead_pitch = real_sorted[0] if real_sorted else None
+            # Best offspeed among real pitches
+            real_os = [(n, d) for n, d in real_sorted if n not in _hard_pitches]
+            best_os = real_os[0] if real_os else None
+            if not pd.isna(fp_hard) and lead_pitch:
+                if fp_hard > 55 and best_os:
+                    fp_lines.append(f"Aggressive vs Hard 1P ({fp_hard:.0f}% swing) → **{best_os[0]}** ({composites.get(best_os[0], 0):.0f}) to steal strike")
                 elif fp_hard < 45:
-                    # Passive hitter — attack zone with highest CSW pitch
-                    if best_csw_pitch:
-                        fp_lines.append(f"Passive vs Hard 1P ({fp_hard:.0f}% swing) → Attack with **{best_csw_pitch[0]}** ({best_csw_pitch[1].get('our_csw', 0):.0f}% CSW) in zone")
+                    fp_lines.append(f"Passive vs Hard 1P ({fp_hard:.0f}% swing) → Attack with **{lead_pitch[0]}** ({composites.get(lead_pitch[0], 0):.0f}) in zone")
                 else:
-                    # Neutral — lead with highest CSW pitch
-                    if best_csw_pitch:
-                        fp_lines.append(f"Neutral vs Hard 1P ({fp_hard:.0f}% swing) → **{best_csw_pitch[0]}** ({best_csw_pitch[1].get('our_csw', 0):.0f}% CSW) in zone")
-            if not pd.isna(fp_ch) and fp_ch > 50 and best_os and best_os[1] > 50:
-                fp_lines.append(f"Swings at offspeed 1P ({fp_ch:.0f}%) → **{best_os[0]}** ({best_os[1]:.0f}) can get early chase")
-            if not fp_lines:
-                if best_csw_pitch:
-                    fp_lines.append(f"Lead with **{best_csw_pitch[0]}** ({best_csw_pitch[1].get('our_csw', 0):.0f}% CSW) in zone")
-                elif sorted_ps:
-                    fp_lines.append(f"Lead with **{sorted_ps[0][0]}** ({composites.get(sorted_ps[0][0], 0):.0f})")
+                    fp_lines.append(f"Lead with **{lead_pitch[0]}** ({composites.get(lead_pitch[0], 0):.0f}) in zone")
+            if not fp_lines and lead_pitch:
+                fp_lines.append(f"Lead with **{lead_pitch[0]}** ({composites.get(lead_pitch[0], 0):.0f}) in zone")
             st.markdown("**1st Pitch Plan**")
             for line in fp_lines:
                 st.markdown(f"- {line}")
@@ -4368,43 +4350,33 @@ def _pitching_plan_content(tm, team, data, season_filter):
             if zone_target_lines:
                 st.markdown("**Zone Targets**")
                 st.markdown(" | ".join(zone_target_lines))
-            # ── Count Plan (7 counts) ──
+            # ── Count Plan (simplified, usage-aware) ──
             count_plan_lines = []
-            # Sort by different criteria for different count contexts
-            csw_top = sorted(sorted_ps, key=lambda x: x[1].get("our_csw", 0) or 0, reverse=True)
-            whiff_top = sorted(sorted_ps, key=lambda x: x[1].get("our_whiff", 0) or 0, reverse=True)
-            chase_top = sorted(sorted_ps, key=lambda x: x[1].get("our_chase", 0) or 0, reverse=True)
-            comp_top = sorted_ps  # already sorted by composite
-            # 0-0: Best CSW% pitch — goal is strike 1
-            if csw_top:
-                p = csw_top[0]
-                count_plan_lines.append(f"**0-0**: {p[0]} zone ({p[1].get('our_csw', 0):.0f}% CSW)")
-            # 1-0: Still need a strike — best CSW pitch
-            if csw_top:
-                p = csw_top[0]
-                count_plan_lines.append(f"**1-0**: {p[0]} zone")
-            # 0-1: Expand — best composite pitch on edges
-            if comp_top:
-                p = comp_top[0]
-                count_plan_lines.append(f"**0-1**: {p[0]} expand")
-            # 2-0 / 2-1: Hitter's count — pitch carefully, best CSW on edges
-            if csw_top and len(csw_top) >= 2:
-                p = csw_top[0]
-                count_plan_lines.append(f"**2-0**: {p[0]} edge only")
-            # 0-2 / 1-2: Putaway — best whiff pitch, bury
-            if whiff_top:
-                p = whiff_top[0]
-                whiff_val = p[1].get("our_whiff", 0) or 0
-                count_plan_lines.append(f"**0-2**: {p[0]} bury ({whiff_val:.0f}% whiff)")
-            # 3-2: Full count — best CSW pitch, compete in zone
-            if csw_top:
-                p = csw_top[0]
-                count_plan_lines.append(f"**3-2**: {p[0]} compete")
+            # Filter to real pitches only (>= 10% usage) for count plan recommendations
+            real_ps = [(n, d) for n, d in sorted_ps if d.get("usage", 0) >= 10]
+            if not real_ps:
+                real_ps = sorted_ps[:3]  # fallback to top 3 by composite
+            # Best primary pitch by composite (already includes usage weight)
+            primary = real_ps[0] if real_ps else None
+            # Best putaway: highest whiff% among real pitches
+            putaway = max(real_ps, key=lambda x: x[1].get("our_whiff", 0) or 0) if real_ps else None
+            # Best secondary (different from primary)
+            secondary = real_ps[1] if len(real_ps) >= 2 else None
+            if primary:
+                count_plan_lines.append(f"**0-0 / 1-0**: {primary[0]} zone ({primary[1].get('our_csw', 0):.0f}% CSW)")
+            if secondary:
+                count_plan_lines.append(f"**0-1 / 1-1**: {secondary[0]} expand")
+            if primary:
+                count_plan_lines.append(f"**2-0 / 3-2**: {primary[0]} compete")
+            if putaway:
+                whiff_val = putaway[1].get("our_whiff", 0) or 0
+                count_plan_lines.append(f"**0-2 / 1-2**: {putaway[0]} bury ({whiff_val:.0f}% whiff)")
             # Discipline adaptation
             their_chase = hd.get("chase_pct", np.nan)
             their_bb = hd.get("bb_pct", np.nan)
-            if not pd.isna(their_chase) and their_chase > 30 and chase_top:
-                count_plan_lines.append(f"*Chaser ({their_chase:.0f}%) — expand early with {chase_top[0][0]}*")
+            if not pd.isna(their_chase) and their_chase > 30:
+                chase_pitch = max(real_ps, key=lambda x: x[1].get("our_chase", 0) or 0)
+                count_plan_lines.append(f"*Chaser ({their_chase:.0f}%) — expand early with {chase_pitch[0]}*")
             elif not pd.isna(their_bb) and their_bb > 12:
                 count_plan_lines.append(f"*Patient ({their_bb:.0f}% BB) — attack zone, don't nibble*")
             if count_plan_lines:
