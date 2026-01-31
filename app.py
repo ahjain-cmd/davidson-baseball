@@ -856,9 +856,9 @@ def savant_color(pct, higher_is_better=True):
 
 def _pctile_text_color(bg_color):
     """Return white or dark text depending on background brightness."""
-    # Light backgrounds: gray, orange, gold
-    light_bgs = {"#9e9e9e", "#d4a017", "#ee7e1e", "#6a9bc3", "#aaa"}
-    return "#1a1a2e" if bg_color in light_bgs else "#ffffff"
+    # Dark backgrounds need white text; light/mid backgrounds need dark text
+    dark_bgs = {"#14365d", "#1f5f8b", "#3d7dab", "#be0000", "#d22d49", "#e65730"}
+    return "#ffffff" if bg_color in dark_bgs else "#1a1a2e"
 
 
 def render_savant_percentile_section(metrics_data, title=None, legend=None):
@@ -902,7 +902,8 @@ def render_savant_percentile_section(metrics_data, title=None, legend=None):
             f'<div style="position:absolute;left:{bar_left}%;top:50%;transform:translate(-50%,-50%);'
             f'width:28px;height:28px;border-radius:50%;background:{color};border:3px solid white;'
             f'box-shadow:0 1px 4px rgba(0,0,0,0.3);display:flex;align-items:center;justify-content:center;'
-            f'font-size:10px;font-weight:800;color:{txt_color} !important;">{display_pct}</div>'
+            f'font-size:10px;font-weight:800;color:{txt_color} !important;'
+            f'text-shadow:0 0 2px rgba(0,0,0,0.3);">{display_pct}</div>'
             f'</div>'
             # Value
             f'<div style="min-width:50px;text-align:right;font-size:12px;font-weight:700;color:#1a1a2e !important;">'
@@ -3565,54 +3566,94 @@ def _scouting_hitter_report(tm, team, trackman_data):
             zones = [farlft, lftctr, deadctr, rtctr, farrt]
             zone_labels = ["Far Left", "Left-Ctr", "Dead Ctr", "Right-Ctr", "Far Right"]
             if any(not pd.isna(z) for z in zones):
-                # Build a polar/fan spray chart
-                # go already imported at top level
-                # Compute angles for 5 zones: fan from ~20° to ~160°
-                angles_mid = [25, 55, 90, 125, 155]  # degrees from first-base line
+                # Build a polar/fan spray chart (viewed from above, catcher's perspective)
+                # Angles: 0° = straight up (center field), negative = left, positive = right
+                # Zone order: FarLft, LftCtr, DeadCtr, RtCtr, FarRt
+                # From catcher view: FarLft = right side of chart, FarRt = left side
+                angles_mid = [60, 30, 0, -30, -60]  # degrees from center field
                 angle_width = 28
                 fig_spray = go.Figure()
+
+                # Draw foul lines and outfield arc for context
+                fl_r = 115
+                # Left field foul line (from home plate going up-right)
+                fl_angle_l = math.radians(45)
+                fig_spray.add_trace(go.Scatter(
+                    x=[0, fl_r * math.sin(fl_angle_l)], y=[0, fl_r * math.cos(fl_angle_l)],
+                    mode="lines", line=dict(color="rgba(0,0,0,0.15)", width=1, dash="dot"),
+                    showlegend=False, hoverinfo="skip",
+                ))
+                # Right field foul line
+                fl_angle_r = math.radians(-45)
+                fig_spray.add_trace(go.Scatter(
+                    x=[0, fl_r * math.sin(fl_angle_r)], y=[0, fl_r * math.cos(fl_angle_r)],
+                    mode="lines", line=dict(color="rgba(0,0,0,0.15)", width=1, dash="dot"),
+                    showlegend=False, hoverinfo="skip",
+                ))
+                # Outfield arc
+                arc_pts = 30
+                arc_x, arc_y = [], []
+                for j in range(arc_pts + 1):
+                    t = math.radians(-45 + 90 * j / arc_pts)
+                    arc_x.append(fl_r * math.sin(t))
+                    arc_y.append(fl_r * math.cos(t))
+                fig_spray.add_trace(go.Scatter(
+                    x=arc_x, y=arc_y, mode="lines",
+                    line=dict(color="rgba(0,0,0,0.1)", width=1, dash="dot"),
+                    showlegend=False, hoverinfo="skip",
+                ))
+
                 max_val = max((z for z in zones if not pd.isna(z)), default=1)
                 for i, (z, lbl, ang) in enumerate(zip(zones, zone_labels, angles_mid)):
                     if pd.isna(z):
                         continue
-                    # Normalize: radius proportional to percentage
-                    r = z / max(max_val, 1) * 100
+                    # Radius proportional to percentage (scale to fill chart)
+                    r = z / max(max_val, 1) * 105
                     theta0 = math.radians(ang - angle_width / 2)
                     theta1 = math.radians(ang + angle_width / 2)
-                    # Build wedge as filled shape
-                    n_pts = 15
+                    # Build wedge: sin for x, cos for y (baseball coordinates)
+                    n_pts = 20
                     path_x = [0]
                     path_y = [0]
                     for j in range(n_pts + 1):
                         t = theta0 + (theta1 - theta0) * j / n_pts
-                        path_x.append(r * math.cos(t))
-                        path_y.append(r * math.sin(t))
+                        path_x.append(r * math.sin(t))
+                        path_y.append(r * math.cos(t))
                     path_x.append(0)
                     path_y.append(0)
-                    # Color intensity based on value
+                    # Color: darker = more hits
                     intensity = min(z / max(max_val, 1), 1.0)
-                    r_c = int(190 - intensity * 160)
-                    g_c = int(210 - intensity * 180)
-                    b_c = int(230 - intensity * 30)
-                    color = f"rgba({r_c},{g_c},{b_c},0.8)"
+                    r_c = int(220 - intensity * 180)
+                    g_c = int(225 - intensity * 185)
+                    b_c = int(240 - intensity * 50)
+                    color = f"rgba({r_c},{g_c},{b_c},0.85)"
                     fig_spray.add_trace(go.Scatter(
                         x=path_x, y=path_y, fill="toself", fillcolor=color,
-                        line=dict(color="white", width=1),
+                        line=dict(color="white", width=2),
                         name=lbl, text=f"{lbl}: {z:.1f}%",
                         hoverinfo="text", showlegend=False,
                     ))
                     # Label
-                    lbl_r = r * 0.6
+                    lbl_r = r * 0.55
                     lbl_t = math.radians(ang)
                     fig_spray.add_annotation(
-                        x=lbl_r * math.cos(lbl_t), y=lbl_r * math.sin(lbl_t),
+                        x=lbl_r * math.sin(lbl_t), y=lbl_r * math.cos(lbl_t),
                         text=f"<b>{z:.0f}%</b>", showarrow=False,
-                        font=dict(size=11, color="#1a1a2e"), bgcolor="rgba(255,255,255,0.7)",
+                        font=dict(size=12, color="#1a1a2e"), bgcolor="rgba(255,255,255,0.8)",
                     )
+
+                # Field labels
+                fig_spray.add_annotation(x=-85, y=85, text="<b>LF</b>", showarrow=False,
+                                         font=dict(size=10, color="rgba(0,0,0,0.3)"))
+                fig_spray.add_annotation(x=0, y=118, text="<b>CF</b>", showarrow=False,
+                                         font=dict(size=10, color="rgba(0,0,0,0.3)"))
+                fig_spray.add_annotation(x=85, y=85, text="<b>RF</b>", showarrow=False,
+                                         font=dict(size=10, color="rgba(0,0,0,0.3)"))
+
                 fig_spray.update_layout(
-                    **CHART_LAYOUT, height=260,
-                    xaxis=dict(visible=False, range=[-110, 110]),
-                    yaxis=dict(visible=False, range=[-10, 115], scaleanchor="x"),
+                    **CHART_LAYOUT, height=360,
+                    xaxis=dict(visible=False, range=[-130, 130]),
+                    yaxis=dict(visible=False, range=[-10, 130], scaleanchor="x"),
                     showlegend=False,
                 )
                 st.plotly_chart(fig_spray, use_container_width=True)
