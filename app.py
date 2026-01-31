@@ -2976,6 +2976,32 @@ def _get_our_pitcher_arsenal(data, pitcher_name, season_filter=None):
             sp = stuff_df[stuff_df["TaggedPitchType"] == pt_name]["StuffPlus"]
             if len(sp) > 0:
                 stuff_plus = sp.mean()
+        # Per-pitch zone effectiveness (where this pitch is best from Trackman)
+        loc_grp = grp.dropna(subset=["PlateLocSide", "PlateLocHeight"])
+        zone_mid_h = (ZONE_HEIGHT_BOT + ZONE_HEIGHT_TOP) / 2
+        zone_eff = {}
+        for zn, zmask in [
+            ("up", loc_grp["PlateLocHeight"] >= zone_mid_h),
+            ("down", (loc_grp["PlateLocHeight"] < zone_mid_h) & (loc_grp["PlateLocHeight"] >= ZONE_HEIGHT_BOT)),
+            ("glove", loc_grp["PlateLocSide"] > 0 if throws == "Right" else loc_grp["PlateLocSide"] < 0),
+            ("arm", loc_grp["PlateLocSide"] <= 0 if throws == "Right" else loc_grp["PlateLocSide"] >= 0),
+            ("chase_low", loc_grp["PlateLocHeight"] < ZONE_HEIGHT_BOT),
+        ]:
+            zdf = loc_grp[zmask]
+            if len(zdf) >= 5:
+                z_sw = zdf[zdf["PitchCall"].isin(SWING_CALLS)]
+                z_wh = zdf[zdf["PitchCall"] == "StrikeSwinging"]
+                z_ip = zdf[zdf["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
+                zone_eff[zn] = {
+                    "n": len(zdf), "whiff_pct": len(z_wh) / max(len(z_sw), 1) * 100 if len(z_sw) > 0 else np.nan,
+                    "csw_pct": len(zdf[zdf["PitchCall"].isin(["StrikeCalled", "StrikeSwinging"])]) / len(zdf) * 100,
+                    "ev_against": z_ip["ExitSpeed"].mean() if len(z_ip) > 0 else np.nan,
+                }
+        # Compute effective velocity estimate
+        eff_velo = np.nan
+        if loc_grp["RelSpeed"].notna().any() and len(loc_grp) >= 5:
+            loc_adj = (loc_grp["PlateLocHeight"] - 2.5) * 1.5 + loc_grp["PlateLocSide"].abs() * (-0.5)
+            eff_velo = (loc_grp["RelSpeed"] + loc_adj).mean()
         arsenal["pitches"][pt_name] = {
             "usage_pct": len(grp) / len(pdf) * 100,
             "avg_velo": grp["RelSpeed"].mean() if grp["RelSpeed"].notna().any() else np.nan,
@@ -2988,6 +3014,8 @@ def _get_our_pitcher_arsenal(data, pitcher_name, season_filter=None):
             "ev_against": ip["ExitSpeed"].mean() if len(ip) > 0 else np.nan,
             "stuff_plus": stuff_plus,
             "count": len(grp),
+            "eff_velo": eff_velo,
+            "zone_eff": zone_eff,
         }
     # Tunnel scores and pitch pair sequencing results
     arsenal["tunnels"] = _compute_tunnel_score(pdf)
@@ -3835,12 +3863,14 @@ def _pitching_plan_content(tm, team, data, season_filter):
     # ── Tunnel Grades + Best Sequences ──
     tunnels = arsenal.get("tunnels", pd.DataFrame())
     sequences = arsenal.get("sequences", pd.DataFrame())
-    # Filter sequences to only include pitches thrown >= 10 times
+    # Filter sequences: pitches thrown >= 10 times AND sequence n >= 20
     if isinstance(sequences, pd.DataFrame) and not sequences.empty:
         valid_pitches = {name for name, pt in arsenal["pitches"].items() if pt.get("count", 0) >= 10}
         sequences = sequences[
             sequences["Setup Pitch"].isin(valid_pitches) & sequences["Follow Pitch"].isin(valid_pitches)
         ]
+        if "Count" in sequences.columns:
+            sequences = sequences[sequences["Count"] >= 20]
     col_tun, col_seq = st.columns(2)
     with col_tun:
         st.markdown("**Tunnel Grades**")
@@ -4154,6 +4184,19 @@ def _pitching_plan_content(tm, team, data, season_filter):
                 their_2k = hd.get("whiff_2k_hard" if is_hard else "whiff_2k_os", np.nan)
                 sw_key = _swing_map.get(pt_name, "")
                 their_sw = hd.get(sw_key, np.nan) if sw_key else np.nan
+                # Pull IVB, EffVelo, zone data from arsenal
+                ars_pt = arsenal["pitches"].get(pt_name, {})
+                ivb_val = ars_pt.get("ivb", np.nan)
+                eff_velo_val = ars_pt.get("eff_velo", np.nan)
+                # Best zone for this pitch (highest whiff%)
+                ze = ars_pt.get("zone_eff", {})
+                best_zone_str = "-"
+                if ze:
+                    best_z = max(ze.items(), key=lambda x: x[1].get("whiff_pct", 0) or 0, default=None)
+                    if best_z and best_z[1].get("n", 0) >= 8:
+                        bz_whiff = best_z[1].get("whiff_pct", np.nan)
+                        if not pd.isna(bz_whiff) and bz_whiff > 0:
+                            best_zone_str = f"{best_z[0]} ({bz_whiff:.0f}%)"
                 # Best tunnel partner
                 tun_info = "-"
                 if isinstance(tunnels, pd.DataFrame) and not tunnels.empty:
@@ -4164,13 +4207,16 @@ def _pitching_plan_content(tm, team, data, season_filter):
                         tun_info = f"{bt['Grade']} w/{partner}"
                 pitch_rows.append({
                     "Pitch": pt_name,
-                    "Composite": int(composites.get(pt_name, 50)),
+                    "Comp": int(composites.get(pt_name, 50)),
                     "S+": _hfmt(pt_data.get("stuff_plus")),
+                    "IVB": _hfmt(ivb_val),
+                    "EffV": _hfmt(eff_velo_val),
                     "Whiff%": _hfmt(pt_data.get("our_whiff")),
                     "CSW%": _hfmt(pt_data.get("our_csw")),
-                    "Their 2K": _hfmt(their_2k),
-                    "Their Sw%": _hfmt(their_sw),
                     "Chase%": _hfmt(pt_data.get("our_chase")),
+                    "Best Zone": best_zone_str,
+                    "2K Whiff": _hfmt(their_2k),
+                    "Sw%": _hfmt(their_sw),
                     "Tunnel": tun_info,
                 })
             st.dataframe(pd.DataFrame(pitch_rows), use_container_width=True, hide_index=True)
@@ -4229,33 +4275,60 @@ def _pitching_plan_content(tm, team, data, season_filter):
             st.markdown("**1st Pitch Plan**")
             for line in fp_lines:
                 st.markdown(f"- {line}")
-            # ── Zone Targets per Pitch ──
-            # Cross hitter zone weaknesses with our pitch strengths
+            # ── Zone Targets per Pitch (data-driven from Trackman + handedness) ──
             zone_target_lines = []
-            h_high = hd.get("high_pct", np.nan)
-            h_low = hd.get("low_pct", np.nan)
-            h_inside = hd.get("inside_pct", np.nan)
-            h_outside = hd.get("outside_pct", np.nan)
-            their_chase = hd.get("chase_pct", np.nan)
+            our_throws = arsenal["throws"]  # "Right" or "Left"
+            their_bats = matchup["bats"]  # "R", "L", "S"
+            # Determine "in" and "away" labels based on matchup
+            # Same-side: "in" = arm-side, "away" = glove-side
+            # Opposite: "in" = glove-side, "away" = arm-side
+            same_side = (our_throws == "Right" and their_bats in ("R", "Right")) or \
+                        (our_throws == "Left" and their_bats in ("L", "Left"))
             for pt_name, pt_data in sorted_ps[:4]:  # top 4 pitches
                 is_hard = pt_name in _hard_pitches
+                ze = pt_data.get("zone_eff", {}) if isinstance(pt_data, dict) else {}
+                # Also check arsenal for zone_eff
+                if not ze:
+                    ars_pt = arsenal["pitches"].get(pt_name, {})
+                    ze = ars_pt.get("zone_eff", {})
                 targets = []
-                # Hard stuff: up-and-in or up if hitter vulnerable high, else challenge in zone
-                if is_hard:
-                    if not pd.isna(h_high) and h_high > 30:
-                        targets.append("up in zone")
-                    elif not pd.isna(h_inside) and h_inside > 28:
-                        targets.append("in on hands")
-                    else:
-                        targets.append("middle-in")
+                # Find best zone by whiff% or CSW%
+                best_zone, best_val = None, 0
+                for zn, zd in ze.items():
+                    csw = zd.get("csw_pct", 0) or 0
+                    wh = zd.get("whiff_pct", 0) or 0
+                    combined = csw * 0.6 + wh * 0.4
+                    if combined > best_val and zd.get("n", 0) >= 8:
+                        best_val = combined
+                        best_zone = zn
+                if best_zone:
+                    # Translate zone names to hitter-perspective labels
+                    zone_labels = {
+                        "up": "up in zone",
+                        "down": "low in zone",
+                        "glove": "away" if same_side else "in on hands",
+                        "arm": "in on hands" if same_side else "away",
+                        "chase_low": "bury below zone",
+                    }
+                    label = zone_labels.get(best_zone, best_zone)
+                    wh_pct = ze[best_zone].get("whiff_pct", np.nan)
+                    wh_str = f" ({wh_pct:.0f}% whiff)" if not pd.isna(wh_pct) and wh_pct > 0 else ""
+                    targets.append(f"{label}{wh_str}")
                 else:
-                    # Offspeed: down-and-away, or bury below zone if they chase
-                    if not pd.isna(their_chase) and their_chase > 28:
-                        targets.append("bury below zone")
-                    elif not pd.isna(h_outside) and h_outside > 28:
-                        targets.append("back door")
+                    # Fallback: use generic rules with handedness
+                    if is_hard:
+                        if same_side:
+                            targets.append("up-and-in")
+                        else:
+                            targets.append("up-and-away")
                     else:
-                        targets.append("low-away")
+                        their_chase = hd.get("chase_pct", np.nan)
+                        if not pd.isna(their_chase) and their_chase > 28:
+                            targets.append("bury below zone")
+                        elif same_side:
+                            targets.append("low-and-away")
+                        else:
+                            targets.append("back foot")
                 if targets:
                     zone_target_lines.append(f"**{pt_name}**: {', '.join(targets)}")
             if zone_target_lines:
