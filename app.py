@@ -4320,16 +4320,39 @@ def _pitching_plan_content(tm, team, data, season_filter):
     # ── Bullpen Cards ──
     st.markdown("---")
     section_header("Bullpen Cards")
-    # D1 swing stats for percentile computation
+    # D1-wide percentile series for all hitter tendency labels
     _all_sw = tm["hitting"].get("swing_stats", pd.DataFrame())
+    _all_sp = tm["hitting"].get("swing_pct", pd.DataFrame())
     _throws_key = "RHP" if arsenal["throws"] == "Right" else "LHP"
-    _2k_hard_col = f"2K Whiff vs {_throws_key} Hard"
-    _2k_os_col = f"2K Whiff vs {_throws_key} OS"
-    _2k_hard_series = pd.to_numeric(_all_sw[_2k_hard_col], errors="coerce").dropna() if _2k_hard_col in _all_sw.columns else pd.Series(dtype=float)
-    _2k_os_series = pd.to_numeric(_all_sw[_2k_os_col], errors="coerce").dropna() if _2k_os_col in _all_sw.columns else pd.Series(dtype=float)
-    # 1P swing% vs hard — for defining passive/aggressive by percentile
-    _fp_hard_col = "1PSwing% vs Hard Empty"
-    _fp_hard_series = pd.to_numeric(_all_sw[_fp_hard_col], errors="coerce").dropna() if _fp_hard_col in _all_sw.columns else pd.Series(dtype=float)
+    def _pct_series(df, col):
+        return pd.to_numeric(df[col], errors="coerce").dropna() if col in df.columns else pd.Series(dtype=float)
+    # 2K whiff rates (hand-matched)
+    _2k_hard_series = _pct_series(_all_sw, f"2K Whiff vs {_throws_key} Hard")
+    _2k_os_series = _pct_series(_all_sw, f"2K Whiff vs {_throws_key} OS")
+    # 1P swing% vs hard/CH
+    _fp_hard_series = _pct_series(_all_sw, "1PSwing% vs Hard Empty")
+    _fp_ch_series = _pct_series(_all_sw, "1PSwing% vs CH Empty")
+    # Overall swing% by pitch class
+    _sw_hard_series = _pct_series(_all_sp, "Swing% vs Hard")
+    _sw_sl_series = _pct_series(_all_sp, "Swing% vs SL")
+    _sw_cb_series = _pct_series(_all_sp, "Swing% vs CB")
+    _sw_ch_series = _pct_series(_all_sp, "Swing% vs CH")
+    # Map pitch class → percentile series
+    _sw_pct_map = {"swing_vs_hard": _sw_hard_series, "swing_vs_sl": _sw_sl_series,
+                   "swing_vs_cb": _sw_cb_series, "swing_vs_ch": _sw_ch_series}
+    # Helper: compute percentile with safety
+    def _pctile(series, val):
+        if pd.isna(val) or len(series) <= 10:
+            return np.nan
+        return percentileofscore(series, val, kind="rank")
+    # Helper: label a percentile
+    def _pct_label(pct):
+        if pct >= 85: return "elite"
+        if pct >= 70: return "above avg"
+        if pct >= 60: return "exploitable"
+        if pct <= 15: return "elite low"
+        if pct <= 30: return "below avg"
+        return "avg"
 
     for matchup in all_matchups:
         hd = matchup.get("hitter_data", {})
@@ -4428,11 +4451,11 @@ def _pitching_plan_content(tm, team, data, season_filter):
                 "arm": "in on hands" if same_side else "away",
                 "chase_low": "bury below zone",
             }
-            # Percentiles for 2K whiff
+            # Percentiles for all hitter tendencies
             their_2k_hard = hd.get("whiff_2k_hard", np.nan)
             their_2k_os = hd.get("whiff_2k_os", np.nan)
-            pct_2k_os = percentileofscore(_2k_os_series, their_2k_os, kind="rank") if not pd.isna(their_2k_os) and len(_2k_os_series) > 10 else np.nan
-            pct_2k_hard = percentileofscore(_2k_hard_series, their_2k_hard, kind="rank") if not pd.isna(their_2k_hard) and len(_2k_hard_series) > 10 else np.nan
+            pct_2k_os = _pctile(_2k_os_series, their_2k_os)
+            pct_2k_hard = _pctile(_2k_hard_series, their_2k_hard)
             # Pitch-design zone multiplier helper
             def _get_pzm(pname, p_ivb):
                 _is_h = pname in _hard_pitches
@@ -4556,7 +4579,7 @@ def _pitching_plan_content(tm, team, data, season_filter):
 
             # --- 0-0 / 1-0: First pitch decision ---
             # Passive/aggressive defined by D1 percentile of 1P swing% vs hard
-            fp_pct = percentileofscore(_fp_hard_series, fp_hard, kind="rank") if not pd.isna(fp_hard) and len(_fp_hard_series) > 10 else np.nan
+            fp_pct = _pctile(_fp_hard_series, fp_hard)
             fp_pitch = None
             fp_reason = ""
             if not pd.isna(fp_hard) and not pd.isna(fp_pct):
@@ -4613,8 +4636,7 @@ def _pitching_plan_content(tm, team, data, season_filter):
                 pw_2k_pct = pct_2k_hard if is_pw_hard else pct_2k_os
                 pw_str = f"**0-2 / 1-2**: {pw_name} {pw_zone or 'bury'} ({pw_whiff:.0f}% whiff)"
                 if not pd.isna(pw_2k) and not pd.isna(pw_2k_pct) and pw_2k_pct >= 60:
-                    pct_label = "elite" if pw_2k_pct >= 85 else "above avg" if pw_2k_pct >= 70 else "exploitable"
-                    pw_str += f" — {pw_2k:.0f}% 2K {'hard' if is_pw_hard else 'OS'} whiff ({pct_label})"
+                    pw_str += f" — {pw_2k:.0f}% 2K {'hard' if is_pw_hard else 'OS'} whiff ({_pct_label(pw_2k_pct)}, {pw_2k_pct:.0f}th %ile)"
                 count_lines.append(pw_str)
 
             # Discipline note (only if extreme)
@@ -4651,29 +4673,41 @@ def _pitching_plan_content(tm, team, data, season_filter):
                     })
                 st.dataframe(pd.DataFrame(seq_rows), use_container_width=True, hide_index=True)
 
-            # ── Key Hitter Notes (only notable vulnerabilities, max 2-3 lines) ──
+            # ── Key Hitter Notes (percentile-defined outliers only) ──
             notes = []
-            # Only flag swing tendencies that are truly outlier (>50% or <20%)
+            # Swing tendencies by pitch class — only flag if percentile is outlier AND we have the pitch
             swing_items = [
-                ("swing_vs_sl", "Slider"), ("swing_vs_cb", "Curveball"), ("swing_vs_ch", "Changeup"),
+                ("swing_vs_hard", "Fastball"), ("swing_vs_sl", "Slider"),
+                ("swing_vs_cb", "Curveball"), ("swing_vs_ch", "Changeup"),
             ]
             for key, label in swing_items:
                 sw = hd.get(key, np.nan)
                 if pd.isna(sw):
                     continue
-                # Only flag if we have this pitch and it's notable
-                if label not in dict(sorted_ps):
+                if label not in ps_dict:
                     continue
-                if sw >= 50:
-                    notes.append(f"Swings at **{label}** ({sw:.0f}%) — tunnel into it, then expand")
-                elif sw <= 18:
-                    notes.append(f"Won't swing at **{label}** ({sw:.0f}%) — use for called strikes")
-            # Chase note if very high
+                sw_pct = _pctile(_sw_pct_map.get(key, pd.Series(dtype=float)), sw)
+                if pd.isna(sw_pct):
+                    continue
+                if sw_pct >= 75:
+                    notes.append(f"Aggressive vs **{label}** ({sw:.0f}%, {sw_pct:.0f}th %ile) — tunnel into it, expand")
+                elif sw_pct <= 25:
+                    notes.append(f"Won't swing at **{label}** ({sw:.0f}%, {sw_pct:.0f}th %ile) — use for called strikes")
+            # 2K whiff context (if not already shown in putaway line)
+            if not pd.isna(pct_2k_os) and pct_2k_os >= 65:
+                os_names = [n for n in ps_dict if n not in _hard_pitches][:2]
+                if os_names:
+                    notes.append(f"2K OS whiff: **{their_2k_os:.0f}%** ({_pct_label(pct_2k_os)}, {pct_2k_os:.0f}th %ile) — finish with **{' / '.join(os_names)}**")
+            if not pd.isna(pct_2k_hard) and pct_2k_hard >= 65:
+                hard_names = [n for n in ps_dict if n in _hard_pitches][:2]
+                if hard_names:
+                    notes.append(f"2K hard whiff: **{their_2k_hard:.0f}%** ({_pct_label(pct_2k_hard)}, {pct_2k_hard:.0f}th %ile) — finish with **{' / '.join(hard_names)}**")
+            # Chase / discipline
             if not pd.isna(their_chase_val) and their_chase_val < 18:
                 notes.append(f"Elite discipline ({their_chase_val:.0f}% chase) — must throw strikes")
             if notes:
                 st.markdown("**Key Notes**")
-                for n in notes[:3]:
+                for n in notes[:4]:
                     st.markdown(f"- {n}")
 
 
