@@ -1804,6 +1804,9 @@ def _pitching_overview(data, pitcher, season_filter, pdf, pdf_raw, pr, all_pitch
         st.dataframe(pd.DataFrame(arsenal_rows), use_container_width=True, hide_index=True)
 
     # Arsenal summary text
+    arsenal_summary = ", ".join(
+        f"{r['Pitch']} ({r['Use%']}%)" for r in arsenal_rows
+    )
     st.markdown(
         f'<p style="font-size:13px;color:#555;margin-top:4px;">'
         f'{display_name(pitcher)} relies on {len(main_pitches)} pitches: {arsenal_summary}</p>',
@@ -3467,37 +3470,41 @@ def _pitching_plan_content(tm, team, data, season_filter):
         if not pd.isna(their_2k):
             components.append(min(their_2k / 40 * 100, 100)); weights.append(15)
 
-        # 5. Chase Exploitation (12%) — our chase generation × their chase tendency
+        # 5. Chase Exploitation (10%) — our chase generation × their chase tendency
         our_chase = pt_data.get("our_chase", np.nan)
         their_chase = hd.get("chase_pct", np.nan)
         if not pd.isna(our_chase) and not pd.isna(their_chase):
-            components.append(min((our_chase * their_chase) / (30 * 30) * 100, 100)); weights.append(12)
+            components.append(min((our_chase * their_chase) / (30 * 30) * 100, 100)); weights.append(10)
 
-        # 6. Their Swing Rate vs Pitch Class (5%) — lower swing = easier called strikes
+        # 6. Their Swing Rate vs Pitch Class (7%) — HIGH swing = they engage with it
+        #    For offspeed: high swing = they chase/commit → good for whiffs
+        #    For hard stuff: high swing = they're aggressive → good for chase setups
         sw_key = _swing_map.get(pt_name, "")
         their_sw = hd.get(sw_key, np.nan) if sw_key else np.nan
         if not pd.isna(their_sw):
-            components.append(min(max((70 - their_sw) / 50 * 100, 0), 100)); weights.append(5)
+            components.append(min(their_sw / 70 * 100, 100)); weights.append(7)
 
-        # 7. Tunnel Score (8%) — best tunnel pair involving this pitch
+        # 7. Tunnel Score (8%) — AVERAGE tunnel score across all pairs involving this pitch
         if isinstance(tun_df, pd.DataFrame) and not tun_df.empty:
             t_m = tun_df[(tun_df["Pitch A"] == pt_name) | (tun_df["Pitch B"] == pt_name)]
             if not t_m.empty:
-                components.append(t_m.iloc[0]["Tunnel Score"]); weights.append(8)
+                components.append(t_m["Tunnel Score"].mean()); weights.append(8)
 
-        # 8. EV Against (10%) — penalize pitches we get hit hard on, reward weak contact
+        # 8. EV Against (8%) — penalize pitches we get hit hard on
         ev_ag = pt_data.get("our_ev_against", np.nan)
         if not pd.isna(ev_ag):
-            # 75 mph → 100, 90 mph → 50, 100 mph → 10
-            components.append(min(max((100 - ev_ag) / 25 * 100, 0), 100)); weights.append(10)
+            # 78 mph → 100, 87 mph → 50, 96 mph → 0 (centered on college avg ~87)
+            components.append(min(max((96 - ev_ag) / 18 * 100, 0), 100)); weights.append(8)
 
-        # 9. K-Prone Bonus (5%) — offspeed gets bigger boost vs K-prone hitters
+        # 9. K-Prone Factor (5%) — centered at 20% K: high K hitters are exploitable,
+        #    low K hitters penalize. Offspeed gets bigger boost vs K-prone.
         k_pct = hd.get("k_pct", np.nan)
         if not pd.isna(k_pct):
-            k_score = min(k_pct / 35 * 100, 100)  # 35% K → 100
+            # 10% K → 0, 20% K → 50, 35% K → 100
+            k_score = min(max((k_pct - 10) / 25 * 100, 0), 100)
             if not is_hard:
-                k_score *= 1.3  # offspeed exploits K-prone more
-            components.append(min(k_score, 100)); weights.append(5)
+                k_score = min(k_score * 1.25, 100)  # offspeed exploits K-prone more
+            components.append(k_score); weights.append(5)
 
         # 10. Platoon Factor (5%) — advantage/disadvantage adjustment
         plat_score = 50  # neutral
@@ -3507,44 +3514,63 @@ def _pitching_plan_content(tm, team, data, season_filter):
             plat_score = 25
         components.append(plat_score); weights.append(5)
 
-        # 11. wOBA Split (5%) — how well hitter performs vs our hand
+        # 11. wOBA Split (7%) — how well hitter performs vs our hand
         woba_split = hd.get("woba_split", np.nan)
         if not pd.isna(woba_split):
-            # .200 wOBA → 100 (exploitable), .350 → 50, .450 → 0 (danger)
-            components.append(min(max((0.450 - woba_split) / 0.250 * 100, 0), 100)); weights.append(5)
+            # .200 wOBA → 100 (exploitable), .330 → 50, .450 → 0 (danger)
+            components.append(min(max((0.450 - woba_split) / 0.250 * 100, 0), 100)); weights.append(7)
 
         if not weights:
             return 50
         return sum(c * w for c, w in zip(components, weights)) / sum(weights)
 
     def _build_3pitch_sequences(sorted_ps, hd, tun_df, seq_df):
-        """Build best 3-pitch sequences: setup → bridge → putaway."""
+        """Build best 3-pitch sequences: setup → bridge → putaway.
+        Enforces variety: no consecutive same pitch, dedupes by full sequence pattern."""
         pitches = [name for name, _ in sorted_ps]
+        pitch_data = dict(sorted_ps)
         if len(pitches) < 2:
             return []
         seqs = []
         for p1 in pitches:
             for p2 in pitches:
+                if p1 == p2:
+                    continue  # no consecutive same pitch
                 for p3 in pitches:
-                    if p1 == p2 == p3:
-                        continue
+                    if p2 == p3:
+                        continue  # no consecutive same pitch
                     t12, _ = _lookup_tunnel(p1, p2, tun_df)
                     t23, _ = _lookup_tunnel(p2, p3, tun_df)
                     sw12 = _lookup_seq(p1, p2, seq_df)
                     sw23 = _lookup_seq(p2, p3, seq_df)
-                    is_hard = p3 in _hard_pitches
-                    their_2k = hd.get("whiff_2k_hard" if is_hard else "whiff_2k_os", np.nan)
+                    is_hard_p3 = p3 in _hard_pitches
+                    their_2k = hd.get("whiff_2k_hard" if is_hard_p3 else "whiff_2k_os", np.nan)
                     parts, wts = [], []
+                    # Tunnel quality between pairs
                     if not pd.isna(t12):
-                        parts.append(t12); wts.append(15)
+                        parts.append(t12); wts.append(12)
                     if not pd.isna(t23):
-                        parts.append(t23); wts.append(20)
+                        parts.append(t23); wts.append(18)
+                    # Sequence whiff rates (actual data from our pitch pairs)
                     if not pd.isna(sw12):
-                        parts.append(min(sw12 / 50 * 100, 100)); wts.append(15)
+                        parts.append(min(sw12 / 50 * 100, 100)); wts.append(12)
                     if not pd.isna(sw23):
-                        parts.append(min(sw23 / 50 * 100, 100)); wts.append(25)
+                        parts.append(min(sw23 / 50 * 100, 100)); wts.append(22)
+                    # Hitter's 2K vulnerability on putaway pitch class
                     if not pd.isna(their_2k):
-                        parts.append(min(their_2k / 40 * 100, 100)); wts.append(25)
+                        parts.append(min(their_2k / 40 * 100, 100)); wts.append(20)
+                    # Putaway pitch quality (Stuff+ of P3)
+                    p3_stuff = pitch_data.get(p3, {}).get("stuff_plus", np.nan)
+                    if not pd.isna(p3_stuff):
+                        parts.append(min(max((p3_stuff - 70) / 60 * 100, 0), 100)); wts.append(8)
+                    # Setup pitch quality (Stuff+ of P1 — establishes the look)
+                    p1_stuff = pitch_data.get(p1, {}).get("stuff_plus", np.nan)
+                    if not pd.isna(p1_stuff):
+                        parts.append(min(max((p1_stuff - 70) / 60 * 100, 0), 100)); wts.append(4)
+                    # Pitch class variety bonus: reward mixing hard + offspeed
+                    classes = set("H" if p in _hard_pitches else "O" for p in (p1, p2, p3))
+                    if len(classes) == 2:
+                        parts.append(70); wts.append(4)  # uses both hard and offspeed
                     if not wts:
                         continue
                     combo = sum(p*w for p,w in zip(parts, wts)) / sum(wts)
@@ -3554,12 +3580,14 @@ def _pitching_plan_content(tm, team, data, season_filter):
                         "t12": t12, "t23": t23, "sw23": sw23, "their_2k": their_2k,
                     })
         seqs.sort(key=lambda x: x["score"], reverse=True)
-        seen_putaway = set()
+        # Dedupe: ensure variety — unique (P3 putaway, P1 setup) pairs
+        seen = set()
         top = []
         for s in seqs:
-            if s["p3"] not in seen_putaway:
+            key = (s["p3"], s["p1"])  # unique by putaway + setup combo
+            if key not in seen:
                 top.append(s)
-                seen_putaway.add(s["p3"])
+                seen.add(key)
             if len(top) >= 3:
                 break
         return top
@@ -3628,7 +3656,7 @@ def _pitching_plan_content(tm, team, data, season_filter):
                 their_sw = hd.get(sw_key, np.nan) if sw_key else np.nan
                 # Best tunnel partner
                 tun_info = "-"
-                if not isinstance(tunnels, pd.DataFrame) or not tunnels.empty:
+                if isinstance(tunnels, pd.DataFrame) and not tunnels.empty:
                     t_m = tunnels[(tunnels["Pitch A"]==pt_name)|(tunnels["Pitch B"]==pt_name)]
                     if not t_m.empty:
                         bt = t_m.iloc[0]
