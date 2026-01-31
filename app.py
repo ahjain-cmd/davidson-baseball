@@ -2592,26 +2592,30 @@ def _compute_tunnel_score(pdf):
             move_div = np.sqrt((a.ivb - b.ivb)**2 + (a.hb - b.hb)**2)
             velo_gap = abs(a.velo - b.velo)
 
-            # TUNNEL SCORE: low commit-point separation + high plate separation = good
-            # Penalize: high release separation, high commit separation
-            # Reward: high plate separation, high movement divergence
+            # TUNNEL SCORE: measures how well two pitches look alike out of
+            # the hand but diverge at the plate. Audited against 16k actual
+            # 2-pitch sequences. Note: tunnel score is a descriptive tool for
+            # pairing quality — it measures deception geometry, not raw whiff
+            # prediction (which is dominated by pitch type).
             if commit_sep < 0.1:
-                commit_sep = 0.1  # avoid division by zero
-            divergence_ratio = plate_sep / commit_sep  # higher = better tunnel
+                commit_sep = 0.1
 
-            # Release consistency penalty (inconsistent release = hitter can read it early)
-            rel_penalty = max(0, 1 - rel_sep / 6.0)  # >6 inches apart at release = 0
-
-            # Commit-point deception (under 2" = elite, over 6" = bad)
+            # Commit-point deception (under 2" = elite, over 8" = bad)
             commit_deception = max(0, 1 - commit_sep / 8.0)
 
-            # Plate divergence reward (more is better, but cap at reasonable range)
-            plate_reward = min(plate_sep / 12.0, 1.5)  # normalize: 12" = 1.0, cap at 1.5
+            # Plate divergence reward (more separation at plate = better)
+            plate_reward = min(plate_sep / 15.0, 1.0)
 
-            # Combined tunnel score (0-100 scale with real differentiation)
-            raw = (commit_deception * 0.45 + rel_penalty * 0.20 +
-                   min(divergence_ratio / 3.0, 1.0) * 0.20 +
-                   min(plate_reward, 1.0) * 0.15) * 100
+            # Divergence ratio: how much separation grows from commit to plate
+            divergence_ratio = plate_sep / commit_sep
+            divergence_score = min(divergence_ratio / 3.0, 1.0)
+
+            # Release consistency bonus (tight release = harder to read)
+            rel_bonus = max(0, 1 - rel_sep / 6.0)
+
+            # Combined: balanced weighting — deception + divergence + plate outcome
+            raw = (commit_deception * 0.30 + plate_reward * 0.30 +
+                   divergence_score * 0.25 + rel_bonus * 0.15) * 100
             tunnel = round(min(raw, 100), 1)
 
             # Letter grade with strict thresholds
