@@ -4429,50 +4429,55 @@ def _pitching_plan_content(tm, team, data, season_filter):
             best_hard_p = real_hard[0] if real_hard else (real_ps[0] if real_ps else None)
             their_chase_val = hd.get("chase_pct", np.nan)
 
-            # ── 1. HITTER SCOUTING — actionable hitter intel before the plan ──
-            scout_lines = []
-            # 1P tendency
+            # ── RESOLVE SEQUENCE FIRST so scouting can reference it ──
             fp_hard = hd.get("fp_swing_hard", np.nan)
             fp_pct = _pctile(_fp_hard_series, fp_hard)
             fp_context = ""
             if not pd.isna(fp_hard) and not pd.isna(fp_pct):
                 if fp_pct <= 25:
                     fp_context = "passive"
-                    best_os_name = real_os[0][0] if real_os else None
-                    if best_os_name:
-                        scout_lines.append(f"**1st Pitch**: Passive ({fp_pct:.0f}th %ile) — attack zone with {primary[0] if primary else 'hard stuff'}")
-                    else:
-                        scout_lines.append(f"**1st Pitch**: Passive ({fp_pct:.0f}th %ile) — attack zone early")
                 elif fp_pct >= 75:
                     fp_context = "aggressive"
-                    best_os_name = real_os[0][0] if real_os else None
-                    if best_os_name:
-                        scout_lines.append(f"**1st Pitch**: Aggressive ({fp_pct:.0f}th %ile) — steal with {best_os_name}")
-                    else:
-                        scout_lines.append(f"**1st Pitch**: Aggressive ({fp_pct:.0f}th %ile) — use offspeed early")
-            # 2K vulnerability
-            _2k_hard_val = hd.get("whiff_2k_hard", np.nan)
-            _2k_os_val = hd.get("whiff_2k_os", np.nan)
-            # Pick the class we can actually exploit (match to our arsenal)
-            _2k_lines = []
-            if not pd.isna(_2k_os_val) and real_os:
-                _2k_os_pct = pct_2k_os
-                if not pd.isna(_2k_os_pct):
-                    os_names = " / ".join([n for n, _ in real_os[:2]])
-                    if _2k_os_pct >= 65:
-                        _2k_lines.append(f"**2-Strike**: {_2k_os_val:.0f}% 2K OS whiff ({_pct_label(_2k_os_pct)}) — bury {os_names}")
-                    elif _2k_os_pct <= 25:
-                        _2k_lines.append(f"**2-Strike**: Only {_2k_os_val:.0f}% 2K OS whiff ({_pct_label(_2k_os_pct)}) — tough to put away with offspeed")
-            if not pd.isna(_2k_hard_val) and real_hard:
-                _2k_hard_pct = pct_2k_hard
-                if not pd.isna(_2k_hard_pct):
-                    hard_names = " / ".join([n for n, _ in real_hard[:2]])
-                    if _2k_hard_pct >= 65:
-                        _2k_lines.append(f"**2-Strike**: {_2k_hard_val:.0f}% 2K hard whiff ({_pct_label(_2k_hard_pct)}) — blow {hard_names} by them")
-                    elif _2k_hard_pct <= 25 and not any("tough" in l for l in _2k_lines):
-                        _2k_lines.append(f"**2-Strike**: Only {_2k_hard_val:.0f}% 2K hard whiff ({_pct_label(_2k_hard_pct)}) — won't whiff on hard stuff")
-            if _2k_lines:
-                scout_lines.append(_2k_lines[0])  # best insight only
+
+            # Determine the active sequence (the one that drives the game plan)
+            seq_p1, seq_p2, seq_p3 = None, None, None
+            g12, g23 = "-", "-"
+            active_seq = None
+            if top_seqs:
+                active_seq = top_seqs[0]
+                seq_p1, seq_p2, seq_p3 = active_seq["p1"], active_seq["p2"], active_seq["p3"]
+                _, g12 = _lookup_tunnel(seq_p1, seq_p2, tunnels)
+                _, g23 = _lookup_tunnel(seq_p2, seq_p3, tunnels)
+                # Aggressive-1P override: swap to offspeed-starting seq
+                if fp_context == "aggressive" and seq_p1 in _hard_pitches and real_os:
+                    os_seqs = [s for s in top_seqs if s["p1"] not in _hard_pitches]
+                    if os_seqs:
+                        active_seq = os_seqs[0]
+                        seq_p1, seq_p2, seq_p3 = active_seq["p1"], active_seq["p2"], active_seq["p3"]
+                        _, g12 = _lookup_tunnel(seq_p1, seq_p2, tunnels)
+                        _, g23 = _lookup_tunnel(seq_p2, seq_p3, tunnels)
+
+            # ── 1. HITTER SCOUTING — references actual game plan pitches ──
+            scout_lines = []
+            # 1P tendency — reference the actual 0-0 pitch
+            if fp_context:
+                p0_name = seq_p1 or (primary[0] if primary else None)
+                if fp_context == "passive":
+                    scout_lines.append(f"**1st Pitch**: Passive ({fp_pct:.0f}th %ile) — attack zone with {p0_name or 'hard stuff'}")
+                elif fp_context == "aggressive":
+                    scout_lines.append(f"**1st Pitch**: Aggressive ({fp_pct:.0f}th %ile) — steal with {p0_name or 'offspeed'}")
+            # 2K vulnerability — reference the actual putaway pitch
+            pw_pitch = seq_p3  # from the resolved sequence
+            if pw_pitch:
+                is_pw_hard = pw_pitch in _hard_pitches
+                pw_2k_val = hd.get("whiff_2k_hard" if is_pw_hard else "whiff_2k_os", np.nan)
+                pw_2k_pctile = pct_2k_hard if is_pw_hard else pct_2k_os
+                if not pd.isna(pw_2k_val) and not pd.isna(pw_2k_pctile):
+                    cls_label = "hard" if is_pw_hard else "OS"
+                    if pw_2k_pctile >= 65:
+                        scout_lines.append(f"**2-Strike**: {pw_2k_val:.0f}% 2K {cls_label} whiff ({_pct_label(pw_2k_pctile)}) — bury {pw_pitch}")
+                    elif pw_2k_pctile <= 25:
+                        scout_lines.append(f"**2-Strike**: Only {pw_2k_val:.0f}% 2K {cls_label} whiff ({_pct_label(pw_2k_pctile)}) — tough to put away")
             # Swing tendencies by pitch class — only flag outliers we can exploit
             _class_pitches = {
                 "swing_vs_hard": [n for n in ps_dict if n in _hard_pitches],
@@ -4515,36 +4520,19 @@ def _pitching_plan_content(tm, team, data, season_filter):
                 for sl in scout_lines[:4]:
                     st.markdown(f"- {sl}")
 
-            # ── 2. GAME PLAN — count plan intertwined with sequences ──
-            # The count plan IS the top sequence, laid out by count.
-            # Each line shows what pitch, why (tunnel grade), and context.
-            if top_seqs:
-                best_seq = top_seqs[0]
-                seq_p1, seq_p2, seq_p3 = best_seq["p1"], best_seq["p2"], best_seq["p3"]
-                _, g12 = _lookup_tunnel(seq_p1, seq_p2, tunnels)
-                _, g23 = _lookup_tunnel(seq_p2, seq_p3, tunnels)
-                # Check for aggressive-1P override: swap to offspeed-starting seq
-                active_seq = best_seq
-                if fp_context == "aggressive" and seq_p1 in _hard_pitches and real_os:
-                    os_seqs = [s for s in top_seqs if s["p1"] not in _hard_pitches]
-                    if os_seqs:
-                        active_seq = os_seqs[0]
-                        seq_p1, seq_p2, seq_p3 = active_seq["p1"], active_seq["p2"], active_seq["p3"]
-                        _, g12 = _lookup_tunnel(seq_p1, seq_p2, tunnels)
-                        _, g23 = _lookup_tunnel(seq_p2, seq_p3, tunnels)
-                # Putaway data
+            # ── 2. GAME PLAN — count plan IS the sequence, laid out by count ──
+            if active_seq:
                 pw_whiff = ps_dict.get(seq_p3, {}).get("our_whiff", 0) or 0
                 is_pw_hard = seq_p3 in _hard_pitches
                 pw_2k = hd.get("whiff_2k_hard" if is_pw_hard else "whiff_2k_os", np.nan)
                 pw_2k_pct = pct_2k_hard if is_pw_hard else pct_2k_os
-                # Build the unified game plan
                 plan_lines = []
                 # 0-0: P1 from sequence
                 p1_line = f"**0-0**: {seq_p1}"
-                if fp_context == "aggressive" and active_seq != best_seq:
-                    p1_line += " — steal strike (aggressive hitter)"
+                if fp_context == "aggressive" and seq_p1 not in _hard_pitches:
+                    p1_line += " — steal strike"
                 elif fp_context == "passive":
-                    p1_line += " — attack zone (passive hitter)"
+                    p1_line += " — attack zone"
                 plan_lines.append(p1_line)
                 # 1-0: Behind — attack with best hard stuff
                 if best_hard_p:
@@ -4582,7 +4570,7 @@ def _pitching_plan_content(tm, team, data, season_filter):
                     })
                 st.dataframe(pd.DataFrame(seq_rows), use_container_width=True, hide_index=True)
             else:
-                # Fallback: no sequences available — simple count plan
+                # Fallback: no sequences — simple plan
                 plan_lines = []
                 if primary:
                     plan_lines.append(f"**0-0**: {primary[0]}")
@@ -4594,7 +4582,6 @@ def _pitching_plan_content(tm, team, data, season_filter):
                     plan_lines.append(f"**1-1 / 2-1**: {primary[0]} — compete")
                 if best_hard_p:
                     plan_lines.append(f"**2-0 / 3-2**: {best_hard_p[0]} — must throw strike")
-                # Putaway: mirrors sequence builder formula
                 def _putaway_score(item):
                     n, d = item
                     comp = d.get("score", 50)
