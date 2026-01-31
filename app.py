@@ -600,6 +600,22 @@ def add_strike_zone(fig):
     return fig
 
 
+def _add_grid_zone_outline(fig, color="#333", width=3):
+    """Add a home-plate-shaped strike zone outline to a 5x5 categorical grid heatmap.
+
+    The inner 3x3 (indices 1-3) is the strike zone.  The outline is a pentagon:
+    flat top, straight sides, tapered bottom (like home plate viewed from the
+    catcher's perspective).  Uses an SVG path on the numeric category positions.
+    """
+    fig.add_shape(
+        type="path",
+        path="M 0.5 3.5 L 3.5 3.5 L 3.5 0.5 L 2.0 -0.1 L 0.5 0.5 Z",
+        line=dict(color=color, width=width),
+        fillcolor="rgba(0,0,0,0)",
+    )
+    return fig
+
+
 CHART_LAYOUT = dict(
     plot_bgcolor="white", paper_bgcolor="white",
     font=dict(size=11, color="#1a1a2e", family="Inter, Arial, sans-serif"),
@@ -4386,8 +4402,7 @@ def page_hitters_lab(data):
                 zmin=0, zmax=100, showscale=True,
                 colorbar=dict(title="Swing%", len=0.8),
             ))
-            fig_grid.add_shape(type="rect", x0=0.5, x1=3.5, y0=0.5, y1=3.5,
-                                line=dict(color="#333", width=3), fillcolor="rgba(0,0,0,0)")
+            _add_grid_zone_outline(fig_grid)
             fig_grid.update_layout(**CHART_LAYOUT, height=380, xaxis=dict(side="bottom"))
             st.plotly_chart(fig_grid, use_container_width=True)
 
@@ -4402,8 +4417,7 @@ def page_hitters_lab(data):
                 zmin=60, zmax=100, showscale=True,
                 colorbar=dict(title="EV", len=0.8),
             ))
-            fig_ev_grid.add_shape(type="rect", x0=0.5, x1=3.5, y0=0.5, y1=3.5,
-                                   line=dict(color="#333", width=3), fillcolor="rgba(0,0,0,0)")
+            _add_grid_zone_outline(fig_ev_grid)
             fig_ev_grid.update_layout(**CHART_LAYOUT, height=380, xaxis=dict(side="bottom"))
             st.plotly_chart(fig_ev_grid, use_container_width=True)
 
@@ -4511,8 +4525,7 @@ def page_hitters_lab(data):
                     colorscale=[[0, "#2ca02c"], [0.5, "#f7f7f7"], [1, "#d22d49"]],
                     zmin=0, zmax=60, showscale=True,
                     colorbar=dict(title="Whiff%", len=0.8)))
-                fig_wz.add_shape(type="rect", x0=0.5, x1=3.5, y0=0.5, y1=3.5,
-                                  line=dict(color="#333", width=3), fillcolor="rgba(0,0,0,0)")
+                _add_grid_zone_outline(fig_wz)
                 fig_wz.update_layout(**CHART_LAYOUT, height=380)
                 st.plotly_chart(fig_wz, use_container_width=True)
 
