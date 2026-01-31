@@ -418,7 +418,7 @@ def _clean_pct_cols(df):
 def _load_truemedia():
     """Load all TrueMedia CSV files into a structured dict."""
     hit_dir = os.path.join(_APP_DIR, "truemedia_hitting")
-    pit_dir = os.path.join(_APP_DIR, "truemedia_pitching")
+    pit_dir = os.path.join(_APP_DIR, "truemedia_pitching_new")
 
     def _read(directory, filename):
         path = os.path.join(directory, filename)
@@ -450,40 +450,40 @@ def _load_truemedia():
             "swing_stats": _read(hit_dir, "Swing stats.csv"),
         },
         "pitching": {
-            "traditional": _read(pit_dir, "Traditional.csv"),
-            "rate": _read(pit_dir, "Rate.csv"),
-            "movement": _read(pit_dir, "Movement.csv"),
-            "pitch_types": _read(pit_dir, "Pitch Types.csv"),
-            "pitch_rates": _read(pit_dir, "Pitch Rates.csv"),
-            "exit": _read(pit_dir, "Exit Data.csv"),
-            "expected_rate": _read(pit_dir, "Expected Rate.csv"),
-            "hit_types": _read(pit_dir, "Hit Types.csv"),
-            "hit_locations": _read(pit_dir, "Hit Locations.csv"),
+            "traditional": _read(pit_dir, "Copy of Traditional.csv"),
+            "rate": _read(pit_dir, "Rate-2.csv"),
+            "movement": _read(pit_dir, "Movement-2.csv"),
+            "pitch_types": _read(pit_dir, "Pitch Types-2.csv"),
+            "pitch_rates": _read(pit_dir, "Pitch Rates-2.csv"),
+            "exit": _read(pit_dir, "Exit Data-2.csv"),
+            "expected_rate": _read(pit_dir, "Expected Rate-2.csv"),
+            "hit_types": _read(pit_dir, "Hit Types-2.csv"),
+            "hit_locations": _read(pit_dir, "Hit Locations-2.csv"),
             "counting": _read(pit_dir, "Counting.csv"),
-            "pitch_counts": _read(pit_dir, "Pitch Counts.csv"),
-            "pitch_locations": _read(pit_dir, "Pitch Locations.csv"),
-            "baserunning": _read(pit_dir, "Baserunning.csv"),
+            "pitch_counts": _read(pit_dir, "Pitch Counts-2.csv"),
+            "pitch_locations": _read(pit_dir, "Pitch Locations-2.csv"),
+            "baserunning": _read(pit_dir, "Baserunning pitching.csv"),
             "stolen_bases": _read(pit_dir, "Stolen Bases.csv"),
-            "home_runs": _read(pit_dir, "Home Runs.csv"),
-            "expected_hit_rates": _read(pit_dir, "Expected Hit Rates.csv"),
-            "pitch_calls": _read(pit_dir, "Pitch Calls.csv"),
+            "home_runs": _read(pit_dir, "Home Runs-2.csv"),
+            "expected_hit_rates": _read(pit_dir, "Expected Hit Rates-2.csv"),
+            "pitch_calls": _read(pit_dir, "Pitch Calls-2.csv"),
             "pitch_type_counts": _read(pit_dir, "Pitch Type Counts.csv"),
             "expected_counting": _read(pit_dir, "Expected Counting.csv"),
             "pitching_counting": _read(pit_dir, "Pitching Counting.csv"),
-            "bids": _read(pit_dir, "Bids.csv"),
+            "bids": _read(pit_dir, "Bids pitching-2.csv"),
         },
         "catching": {
-            "defense": _read(pit_dir, "Catcher Defense.csv"),
-            "framing": _read(pit_dir, "Catcher Framing.csv"),
-            "opposing": _read(pit_dir, "Catcher Opposing Batters.csv"),
-            "pitch_rates": _read(pit_dir, "Catcher Pitch Rates.csv"),
-            "pitch_types_rates": _read(pit_dir, "Catcher Pitch Types Rates.csv"),
-            "pitch_types": _read(pit_dir, "Catcher Pitch Types.csv"),
+            "defense": _read(_APP_DIR, "Catcher Defense.csv"),
+            "framing": _read(_APP_DIR, "Catcher Framing.csv"),
+            "opposing": _read(_APP_DIR, "Catcher Opposing Batters.csv"),
+            "pitch_rates": _read(_APP_DIR, "Catcher Pitch Rates.csv"),
+            "pitch_types_rates": _read(_APP_DIR, "Catcher Pitch Types Rates.csv"),
+            "pitch_types": _read(_APP_DIR, "Catcher Pitch Types.csv"),
             "throws": _read(pit_dir, "All Tracked Throws.csv"),
             "sba2_throws": _read(pit_dir, "SBA2 Tracked Throws.csv"),
             "pickoffs": _read(pit_dir, "Pickoffs.csv"),
             "pb_wp": _read(pit_dir, "Passed Balls & Wild Pitches.csv"),
-            "pitch_counts": _read(pit_dir, "Catcher Pitch Counts.csv"),
+            "pitch_counts": _read(_APP_DIR, "Catcher Pitch Counts.csv"),
         },
     }
     return tm
