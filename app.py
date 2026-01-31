@@ -4509,90 +4509,237 @@ def _pitching_plan_content(tm, team, data, season_filter):
                         _, g12 = _lookup_tunnel(seq_p1, seq_p2, tunnels)
                         _, g23 = _lookup_tunnel(seq_p2, seq_p3, tunnels)
 
-            # ── UNIFIED AT-BAT SCRIPT ──
+            # ── UNIFIED AT-BAT SCRIPT (V3 — full game-prep depth) ──
+            real_ps_names = {n for n, _ in real_ps}
+
             if active_seq:
                 st.markdown("**At-Bat Script**")
 
-                # ① FIRST PITCH
+                # ── Hitter profile snapshot ──
+                prof_parts = []
+                h_chase = hd.get("chase_pct", np.nan)
+                h_kpct = hd.get("k_pct", np.nan)
+                h_bbpct = hd.get("bb_pct", np.nan)
+                h_swstrk = hd.get("swstrk_pct", np.nan)
+                h_contact = hd.get("contact_pct", np.nan)
+                if not pd.isna(h_kpct):
+                    prof_parts.append(f"K% {h_kpct:.0f}")
+                if not pd.isna(h_bbpct):
+                    prof_parts.append(f"BB% {h_bbpct:.0f}")
+                if not pd.isna(h_chase):
+                    prof_parts.append(f"Chase {h_chase:.0f}%")
+                if not pd.isna(h_swstrk):
+                    prof_parts.append(f"SwStr {h_swstrk:.1f}%")
+                if not pd.isna(h_contact):
+                    prof_parts.append(f"Contact {h_contact:.0f}%")
+                # Zone tendencies
+                h_high = hd.get("high_pct", np.nan)
+                h_low = hd.get("low_pct", np.nan)
+                h_in = hd.get("inside_pct", np.nan)
+                h_out = hd.get("outside_pct", np.nan)
+                zone_parts = []
+                if not pd.isna(h_high) and h_high > 55:
+                    zone_parts.append("high-ball hitter")
+                elif not pd.isna(h_low) and h_low > 55:
+                    zone_parts.append("low-ball hitter")
+                if not pd.isna(h_in) and h_in > 55:
+                    zone_parts.append("pulls inside")
+                elif not pd.isna(h_out) and h_out > 55:
+                    zone_parts.append("covers outside")
+                if prof_parts:
+                    zone_tag = f" — {', '.join(zone_parts)}" if zone_parts else ""
+                    st.caption(f"{' | '.join(prof_parts)}{zone_tag}")
+
+                # ── ① FIRST PITCH ──
+                fp_ars = arsenal["pitches"].get(seq_p1, {})
+                fp_loc, fp_whiff = _best_putaway_zone(seq_p1, fp_ars)
+                fp_loc_str = f" ({fp_loc}, {fp_whiff:.0f}% whiff)" if fp_loc and not pd.isna(fp_whiff) else ""
                 if fp_context == "passive":
-                    fp_line = f"**① FIRST PITCH:** {seq_p1} — attack zone"
-                    fp_ctx = f"Passive 1P hitter ({fp_hard:.0f}% swing, {fp_pct:.0f}th %ile) — free strike"
-                    st.markdown(fp_line)
-                    st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;_{fp_ctx}_")
+                    st.markdown(f"**① FIRST PITCH:** {seq_p1} — attack zone{fp_loc_str}")
+                    st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;_Passive 1P hitter ({fp_hard:.0f}% swing, {fp_pct:.0f}th %ile) — free strike_")
                 elif fp_context == "aggressive":
-                    fp_line = f"**① FIRST PITCH:** {seq_p1} — steal strike"
-                    fp_ctx = f"Aggressive 1P hitter ({fp_hard:.0f}% swing, {fp_pct:.0f}th %ile) — will chase"
-                    st.markdown(fp_line)
-                    st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;_{fp_ctx}_")
+                    st.markdown(f"**① FIRST PITCH:** {seq_p1} — steal strike{fp_loc_str}")
+                    st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;_Aggressive 1P hitter ({fp_hard:.0f}% swing, {fp_pct:.0f}th %ile) — will chase_")
                 else:
-                    st.markdown(f"**① FIRST PITCH:** {seq_p1} — compete")
+                    st.markdown(f"**① FIRST PITCH:** {seq_p1} — compete{fp_loc_str}")
+                # Per-class swing tendencies on 1P
+                fp_sw_parts = []
+                for sw_label, sw_key in [("Hard", "swing_vs_hard"), ("SL", "swing_vs_sl"),
+                                          ("CB", "swing_vs_cb"), ("CH", "swing_vs_ch")]:
+                    sv = hd.get(sw_key, np.nan)
+                    if not pd.isna(sv):
+                        _sw_ser = _sw_pct_map.get(sw_key, pd.Series(dtype=float))
+                        sv_pct = _pctile(_sw_ser, sv)
+                        if not pd.isna(sv_pct) and (sv_pct >= 70 or sv_pct <= 25):
+                            tag = "agg" if sv_pct >= 70 else "passive"
+                            fp_sw_parts.append(f"{sw_label} {sv:.0f}% ({tag})")
+                if fp_sw_parts:
+                    st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;_Swing rates: {', '.join(fp_sw_parts)}_")
 
-                # ② TUNNEL / SETUP
-                tun_12_str = f"{g12} tunnel from {seq_p1}" if g12 not in ("-", "F", None) else f"after {seq_p1}"
-                tun_23_str = f"{g23} tunnel into putaway" if g23 not in ("-", "F", None) else ""
-                setup_line = f"**② TUNNEL:** {seq_p2} ({tun_12_str}) — sets up {seq_p3}"
-                st.markdown(setup_line)
-                # Context: hitter swing% vs P2 class (only if outlier)
-                _p2_class_map = {
-                    **{p: "swing_vs_hard" for p in _hard_pitches},
-                    "Slider": "swing_vs_sl", "Sweeper": "swing_vs_sl",
-                    "Curveball": "swing_vs_cb", "Knuckle Curve": "swing_vs_cb",
-                    "Changeup": "swing_vs_ch", "Splitter": "swing_vs_ch",
-                }
-                p2_sw_key = _p2_class_map.get(seq_p2, "")
-                setup_ctx_parts = []
-                if p2_sw_key:
-                    p2_sw_val = hd.get(p2_sw_key, np.nan)
-                    if not pd.isna(p2_sw_val):
-                        p2_sw_pctile = _pctile(_sw_pct_map.get(p2_sw_key, pd.Series(dtype=float)), p2_sw_val)
-                        if not pd.isna(p2_sw_pctile) and (p2_sw_pctile >= 65 or p2_sw_pctile <= 25):
-                            sw_desc = "aggressive" if p2_sw_pctile >= 65 else "passive"
-                            setup_ctx_parts.append(f"Swings {p2_sw_val:.0f}% vs {seq_p2}s ({p2_sw_pctile:.0f}th %ile, {sw_desc})")
-                if tun_23_str:
-                    setup_ctx_parts.append(tun_23_str)
-                if setup_ctx_parts:
-                    st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;_{'; '.join(setup_ctx_parts)}_")
+                # ── ② TUNNEL PAIRS (all) ──
+                tun_rows = []
+                if isinstance(tunnels, pd.DataFrame) and not tunnels.empty:
+                    for _, tr in tunnels.sort_values("Tunnel Score", ascending=False).iterrows():
+                        pa, pb = tr["Pitch A"], tr["Pitch B"]
+                        if pa in real_ps_names and pb in real_ps_names:
+                            pair_whiff, pair_chase = _lookup_seq(pa, pb, sequences)
+                            rev_whiff, rev_chase = _lookup_seq(pb, pa, sequences)
+                            # Also get CSW% and Avg EV from sequences df
+                            pair_csw, pair_ev = np.nan, np.nan
+                            rev_csw, rev_ev = np.nan, np.nan
+                            if isinstance(sequences, pd.DataFrame) and not sequences.empty:
+                                m_fwd = sequences[(sequences["Setup Pitch"]==pa)&(sequences["Follow Pitch"]==pb)]
+                                if not m_fwd.empty:
+                                    pair_csw = m_fwd.iloc[0].get("CSW%", np.nan)
+                                    pair_ev = m_fwd.iloc[0].get("Avg EV", np.nan)
+                                m_rev = sequences[(sequences["Setup Pitch"]==pb)&(sequences["Follow Pitch"]==pa)]
+                                if not m_rev.empty:
+                                    rev_csw = m_rev.iloc[0].get("CSW%", np.nan)
+                                    rev_ev = m_rev.iloc[0].get("Avg EV", np.nan)
+                            follow_ars = arsenal["pitches"].get(pb, {})
+                            floc, _ = _best_putaway_zone(pb, follow_ars)
+                            tun_rows.append({
+                                "Pair": f"{pa} → {pb}",
+                                "Grade": tr["Grade"],
+                                "Tun": round(tr["Tunnel Score"], 0),
+                                "Velo Δ": _hfmt(tr.get("Velo Gap (mph)"), ".0f"),
+                                "Plate Sep": _hfmt(tr.get("Plate Sep (in)"), ".0f"),
+                                "A→B Whiff%": _hfmt(pair_whiff),
+                                "A→B Chase%": _hfmt(pair_chase),
+                                "B→A Whiff%": _hfmt(rev_whiff),
+                                "B→A Chase%": _hfmt(rev_chase),
+                                "Location": floc or "-",
+                            })
+                if tun_rows:
+                    st.markdown("**② TUNNEL PAIRS**")
+                    st.dataframe(pd.DataFrame(tun_rows), use_container_width=True, hide_index=True)
 
-                # ③ PUTAWAY (0-2 / 1-2)
-                pw_options = []
-                seen_pw = set()
-                pw_candidates = []
-                for s in top_seqs:
-                    if s["p3"] not in seen_pw:
-                        pw_candidates.append((s["p3"], s["p2"], s))
-                        seen_pw.add(s["p3"])
-                for n, d in real_os:
-                    if n not in seen_pw:
-                        pw_candidates.append((n, None, None))
-                        seen_pw.add(n)
-                for pw_name, setup_name, seq_obj in pw_candidates[:2]:
-                    pw_d = ps_dict.get(pw_name, {})
-                    pw_w = pw_d.get("our_whiff", 0) or 0
-                    ars_pw = arsenal["pitches"].get(pw_name, {})
-                    loc_label, _ = _best_putaway_zone(pw_name, ars_pw)
-                    loc_str = f" — {loc_label}" if loc_label else ""
-                    if setup_name:
-                        _, tg = _lookup_tunnel(setup_name, pw_name, tunnels)
-                        tun_str = f", {tg} tunnel from {setup_name}" if tg not in ("-", "F", None) else ""
-                    else:
-                        tun_str = ""
-                    is_h = pw_name in _hard_pitches
-                    t2k = hd.get("whiff_2k_hard" if is_h else "whiff_2k_os", np.nan)
-                    t2k_p = pct_2k_hard if is_h else pct_2k_os
-                    vuln_str = ""
-                    if not pd.isna(t2k) and not pd.isna(t2k_p) and t2k_p >= 60:
-                        vuln_str = f" — {t2k:.0f}% 2K {'hard' if is_h else 'OS'} ({_pct_label(t2k_p)})"
-                    pw_options.append(f"{pw_name}{loc_str} ({pw_w:.0f}% whiff{tun_str}){vuln_str}")
-                if pw_options:
-                    st.markdown("**③ PUTAWAY (0-2 / 1-2):**")
-                    for i, opt in enumerate(pw_options):
-                        st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;{i+1}. {opt}")
+                # ── ③ PITCH PAIR RESULTS (all from sequences df) ──
+                seq_rows = []
+                if isinstance(sequences, pd.DataFrame) and not sequences.empty:
+                    for _, sr in sequences.sort_values("Whiff%", ascending=False).iterrows():
+                        sp, fp_name = sr["Setup Pitch"], sr["Follow Pitch"]
+                        if sp in real_ps_names and fp_name in real_ps_names:
+                            f_ars = arsenal["pitches"].get(fp_name, {})
+                            f_loc, _ = _best_putaway_zone(fp_name, f_ars)
+                            t_score, t_grade = _lookup_tunnel(sp, fp_name, tunnels)
+                            seq_rows.append({
+                                "Setup → Follow": f"{sp} → {fp_name}",
+                                "n": int(sr.get("Count", 0)),
+                                "Whiff%": _hfmt(sr.get("Whiff%")),
+                                "CSW%": _hfmt(sr.get("CSW%")),
+                                "Chase%": _hfmt(sr.get("Chase%")),
+                                "Avg EV": _hfmt(sr.get("Avg EV"), ".1f"),
+                                "Tunnel": f"{t_grade}" if t_grade not in ("-", None) else "-",
+                                "Location": f_loc or "-",
+                            })
+                if seq_rows:
+                    st.markdown("**③ PITCH PAIR RESULTS**")
+                    st.dataframe(pd.DataFrame(seq_rows), use_container_width=True, hide_index=True)
 
-                # WHEN BEHIND
+                # ── ④ TOP SEQUENCES (hitter-aware 3-pitch paths) ──
+                if top_seqs:
+                    st.markdown("**④ TOP SEQUENCES** _(hitter-aware)_")
+                    for i, s in enumerate(top_seqs):
+                        sw23 = s.get("sw23", np.nan)
+                        t12 = s.get("t12", np.nan)
+                        t23 = s.get("t23", np.nan)
+                        ev_gap = s.get("effv_gap", np.nan)
+                        t2k = s.get("their_2k", np.nan)
+                        # Tunnel grades from lookup
+                        _, g12_s = _lookup_tunnel(s["p1"], s["p2"], tunnels)
+                        _, g23_s = _lookup_tunnel(s["p2"], s["p3"], tunnels)
+                        # Build detail line
+                        detail_parts = []
+                        if g12_s not in ("-", "F", None):
+                            detail_parts.append(f"P1→P2 {g12_s} tunnel")
+                        if g23_s not in ("-", "F", None):
+                            detail_parts.append(f"P2→P3 {g23_s} tunnel")
+                        if not pd.isna(sw23):
+                            detail_parts.append(f"{sw23:.0f}% whiff on P3")
+                        if not pd.isna(ev_gap):
+                            detail_parts.append(f"{ev_gap:.1f} mph EffV gap")
+                        if not pd.isna(t2k):
+                            is_hard_p3 = s["p3"] in _hard_pitches
+                            detail_parts.append(f"hitter {t2k:.0f}% 2K {'hard' if is_hard_p3 else 'OS'}")
+                        # Best location for putaway
+                        p3_ars = arsenal["pitches"].get(s["p3"], {})
+                        p3_loc, p3_whiff = _best_putaway_zone(s["p3"], p3_ars)
+                        if p3_loc:
+                            detail_parts.append(f"P3 loc: {p3_loc}")
+                        st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;**{i+1}. {s['p1']} → {s['p2']} → {s['p3']}** (Score: {s['score']:.0f})")
+                        if detail_parts:
+                            st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;_{' | '.join(detail_parts)}_")
+
+                # ── WHEN BEHIND (1-0, 2-0, 2-1, 3-1, 3-2) ──
                 if best_hard_p:
-                    st.markdown(f"**WHEN BEHIND (1-0, 2-0, 3-2):** {best_hard_p[0]} — attack zone")
+                    bh_ars = arsenal["pitches"].get(best_hard_p[0], {})
+                    bh_loc, bh_whiff = _best_putaway_zone(best_hard_p[0], bh_ars)
+                    bh_loc_str = f" — {bh_loc}" if bh_loc else ""
+                    bh_whiff_str = f" ({bh_whiff:.0f}% whiff)" if not pd.isna(bh_whiff) else ""
+                    st.markdown(f"**WHEN BEHIND (1-0, 2-0, 3-2):** {best_hard_p[0]}{bh_loc_str}{bh_whiff_str}")
+                    # Secondary behind option if we have a second hard pitch
+                    if len(real_hard) >= 2:
+                        bh2_name, bh2_d = real_hard[1]
+                        bh2_ars = arsenal["pitches"].get(bh2_name, {})
+                        bh2_loc, bh2_whiff = _best_putaway_zone(bh2_name, bh2_ars)
+                        bh2_loc_str = f" — {bh2_loc}" if bh2_loc else ""
+                        bh2_whiff_str = f" ({bh2_whiff:.0f}% whiff)" if not pd.isna(bh2_whiff) else ""
+                        st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;_Alt: {bh2_name}{bh2_loc_str}{bh2_whiff_str}_")
 
-                # Compact context footer
+                # ── 2K APPROACH ──
+                os_whiff_str = f"{their_2k_os:.0f}% OS whiff ({pct_2k_os:.0f}th %ile, {_pct_label(pct_2k_os)})" if not pd.isna(their_2k_os) and not pd.isna(pct_2k_os) else None
+                hard_whiff_str = f"{their_2k_hard:.0f}% Hard whiff ({pct_2k_hard:.0f}th %ile, {_pct_label(pct_2k_hard)})" if not pd.isna(their_2k_hard) and not pd.isna(pct_2k_hard) else None
+                twok_lines = []
+                if os_whiff_str:
+                    if not pd.isna(pct_2k_os) and pct_2k_os >= 60:
+                        os_recs = []
+                        for n, d in real_os:
+                            ars_n = arsenal["pitches"].get(n, {})
+                            loc, loc_w = _best_putaway_zone(n, ars_n)
+                            loc_detail = f" {loc} ({loc_w:.0f}%)" if loc and not pd.isna(loc_w) else ""
+                            os_recs.append(f"{n}{loc_detail}")
+                        twok_lines.append(f"{os_whiff_str} → {' / '.join(os_recs)}" if os_recs else os_whiff_str)
+                    elif not pd.isna(pct_2k_os) and pct_2k_os <= 30:
+                        twok_lines.append(f"{os_whiff_str} → avoid offspeed putaway")
+                    else:
+                        twok_lines.append(os_whiff_str)
+                if hard_whiff_str:
+                    if not pd.isna(pct_2k_hard) and pct_2k_hard >= 60:
+                        hard_recs = []
+                        for n, d in real_hard:
+                            ars_n = arsenal["pitches"].get(n, {})
+                            loc, loc_w = _best_putaway_zone(n, ars_n)
+                            loc_detail = f" {loc} ({loc_w:.0f}%)" if loc and not pd.isna(loc_w) else ""
+                            hard_recs.append(f"{n}{loc_detail}")
+                        twok_lines.append(f"{hard_whiff_str} → {' / '.join(hard_recs)}" if hard_recs else hard_whiff_str)
+                    elif not pd.isna(pct_2k_hard) and pct_2k_hard <= 30:
+                        twok_lines.append(f"{hard_whiff_str} → avoid fastball putaway")
+                    else:
+                        twok_lines.append(hard_whiff_str)
+                if twok_lines:
+                    st.markdown("**2K APPROACH:**")
+                    for line in twok_lines:
+                        st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;{line}")
+                    # Per-pitch putaway ranking for 2K counts
+                    pw_rank = []
+                    for n, d in real_ps:
+                        pw_w = d.get("our_whiff", 0) or 0
+                        pw_ch = d.get("our_chase", 0) or 0
+                        is_h = n in _hard_pitches
+                        t2k_val = hd.get("whiff_2k_hard" if is_h else "whiff_2k_os", np.nan)
+                        ars_n = arsenal["pitches"].get(n, {})
+                        loc, _ = _best_putaway_zone(n, ars_n)
+                        pw_score = pw_w * 0.5 + pw_ch * 0.3 + (t2k_val * 0.2 if not pd.isna(t2k_val) else 0)
+                        pw_rank.append((n, pw_score, pw_w, pw_ch, loc))
+                    pw_rank.sort(key=lambda x: x[1], reverse=True)
+                    if pw_rank:
+                        st.markdown("&nbsp;&nbsp;&nbsp;&nbsp;_Putaway ranking:_")
+                        for rk_name, rk_sc, rk_w, rk_ch, rk_loc in pw_rank[:4]:
+                            loc_tag = f" → {rk_loc}" if rk_loc else ""
+                            st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;_{rk_name}: {rk_w:.0f}% whiff, {rk_ch:.0f}% chase{loc_tag}_")
+
+                # ── Compact context footer ──
                 footer_parts = []
                 if not pd.isna(their_chase_val):
                     if their_chase_val > 32:
@@ -4606,19 +4753,55 @@ def _pitching_plan_content(tm, team, data, season_filter):
                     st.caption(" | ".join(footer_parts))
 
             else:
-                # Fallback: no sequences — simplified at-bat script
+                # Fallback: no sequences — show all available data
                 st.markdown("**At-Bat Script**")
                 p1_name = primary[0] if primary else (best_hard_p[0] if best_hard_p else None)
                 if p1_name:
-                    st.markdown(f"**① FIRST PITCH:** {p1_name} — compete")
-                if real_os:
-                    st.markdown(f"**② TUNNEL:** {real_os[0][0]} — expand off {p1_name or 'fastball'}")
-                pw = max(real_ps, key=lambda x: (x[1].get("our_whiff", 0) or 0)) if real_ps else None
-                if pw:
-                    pw_w = pw[1].get("our_whiff", 0) or 0
-                    st.markdown(f"**③ PUTAWAY (0-2 / 1-2):** {pw[0]} ({pw_w:.0f}% whiff)")
+                    p1_ars = arsenal["pitches"].get(p1_name, {})
+                    p1_loc, p1_whiff = _best_putaway_zone(p1_name, p1_ars)
+                    p1_loc_str = f" ({p1_loc}, {p1_whiff:.0f}% whiff)" if p1_loc and not pd.isna(p1_whiff) else ""
+                    st.markdown(f"**① FIRST PITCH:** {p1_name} — compete{p1_loc_str}")
+                # All tunnel pairs
+                tun_rows_fb = []
+                if isinstance(tunnels, pd.DataFrame) and not tunnels.empty:
+                    for _, tr in tunnels.sort_values("Tunnel Score", ascending=False).iterrows():
+                        pa, pb = tr["Pitch A"], tr["Pitch B"]
+                        if pa in real_ps_names and pb in real_ps_names:
+                            pair_whiff, pair_chase = _lookup_seq(pa, pb, sequences)
+                            tun_rows_fb.append({
+                                "Pair": f"{pa} → {pb}",
+                                "Grade": tr["Grade"],
+                                "Tun": round(tr["Tunnel Score"], 0),
+                                "Velo Δ": _hfmt(tr.get("Velo Gap (mph)"), ".0f"),
+                                "Whiff%": _hfmt(pair_whiff),
+                                "Chase%": _hfmt(pair_chase),
+                            })
+                if tun_rows_fb:
+                    st.markdown("**② TUNNEL PAIRS**")
+                    st.dataframe(pd.DataFrame(tun_rows_fb), use_container_width=True, hide_index=True)
+                # All pitch pair results
+                seq_rows_fb = []
+                if isinstance(sequences, pd.DataFrame) and not sequences.empty:
+                    for _, sr in sequences.sort_values("Whiff%", ascending=False).iterrows():
+                        sp, fp_name = sr["Setup Pitch"], sr["Follow Pitch"]
+                        if sp in real_ps_names and fp_name in real_ps_names:
+                            seq_rows_fb.append({
+                                "Setup → Follow": f"{sp} → {fp_name}",
+                                "n": int(sr.get("Count", 0)),
+                                "Whiff%": _hfmt(sr.get("Whiff%")),
+                                "CSW%": _hfmt(sr.get("CSW%")),
+                                "Chase%": _hfmt(sr.get("Chase%")),
+                                "Avg EV": _hfmt(sr.get("Avg EV"), ".1f"),
+                            })
+                if seq_rows_fb:
+                    st.markdown("**③ PITCH PAIR RESULTS**")
+                    st.dataframe(pd.DataFrame(seq_rows_fb), use_container_width=True, hide_index=True)
                 if best_hard_p:
-                    st.markdown(f"**WHEN BEHIND (1-0, 2-0, 3-2):** {best_hard_p[0]} — attack zone")
+                    bh_ars = arsenal["pitches"].get(best_hard_p[0], {})
+                    bh_loc, bh_whiff = _best_putaway_zone(best_hard_p[0], bh_ars)
+                    bh_loc_str = f" — {bh_loc}" if bh_loc else ""
+                    bh_whiff_str = f" ({bh_whiff:.0f}% whiff)" if not pd.isna(bh_whiff) else ""
+                    st.markdown(f"**WHEN BEHIND (1-0, 2-0, 3-2):** {best_hard_p[0]}{bh_loc_str}{bh_whiff_str}")
 
 
 def _hitting_plan_content(tm, team, data, season_filter):
