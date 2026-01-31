@@ -4327,6 +4327,9 @@ def _pitching_plan_content(tm, team, data, season_filter):
     _2k_os_col = f"2K Whiff vs {_throws_key} OS"
     _2k_hard_series = pd.to_numeric(_all_sw[_2k_hard_col], errors="coerce").dropna() if _2k_hard_col in _all_sw.columns else pd.Series(dtype=float)
     _2k_os_series = pd.to_numeric(_all_sw[_2k_os_col], errors="coerce").dropna() if _2k_os_col in _all_sw.columns else pd.Series(dtype=float)
+    # 1P swing% vs hard — for defining passive/aggressive by percentile
+    _fp_hard_col = "1PSwing% vs Hard Empty"
+    _fp_hard_series = pd.to_numeric(_all_sw[_fp_hard_col], errors="coerce").dropna() if _fp_hard_col in _all_sw.columns else pd.Series(dtype=float)
 
     for matchup in all_matchups:
         hd = matchup.get("hitter_data", {})
@@ -4552,22 +4555,23 @@ def _pitching_plan_content(tm, team, data, season_filter):
             their_chase_val = hd.get("chase_pct", np.nan)
 
             # --- 0-0 / 1-0: First pitch decision ---
-            # Uses: hitter 1P swing% vs hard/offspeed, our CSW%, primary pitch
+            # Passive/aggressive defined by D1 percentile of 1P swing% vs hard
+            fp_pct = percentileofscore(_fp_hard_series, fp_hard, kind="rank") if not pd.isna(fp_hard) and len(_fp_hard_series) > 10 else np.nan
             fp_pitch = None
             fp_reason = ""
-            if not pd.isna(fp_hard):
-                if fp_hard < 35 and best_hard_p:
-                    # Very passive vs hard → free strike with hard stuff in zone
+            if not pd.isna(fp_hard) and not pd.isna(fp_pct):
+                if fp_pct <= 30 and best_hard_p:
+                    # Bottom 30th %ile = passive vs hard → free strike with hard stuff
                     fp_pitch = best_hard_p[0]
                     fp_zone = _best_zone_for(fp_pitch, best_hard_p[1])
                     fp_csw = best_hard_p[1].get("our_csw", 0) or 0
-                    fp_reason = f"passive vs hard 1P ({fp_hard:.0f}% swing)"
+                    fp_reason = f"passive 1P ({fp_hard:.0f}%, {fp_pct:.0f}th %ile)"
                     count_lines.append(f"**0-0**: {fp_pitch} {fp_zone or 'zone'} ({fp_csw:.0f}% CSW) — {fp_reason}")
-                elif fp_hard > 55 and real_os:
-                    # Aggressive vs hard → steal strike with offspeed
+                elif fp_pct >= 70 and real_os:
+                    # Top 30th %ile = aggressive vs hard → steal strike with offspeed
                     fp_pitch = real_os[0][0]
                     fp_zone = _best_zone_for(fp_pitch, real_os[0][1])
-                    fp_reason = f"aggressive vs hard 1P ({fp_hard:.0f}% swing)"
+                    fp_reason = f"aggressive 1P ({fp_hard:.0f}%, {fp_pct:.0f}th %ile)"
                     count_lines.append(f"**0-0**: {fp_pitch} {fp_zone or 'zone'} — {fp_reason}")
                 elif not pd.isna(fp_ch) and fp_ch > 45 and real_os:
                     # Swings at offspeed 1P → use that aggressiveness
