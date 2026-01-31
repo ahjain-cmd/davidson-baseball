@@ -3458,14 +3458,20 @@ def _pitch_score_composite(pt_name, pt_data, hd, tun_df, platoon_label="Neutral"
             zone_csw = zd.get("csw_pct", 0) or 0
             zone_quality = (zone_whiff * 0.5 + zone_csw * 0.5) * _ze_pzm.get(zn, 1.0)
             # Boost if hitter sees lots of pitches in this zone (more exploitable)
+            # Map hitter inside/outside to pitcher arm/glove based on platoon
+            # "Platoon Adv" = same side: hitter inside = pitcher arm side
+            # Otherwise (opposite/neutral): hitter inside = pitcher glove side
+            _same = "Adv" in platoon_label
+            _in_z = "arm" if _same else "glove"
+            _out_z = "glove" if _same else "arm"
             exposure_boost = 1.0
             if zn == "up" and not pd.isna(hitter_high) and hitter_high > 30:
                 exposure_boost = 1.2
             elif zn == "down" and not pd.isna(hitter_low) and hitter_low > 30:
                 exposure_boost = 1.2
-            elif zn == "arm" and not pd.isna(hitter_in) and hitter_in > 25:
+            elif zn == _in_z and not pd.isna(hitter_in) and hitter_in > 25:
                 exposure_boost = 1.15
-            elif zn == "glove" and not pd.isna(hitter_out) and hitter_out > 25:
+            elif zn == _out_z and not pd.isna(hitter_out) and hitter_out > 25:
                 exposure_boost = 1.15
             elif zn == "chase_low":
                 chase_pct = hd.get("chase_pct", np.nan)
@@ -3602,7 +3608,7 @@ def _score_pitcher_vs_hitter(arsenal, hitter_profile):
     bats = hitter_profile["bats"]
     platoon_label = "Neutral"
     if bats == "S":
-        platoon_label = "Switch (Disadv)"
+        platoon_label = "Switch (Neutral)"
     elif (throws == "L" and bats == "L") or (throws == "R" and bats == "R"):
         platoon_label = "Platoon Adv"
     elif (throws == "L" and bats == "R") or (throws == "R" and bats == "L"):
@@ -4296,8 +4302,9 @@ def _pitching_plan_content(tm, team, data, season_filter):
         hd = m.get("hitter_data", {})
         sorted_ps = sorted(ps.items(), key=lambda x: x[1]["score"], reverse=True)
         best_pt = sorted_ps[0][0] if sorted_ps else "?"
-        # Build top 3-pitch seq for summary
+        # Build top 3-pitch seq for summary (cache on matchup for bullpen card reuse)
         top_seqs = _build_3pitch_sequences(sorted_ps, hd, tunnels, sequences)
+        m["_cached_seqs"] = top_seqs
         seq_str = top_seqs[0]["seq"] if top_seqs else (f"{sorted_ps[0][0]}→{sorted_ps[1][0]}" if len(sorted_ps) >= 2 else "-")
         # Putaway pitch reasoning
         putaway_note = ""
@@ -4361,8 +4368,8 @@ def _pitching_plan_content(tm, team, data, season_filter):
         # Scores already computed by unified _pitch_score_composite in _score_pitcher_vs_hitter
         composites = {pt_name: round(pt_data["score"], 0) for pt_name, pt_data in sorted_ps}
         score = matchup["overall_score"]
-        # Build 3-pitch sequences
-        top_seqs = _build_3pitch_sequences(sorted_ps, hd, tunnels, sequences)
+        # Use cached sequences from summary table (avoid recomputation)
+        top_seqs = matchup.get("_cached_seqs") or _build_3pitch_sequences(sorted_ps, hd, tunnels, sequences)
         # Expander label: clean and simple
         best_c = max(composites.items(), key=lambda x: x[1]) if composites else ("?", 0)
         with st.expander(
@@ -4500,13 +4507,17 @@ def _pitching_plan_content(tm, team, data, season_filter):
                     wh = zd.get("whiff_pct", 0) or 0
                     val = (csw * 0.6 + wh * 0.4) * pzm.get(zn, 1.0)
                     h_boost = 1.0
+                    # Map hitter inside/outside to pitcher arm/glove based on matchup side
+                    # Same side: hitter inside = pitcher arm; Opposite: hitter inside = pitcher glove
+                    _in_zone = "arm" if same_side else "glove"
+                    _out_zone = "glove" if same_side else "arm"
                     if zn == "up" and not pd.isna(hitter_high) and hitter_high > 30:
                         h_boost = 1.2
                     elif zn == "down" and not pd.isna(hitter_low) and hitter_low > 35:
                         h_boost = 1.15
-                    elif zn == "arm" and not pd.isna(hitter_in) and hitter_in > 28:
+                    elif zn == _in_zone and not pd.isna(hitter_in) and hitter_in > 28:
                         h_boost = 1.15
-                    elif zn == "glove" and not pd.isna(hitter_out) and hitter_out > 28:
+                    elif zn == _out_zone and not pd.isna(hitter_out) and hitter_out > 28:
                         h_boost = 1.15
                     elif zn == "chase_low" and not pd.isna(hitter_chase) and hitter_chase > 28:
                         h_boost = 1.3
