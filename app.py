@@ -2592,30 +2592,32 @@ def _compute_tunnel_score(pdf):
             move_div = np.sqrt((a.ivb - b.ivb)**2 + (a.hb - b.hb)**2)
             velo_gap = abs(a.velo - b.velo)
 
-            # TUNNEL SCORE: measures how well two pitches look alike out of
-            # the hand but diverge at the plate. Audited against 16k actual
-            # 2-pitch sequences. Note: tunnel score is a descriptive tool for
-            # pairing quality — it measures deception geometry, not raw whiff
-            # prediction (which is dominated by pitch type).
+            # TUNNEL SCORE: regression-weighted from 16.5k actual 2-pitch
+            # swing sequences. Weights derived from logistic regression with
+            # pair-type fixed effects + within-pair-type averaged coefficients.
+            # plate_sep std coef +0.192 (dominant), commit_sep -0.101 (#2),
+            # div_ratio +0.030 (#3), rel_sep ~0 (negligible).
             if commit_sep < 0.1:
                 commit_sep = 0.1
 
-            # Commit-point deception (under 2" = elite, over 8" = bad)
-            commit_deception = max(0, 1 - commit_sep / 8.0)
-
-            # Plate divergence reward (more separation at plate = better)
+            # Plate divergence: #1 predictor (coef +0.192, 2x commit_sep)
             plate_reward = min(plate_sep / 15.0, 1.0)
 
-            # Divergence ratio: how much separation grows from commit to plate
+            # Commit-point deception: #2 predictor (coef -0.101)
+            commit_deception = max(0, 1 - commit_sep / 8.0)
+
+            # Divergence ratio: #3 predictor (coef +0.030)
             divergence_ratio = plate_sep / commit_sep
             divergence_score = min(divergence_ratio / 3.0, 1.0)
 
-            # Release consistency bonus (tight release = harder to read)
+            # Release consistency: near-zero in regression, minimal weight
             rel_bonus = max(0, 1 - rel_sep / 6.0)
 
-            # Combined: balanced weighting — deception + divergence + plate outcome
-            raw = (commit_deception * 0.30 + plate_reward * 0.30 +
-                   divergence_score * 0.25 + rel_bonus * 0.15) * 100
+            # Weights proportional to regression coefficients:
+            # |0.192| + |0.101| + |0.030| + |0.015| = 0.338
+            # → plate 57%, commit 30%, div 9%, rel 4%
+            raw = (plate_reward * 0.55 + commit_deception * 0.30 +
+                   divergence_score * 0.10 + rel_bonus * 0.05) * 100
             tunnel = round(min(raw, 100), 1)
 
             # Letter grade with strict thresholds
