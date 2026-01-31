@@ -936,15 +936,14 @@ def add_strike_zone(fig):
 
 
 def _add_grid_zone_outline(fig, color="#333", width=3):
-    """Add a home-plate-shaped strike zone outline to a 5x5 categorical grid heatmap.
+    """Add a rectangular strike zone outline to a 5x5 categorical grid heatmap.
 
-    The inner 3x3 (indices 1-3) is the strike zone.  The outline is a pentagon:
-    flat top, straight sides, tapered bottom (like home plate viewed from the
-    catcher's perspective).  Uses an SVG path on the numeric category positions.
+    The inner 3x3 (indices 1-3) is the strike zone.  Uses a simple rectangle
+    matching the style of the continuous-axis heatmaps (contact rate, damage).
     """
     fig.add_shape(
-        type="path",
-        path="M 0.5 3.5 L 3.5 3.5 L 3.5 1.0 L 2.0 0.5 L 0.5 1.0 Z",
+        type="rect",
+        x0=0.5, y0=0.5, x1=3.5, y1=3.5,
         line=dict(color=color, width=width),
         fillcolor="rgba(0,0,0,0)",
     )
