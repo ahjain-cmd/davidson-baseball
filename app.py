@@ -944,7 +944,7 @@ def _add_grid_zone_outline(fig, color="#333", width=3):
     """
     fig.add_shape(
         type="path",
-        path="M 0.5 3.5 L 3.5 3.5 L 3.5 0.5 L 2.0 -0.1 L 0.5 0.5 Z",
+        path="M 0.5 3.5 L 3.5 3.5 L 3.5 1.0 L 2.0 0.5 L 0.5 1.0 Z",
         line=dict(color=color, width=width),
         fillcolor="rgba(0,0,0,0)",
     )
