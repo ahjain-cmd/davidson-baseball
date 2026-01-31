@@ -112,8 +112,8 @@ def is_barrel(ev, la):
     if ev < 98:
         return False
     # At exactly 98 mph the window is 26-30
-    la_min = max(26 - 1.5 * (ev - 98), 8)
-    la_max = min(30 + 1.5 * (ev - 98), 50)
+    la_min = max(26 - 2 * (ev - 98), 8)
+    la_max = min(30 + 3 * (ev - 98), 50)
     return la_min <= la <= la_max
 
 
@@ -121,8 +121,8 @@ def is_barrel_mask(df):
     """Vectorised Statcast barrel mask for a DataFrame with ExitSpeed & Angle."""
     ev = pd.to_numeric(df["ExitSpeed"], errors="coerce")
     la = pd.to_numeric(df["Angle"], errors="coerce")
-    la_min = (26 - 1.5 * (ev - 98)).clip(lower=8)
-    la_max = (30 + 1.5 * (ev - 98)).clip(upper=50)
+    la_min = (26 - 2 * (ev - 98)).clip(lower=8)
+    la_max = (30 + 3 * (ev - 98)).clip(upper=50)
     return (ev >= 98) & (la >= la_min) & (la <= la_max)
 
 
@@ -876,11 +876,18 @@ def page_hitter_card(data):
                                     "FlyBall": "#1f77b4", "Popup": "#ff7f0e"},
                 opacity=0.7, labels={"Angle": "Launch Angle", "ExitSpeed": "Exit Velo"},
             )
-            # Barrel zone
-            fig.add_shape(type="rect", x0=8, x1=32, y0=98, y1=ev_la["ExitSpeed"].max() + 5,
-                          line=dict(color="#e63946", width=1.5, dash="dash"),
-                          fillcolor="rgba(230,57,70,0.06)")
-            fig.add_annotation(x=20, y=ev_la["ExitSpeed"].max() + 3, text="BARREL ZONE",
+            # Barrel zone — trace actual curved boundary
+            _bz_ev = np.linspace(98, max(ev_la["ExitSpeed"].max() + 2, 105), 40)
+            _bz_la_lo = np.clip(26 - 2 * (_bz_ev - 98), 8, 26)
+            _bz_la_hi = np.clip(30 + 3 * (_bz_ev - 98), 30, 50)
+            fig.add_trace(go.Scatter(
+                x=np.concatenate([_bz_la_lo, _bz_la_hi[::-1]]),
+                y=np.concatenate([_bz_ev, _bz_ev[::-1]]),
+                fill="toself", fillcolor="rgba(230,57,70,0.06)",
+                line=dict(color="#e63946", width=1.5, dash="dash"),
+                showlegend=False, hoverinfo="skip",
+            ))
+            fig.add_annotation(x=20, y=_bz_ev[-1], text="BARREL ZONE",
                                showarrow=False, font=dict(size=9, color="#e63946"))
             fig.update_layout(height=300, showlegend=True,
                               legend=dict(orientation="h", yanchor="bottom", y=1.02,
@@ -4289,9 +4296,17 @@ def page_hitters_lab(data):
                 fig_ev = px.scatter(bp, x="Angle", y="ExitSpeed", color="Quality",
                                     color_discrete_map=q_colors,
                                     labels={"Angle": "Launch Angle", "ExitSpeed": "Exit Velocity (mph)"})
-                fig_ev.add_shape(type="rect", x0=8, x1=32, y0=98, y1=batted["ExitSpeed"].max() + 5,
-                                 fillcolor="rgba(210,45,73,0.08)", line=dict(color="rgba(210,45,73,0.3)", width=1, dash="dash"))
-                fig_ev.add_annotation(x=20, y=batted["ExitSpeed"].max() + 3, text="Barrel Zone",
+                _bz_ev2 = np.linspace(98, max(batted["ExitSpeed"].max() + 2, 105), 40)
+                _bz_la_lo2 = np.clip(26 - 2 * (_bz_ev2 - 98), 8, 26)
+                _bz_la_hi2 = np.clip(30 + 3 * (_bz_ev2 - 98), 30, 50)
+                fig_ev.add_trace(go.Scatter(
+                    x=np.concatenate([_bz_la_lo2, _bz_la_hi2[::-1]]),
+                    y=np.concatenate([_bz_ev2, _bz_ev2[::-1]]),
+                    fill="toself", fillcolor="rgba(210,45,73,0.08)",
+                    line=dict(color="rgba(210,45,73,0.3)", width=1, dash="dash"),
+                    showlegend=False, hoverinfo="skip",
+                ))
+                fig_ev.add_annotation(x=20, y=_bz_ev2[-1], text="Barrel Zone",
                                        font=dict(size=9, color="#d22d49"), showarrow=False)
                 fig_ev.update_layout(**CHART_LAYOUT, height=400,
                                       legend=dict(orientation="h", y=1.08, x=0.5, xanchor="center", font=dict(size=10)))
