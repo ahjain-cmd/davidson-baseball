@@ -2900,7 +2900,7 @@ def _get_opp_hitter_profile(tm, hitter, team):
         "bats": rate.iloc[0].get("batsHand", "?") if not rate.empty else "?",
         "pa": _safe_num(rate, "PA"),
         "ops": _safe_num(rate, "OPS"),
-        "woba": _safe_num(rate, "wOBA"),
+        "woba": _safe_num(rate, "WOBA"),
         "k_pct": _safe_num(rate, "K%"),
         "bb_pct": _safe_num(rate, "BB%"),
         "chase_pct": _safe_num(pr, "Chase%"),
@@ -3143,6 +3143,9 @@ def _score_pitcher_vs_hitter(arsenal, hitter_profile):
             "our_ev_against": pt_data.get("ev_against", np.nan),
             "stuff_plus": stuff, "usage": pt_data["usage_pct"],
             "velo": pt_data["avg_velo"],
+            "spin": pt_data.get("avg_spin", np.nan),
+            "ivb": pt_data.get("ivb", np.nan),
+            "hb": pt_data.get("hb", np.nan),
         }
     sorted_pitches = sorted(pitch_scores.items(), key=lambda x: x[1]["score"], reverse=True)
     recommendations = []
@@ -3519,6 +3522,25 @@ def _pitching_plan_content(tm, team, data, season_filter):
         if not pd.isna(woba_split):
             # .200 wOBA → 100 (exploitable), .330 → 50, .450 → 0 (danger)
             components.append(min(max((0.450 - woba_split) / 0.250 * 100, 0), 100)); weights.append(7)
+
+        # 12. Hitter Contact% (4%) — LOW contact = more exploitable by any pitch
+        contact = hd.get("contact_pct", np.nan)
+        if not pd.isna(contact):
+            # 60% contact → 100 (exploitable), 80% → 50, 95% → 0 (tough to whiff)
+            components.append(min(max((95 - contact) / 35 * 100, 0), 100)); weights.append(4)
+
+        # 13. Hitter EV + Barrel weakness (4%) — weak hitters are easier to pitch to
+        h_ev = hd.get("ev", np.nan)
+        h_brl = hd.get("barrel_pct", np.nan)
+        if not pd.isna(h_ev):
+            # 78 mph EV → 100, 87 → 50, 95 → 0
+            ev_weak = min(max((95 - h_ev) / 17 * 100, 0), 100)
+            if not pd.isna(h_brl):
+                # 2% barrel → 80, 8% → 50, 15% → 10
+                brl_weak = min(max((15 - h_brl) / 13 * 100, 0), 100)
+                components.append((ev_weak + brl_weak) / 2); weights.append(4)
+            else:
+                components.append(ev_weak); weights.append(4)
 
         if not weights:
             return 50
@@ -4010,10 +4032,12 @@ def _scouting_team_overview(tm, team):
         # Merge rate stats
         if not h_rate.empty:
             rate_cols = ["playerFullName"]
-            for c in ["BA", "OBP", "SLG", "OPS", "ISO", "wOBA", "BABIP"]:
+            for c in ["BA", "OBP", "SLG", "OPS", "ISO", "WOBA", "BABIP"]:
                 if c in h_rate.columns:
                     rate_cols.append(c)
             lineup = lineup.merge(h_rate[rate_cols], on="playerFullName", how="left")
+            if "WOBA" in lineup.columns:
+                lineup = lineup.rename(columns={"WOBA": "wOBA"})
 
         # Merge exit data
         if not h_exit.empty and "ExitVel" in h_exit.columns:
