@@ -2182,6 +2182,60 @@ def page_team(data):
     n_pitchers = len([p for p in ROSTER_2026 if p in dav_pitching["Pitcher"].values])
     n_hitters = len([b for b in ROSTER_2026 if b in dav_batting["Batter"].values])
 
+    # ── Top-level tabs: Dashboard + Game Log ──
+    tab_dash, tab_gl = st.tabs(["Dashboard", "Game Log"])
+
+    with tab_dash:
+        _render_team_dashboard(data, dav_pitching, dav_batting, dav_data, latest_date, dav_dates, n_pitchers, n_hitters)
+
+    with tab_gl:
+        _render_game_log(data)
+
+
+def _render_game_log(data):
+    """Game Log tab inside Team Overview."""
+    dav = data[(data["PitcherTeam"] == DAVIDSON_TEAM_ID) | (data["BatterTeam"] == DAVIDSON_TEAM_ID)]
+    if dav.empty:
+        st.warning("No data.")
+        return
+    games = dav.groupby(["Date", "GameID"]).agg(
+        Stadium=("Stadium", "first"), Home=("HomeTeam", "first"),
+        Away=("AwayTeam", "first"), Pitches=("PitchNo", "count"),
+    ).reset_index().sort_values("Date", ascending=False)
+    st.dataframe(games[["Date", "Away", "Home", "Stadium", "Pitches"]], use_container_width=True, hide_index=True)
+
+    opts = games["GameID"].tolist()
+    if opts:
+        _game_labels = {row["GameID"]: f"{row['Date'].strftime('%Y-%m-%d')} {row['Away']} @ {row['Home']}"
+                        for _, row in games.iterrows()}
+        sel = st.selectbox("Drill into game", opts,
+                           format_func=lambda g: _game_labels.get(g, str(g)), key="to_gl_game")
+        gd = dav[dav["GameID"] == sel]
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**Davidson Pitching**")
+            gp = gd[gd["PitcherTeam"] == DAVIDSON_TEAM_ID]
+            for p in gp["Pitcher"].unique():
+                sub = gp[gp["Pitcher"] == p]
+                st.markdown(f"_{display_name(p)}_ - {len(sub)} pitches")
+                s = sub.groupby("TaggedPitchType").agg(
+                    N=("RelSpeed", "count"), Velo=("RelSpeed", "mean"), Spin=("SpinRate", "mean")
+                ).reset_index()
+                s["Velo"] = s["Velo"].round(1)
+                s["Spin"] = s["Spin"].round(0)
+                st.dataframe(s, use_container_width=True, hide_index=True)
+        with c2:
+            st.markdown("**Davidson Hitting**")
+            gh = gd[gd["BatterTeam"] == DAVIDSON_TEAM_ID]
+            ip = gh[gh["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
+            for b in ip["Batter"].unique():
+                sub = ip[ip["Batter"] == b]
+                st.markdown(f"_{display_name(b)}_ - {len(sub)} BIP, Avg: {sub['ExitSpeed'].mean():.1f}, "
+                            f"Max: {sub['ExitSpeed'].max():.1f}")
+
+
+def _render_team_dashboard(data, dav_pitching, dav_batting, dav_data, latest_date, dav_dates, n_pitchers, n_hitters):
+    """Dashboard tab inside Team Overview."""
     # ── Quick Stats Row ──
     s1, s2, s3, s4, s5 = st.columns(5)
     with s1:
@@ -2426,51 +2480,6 @@ def page_development(data):
 
 
 # ──────────────────────────────────────────────
-# PAGE: GAME LOG
-# ──────────────────────────────────────────────
-def page_game_log(data):
-    st.header("Game Log")
-    dav = data[(data["PitcherTeam"] == DAVIDSON_TEAM_ID) | (data["BatterTeam"] == DAVIDSON_TEAM_ID)]
-    if dav.empty:
-        st.warning("No data.")
-        return
-    games = dav.groupby(["Date", "GameID"]).agg(
-        Stadium=("Stadium", "first"), Home=("HomeTeam", "first"),
-        Away=("AwayTeam", "first"), Pitches=("PitchNo", "count"),
-    ).reset_index().sort_values("Date", ascending=False)
-    st.dataframe(games[["Date", "Away", "Home", "Stadium", "Pitches"]], use_container_width=True, hide_index=True)
-
-    opts = games["GameID"].tolist()
-    if opts:
-        _game_labels = {row["GameID"]: f"{row['Date'].strftime('%Y-%m-%d')} {row['Away']} @ {row['Home']}"
-                        for _, row in games.iterrows()}
-        sel = st.selectbox("Drill into game", opts,
-                           format_func=lambda g: _game_labels.get(g, str(g)))
-        gd = dav[dav["GameID"] == sel]
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("**Davidson Pitching**")
-            gp = gd[gd["PitcherTeam"] == DAVIDSON_TEAM_ID]
-            for p in gp["Pitcher"].unique():
-                sub = gp[gp["Pitcher"] == p]
-                st.markdown(f"_{p}_ - {len(sub)} pitches")
-                s = sub.groupby("TaggedPitchType").agg(
-                    N=("RelSpeed", "count"), Velo=("RelSpeed", "mean"), Spin=("SpinRate", "mean")
-                ).reset_index()
-                s["Velo"] = s["Velo"].round(1)
-                s["Spin"] = s["Spin"].round(0)
-                st.dataframe(s, use_container_width=True, hide_index=True)
-        with c2:
-            st.markdown("**Davidson Hitting**")
-            gh = gd[gd["BatterTeam"] == DAVIDSON_TEAM_ID]
-            ip = gh[gh["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
-            for b in ip["Batter"].unique():
-                sub = ip[ip["Batter"] == b]
-                st.markdown(f"_{b}_ - {len(sub)} BIP, Avg: {sub['ExitSpeed'].mean():.1f}, "
-                            f"Max: {sub['ExitSpeed'].max():.1f}")
-
-
-# ──────────────────────────────────────────────
 # PAGE: SCOUTING
 # ──────────────────────────────────────────────
 def page_scouting(data):
@@ -2485,64 +2494,134 @@ def page_scouting(data):
         st.info("No opponent data.")
         return
 
-    team = st.selectbox("Opponent", teams)
-    role = st.radio("View", ["Their Pitching", "Their Hitting"], horizontal=True, key="sc_r")
+    team = st.selectbox("Opponent", teams, key="sc_team")
 
-    if role == "Their Pitching":
-        opp = data[data["PitcherTeam"] == team]
-        if opp.empty:
-            st.info("No data.")
-            return
-        p = st.selectbox("Pitcher", sorted(opp["Pitcher"].unique()), key="sc_p")
-        sub = opp[opp["Pitcher"] == p]
-        rows = []
-        for pt in sorted(sub["TaggedPitchType"].dropna().unique()):
-            s = sub[sub["TaggedPitchType"] == pt]
-            if len(s) < 2:
-                continue
-            rows.append({"Pitch": pt, "N": len(s),
-                         "Velo": round(s["RelSpeed"].mean(), 1) if s["RelSpeed"].notna().any() else None,
-                         "Spin": int(round(s["SpinRate"].mean())) if s["SpinRate"].notna().any() else None,
-                         "IVB": round(s["InducedVertBreak"].mean(), 1) if s["InducedVertBreak"].notna().any() else None,
-                         "HB": round(s["HorzBreak"].mean(), 1) if s["HorzBreak"].notna().any() else None})
-        if rows:
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-        loc = sub.dropna(subset=["PlateLocSide", "PlateLocHeight"])
-        if not loc.empty:
-            fig = px.density_heatmap(loc, x="PlateLocSide", y="PlateLocHeight", nbinsx=12, nbinsy=12,
-                                     color_continuous_scale="YlOrRd")
-            add_strike_zone(fig)
-            fig.update_layout(xaxis=dict(range=[-3, 3], scaleanchor="y"),
-                              yaxis=dict(range=[0, 5]),
-                              height=400, coloraxis_showscale=False, **CHART_LAYOUT)
-            st.plotly_chart(fig, use_container_width=True)
-    else:
-        opp = data[data["BatterTeam"] == team]
-        if opp.empty:
-            st.info("No data.")
-            return
-        b = st.selectbox("Batter", sorted(opp["Batter"].unique()), key="sc_b")
-        sub = opp[opp["Batter"] == b]
-        batted = sub[sub["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.metric("Avg EV", f"{batted['ExitSpeed'].mean():.1f}" if len(batted) > 0 else "-")
-        with c2:
-            st.metric("Max EV", f"{batted['ExitSpeed'].max():.1f}" if len(batted) > 0 else "-")
-        with c3:
-            sw = sub[sub["PitchCall"].isin(SWING_CALLS)]
-            wh = sub[sub["PitchCall"] == "StrikeSwinging"]
-            st.metric("Whiff%", f"{len(wh)/max(len(sw),1)*100:.1f}%" if len(sw) > 0 else "-")
-        loc = sub.dropna(subset=["PlateLocSide", "PlateLocHeight"])
-        sl = loc[loc["PitchCall"].isin(SWING_CALLS)]
-        if not sl.empty:
-            fig = px.density_heatmap(sl, x="PlateLocSide", y="PlateLocHeight", nbinsx=12, nbinsy=12,
-                                     color_continuous_scale="YlOrRd")
-            add_strike_zone(fig)
-            fig.update_layout(xaxis=dict(range=[-3, 3], scaleanchor="y"),
-                              yaxis=dict(range=[0, 5]),
-                              height=400, coloraxis_showscale=False, **CHART_LAYOUT)
-            st.plotly_chart(fig, use_container_width=True)
+    opp_pit = data[data["PitcherTeam"] == team]
+    opp_bat = data[data["BatterTeam"] == team]
+
+    tab_summary, tab_pit, tab_hit = st.tabs(["Team Summary", "Their Pitchers", "Their Hitters"])
+
+    # ── Team Summary Tab ──
+    with tab_summary:
+        col_agg1, col_agg2, col_agg3, col_agg4 = st.columns(4)
+        fb_types = ["Fastball", "Sinker", "Cutter"]
+        fb_data = opp_pit[opp_pit["TaggedPitchType"].isin(fb_types)]
+        with col_agg1:
+            st.metric("Team Avg FB Velo",
+                      f"{fb_data['RelSpeed'].mean():.1f}" if len(fb_data) > 0 else "-")
+        batted_all = opp_bat[opp_bat["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
+        with col_agg2:
+            st.metric("Team Avg EV",
+                      f"{batted_all['ExitSpeed'].mean():.1f}" if len(batted_all) > 0 else "-")
+        sw_all = opp_pit[opp_pit["PitchCall"].isin(SWING_CALLS)]
+        wh_all = opp_pit[opp_pit["PitchCall"] == "StrikeSwinging"]
+        with col_agg3:
+            st.metric("Team K%",
+                      f"{len(wh_all)/max(len(sw_all),1)*100:.1f}%" if len(sw_all) > 0 else "-")
+        bb_all = opp_pit[opp_pit["PitchCall"].isin(["BallCalled", "HitByPitch", "BallinDirt"])]
+        with col_agg4:
+            st.metric("Team Whiff%",
+                      f"{len(wh_all)/max(len(sw_all),1)*100:.1f}%" if len(sw_all) > 0 else "-")
+
+        col_tp, col_th = st.columns(2)
+        with col_tp:
+            st.markdown("#### Top Pitchers")
+            if not opp_pit.empty:
+                pit_rows = []
+                for p in opp_pit["Pitcher"].unique():
+                    ps = opp_pit[opp_pit["Pitcher"] == p]
+                    fb_sub = ps[ps["TaggedPitchType"].isin(fb_types)]
+                    sw = ps[ps["PitchCall"].isin(SWING_CALLS)]
+                    wh = ps[ps["PitchCall"] == "StrikeSwinging"]
+                    pit_rows.append({
+                        "Pitcher": display_name(p),
+                        "Pitches": len(ps),
+                        "FB Velo": round(fb_sub["RelSpeed"].mean(), 1) if len(fb_sub) > 0 else None,
+                        "Whiff%": round(len(wh)/max(len(sw),1)*100, 1) if len(sw) > 0 else None,
+                    })
+                pit_df = pd.DataFrame(pit_rows).sort_values("Pitches", ascending=False).head(10)
+                st.dataframe(pit_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No pitching data.")
+        with col_th:
+            st.markdown("#### Top Hitters")
+            if not opp_bat.empty:
+                hit_rows = []
+                for b in opp_bat["Batter"].unique():
+                    bs = opp_bat[opp_bat["Batter"] == b]
+                    bt = bs[bs["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
+                    sw = bs[bs["PitchCall"].isin(SWING_CALLS)]
+                    wh = bs[bs["PitchCall"] == "StrikeSwinging"]
+                    hit_rows.append({
+                        "Batter": display_name(b),
+                        "PA": len(bs[bs["PitchCall"].notna()].groupby(["Date", "PAofInning"]).ngroups) if "PAofInning" in bs.columns else len(bt),
+                        "Avg EV": round(bt["ExitSpeed"].mean(), 1) if len(bt) > 0 else None,
+                        "Max EV": round(bt["ExitSpeed"].max(), 1) if len(bt) > 0 else None,
+                        "Whiff%": round(len(wh)/max(len(sw),1)*100, 1) if len(sw) > 0 else None,
+                    })
+                hit_df = pd.DataFrame(hit_rows).sort_values("Avg EV", ascending=False).head(10)
+                st.dataframe(hit_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No hitting data.")
+
+    # ── Their Pitchers Tab ──
+    with tab_pit:
+        if opp_pit.empty:
+            st.info("No pitching data for this team.")
+        else:
+            p = st.selectbox("Pitcher", sorted(opp_pit["Pitcher"].unique()),
+                             format_func=display_name, key="sc_tp")
+            sub = opp_pit[opp_pit["Pitcher"] == p]
+            rows = []
+            for pt in sorted(sub["TaggedPitchType"].dropna().unique()):
+                s = sub[sub["TaggedPitchType"] == pt]
+                if len(s) < 2:
+                    continue
+                rows.append({"Pitch": pt, "N": len(s),
+                             "Velo": round(s["RelSpeed"].mean(), 1) if s["RelSpeed"].notna().any() else None,
+                             "Spin": int(round(s["SpinRate"].mean())) if s["SpinRate"].notna().any() else None,
+                             "IVB": round(s["InducedVertBreak"].mean(), 1) if s["InducedVertBreak"].notna().any() else None,
+                             "HB": round(s["HorzBreak"].mean(), 1) if s["HorzBreak"].notna().any() else None})
+            if rows:
+                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            loc = sub.dropna(subset=["PlateLocSide", "PlateLocHeight"])
+            if not loc.empty:
+                fig = px.density_heatmap(loc, x="PlateLocSide", y="PlateLocHeight", nbinsx=12, nbinsy=12,
+                                         color_continuous_scale="YlOrRd")
+                add_strike_zone(fig)
+                fig.update_layout(xaxis=dict(range=[-3, 3], scaleanchor="y"),
+                                  yaxis=dict(range=[0, 5]),
+                                  height=400, coloraxis_showscale=False, **CHART_LAYOUT)
+                st.plotly_chart(fig, use_container_width=True)
+
+    # ── Their Hitters Tab ──
+    with tab_hit:
+        if opp_bat.empty:
+            st.info("No hitting data for this team.")
+        else:
+            b = st.selectbox("Batter", sorted(opp_bat["Batter"].unique()),
+                             format_func=display_name, key="sc_tb")
+            sub = opp_bat[opp_bat["Batter"] == b]
+            batted = sub[sub["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.metric("Avg EV", f"{batted['ExitSpeed'].mean():.1f}" if len(batted) > 0 else "-")
+            with c2:
+                st.metric("Max EV", f"{batted['ExitSpeed'].max():.1f}" if len(batted) > 0 else "-")
+            with c3:
+                sw = sub[sub["PitchCall"].isin(SWING_CALLS)]
+                wh = sub[sub["PitchCall"] == "StrikeSwinging"]
+                st.metric("Whiff%", f"{len(wh)/max(len(sw),1)*100:.1f}%" if len(sw) > 0 else "-")
+            loc = sub.dropna(subset=["PlateLocSide", "PlateLocHeight"])
+            sl = loc[loc["PitchCall"].isin(SWING_CALLS)]
+            if not sl.empty:
+                fig = px.density_heatmap(sl, x="PlateLocSide", y="PlateLocHeight", nbinsx=12, nbinsy=12,
+                                         color_continuous_scale="YlOrRd")
+                add_strike_zone(fig)
+                fig.update_layout(xaxis=dict(range=[-3, 3], scaleanchor="y"),
+                                  yaxis=dict(range=[0, 5]),
+                                  height=400, coloraxis_showscale=False, **CHART_LAYOUT)
+                st.plotly_chart(fig, use_container_width=True)
 
 
 # ──────────────────────────────────────────────
@@ -5385,11 +5464,20 @@ def _hitting_lab_content(data, batter, season_filter, bdf, batted, pr, all_batte
 
 
 # ──────────────────────────────────────────────
-# PAGE: MATCHUP OPTIMIZER
+# PAGE: GAME PREP (Matchup Optimizer + Pitcher Strategy)
 # ──────────────────────────────────────────────
-def page_matchup_optimizer(data):
-    st.markdown('<div class="section-header">Matchup Optimizer</div>', unsafe_allow_html=True)
-    st.caption("Rank Davidson hitters by expected performance against a specific opposing pitcher's arsenal")
+def page_game_prep(data):
+    st.markdown('<div class="section-header">Game Prep</div>', unsafe_allow_html=True)
+    st.caption("Pre-game intelligence — matchup rankings and pitcher strategy")
+    tab_matchups, tab_strategy = st.tabs(["Matchup Optimizer", "Pitcher Strategy"])
+    with tab_matchups:
+        _matchup_optimizer_content(data)
+    with tab_strategy:
+        _game_planning_content(data)
+
+
+def _matchup_optimizer_content(data):
+    """Rank Davidson hitters by expected performance against a specific opposing pitcher's arsenal."""
 
     # Select opponent pitcher
     opp_pitching = data[~data["Pitcher"].isin(ROSTER_2026) & data["PitcherTeam"].notna()].copy()
@@ -5563,12 +5651,8 @@ def page_matchup_optimizer(data):
         st.info("Not enough Davidson hitting data against these pitch types.")
 
 
-# ──────────────────────────────────────────────
-# PAGE: GAME PLANNING
-# ──────────────────────────────────────────────
-def page_game_planning(data):
-    st.markdown('<div class="section-header">Game Planning</div>', unsafe_allow_html=True)
-    st.caption("Pitch sequencing engine, count leverage analysis, and effective velocity — actionable intel for game day")
+def _game_planning_content(data):
+    """Pitch sequencing engine, count leverage analysis, and effective velocity."""
 
     dav_pitching = filter_davidson(data, role="pitcher")
     if dav_pitching.empty:
@@ -7289,10 +7373,8 @@ def main():
         "Pitching",
         "Catcher Analytics",
         "Player Development",
-        "Matchup Optimizer",
-        "Game Planning",
+        "Game Prep",
         "Defensive Positioning",
-        "Game Log",
         "Opponent Scouting",
     ], label_visibility="collapsed")
 
@@ -7319,14 +7401,10 @@ def main():
         page_team(data)
     elif page == "Player Development":
         page_development(data)
-    elif page == "Matchup Optimizer":
-        page_matchup_optimizer(data)
-    elif page == "Game Planning":
-        page_game_planning(data)
+    elif page == "Game Prep":
+        page_game_prep(data)
     elif page == "Defensive Positioning":
         page_defensive_positioning(data)
-    elif page == "Game Log":
-        page_game_log(data)
     elif page == "Opponent Scouting":
         page_scouting(data)
 
