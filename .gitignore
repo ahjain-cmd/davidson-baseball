@@ -5,5 +5,7 @@ __pycache__/
 *.csv
 !truemedia_hitting/*.csv
 !truemedia_pitching/*.csv
+!truemedia_pitching_new/*.csv
+!Catcher*.csv
 v3/
 .env
