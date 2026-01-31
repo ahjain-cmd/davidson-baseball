@@ -4342,8 +4342,8 @@ def _scouting_pitcher_report(tm, team, trackman_data):
                     fig_hm.update_layout(
                         **CHART_LAYOUT, height=280,
                         xaxis=dict(side="bottom"), yaxis=dict(autorange="reversed"),
-                        margin=dict(l=60, r=10, t=10, b=40),
                     )
+                    fig_hm.update_layout(margin=dict(l=60, r=10, t=10, b=40))
                     st.plotly_chart(fig_hm, use_container_width=True)
 
         with cmd_col2:
