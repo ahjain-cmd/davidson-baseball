@@ -4509,186 +4509,116 @@ def _pitching_plan_content(tm, team, data, season_filter):
                         _, g12 = _lookup_tunnel(seq_p1, seq_p2, tunnels)
                         _, g23 = _lookup_tunnel(seq_p2, seq_p3, tunnels)
 
-            # ── 1. HITTER SCOUTING — references actual game plan pitches ──
-            scout_lines = []
-            # 1P tendency — reference the actual 0-0 pitch
-            if fp_context:
-                p0_name = seq_p1 or (primary[0] if primary else None)
-                if fp_context == "passive":
-                    scout_lines.append(f"**1st Pitch**: Passive ({fp_pct:.0f}th %ile) — attack zone with {p0_name or 'hard stuff'}")
-                elif fp_context == "aggressive":
-                    scout_lines.append(f"**1st Pitch**: Aggressive ({fp_pct:.0f}th %ile) — steal with {p0_name or 'offspeed'}")
-            # 2K vulnerability — reference the actual putaway pitch
-            pw_pitch = seq_p3  # from the resolved sequence
-            if pw_pitch:
-                is_pw_hard = pw_pitch in _hard_pitches
-                pw_2k_val = hd.get("whiff_2k_hard" if is_pw_hard else "whiff_2k_os", np.nan)
-                pw_2k_pctile = pct_2k_hard if is_pw_hard else pct_2k_os
-                if not pd.isna(pw_2k_val) and not pd.isna(pw_2k_pctile):
-                    cls_label = "hard" if is_pw_hard else "OS"
-                    if pw_2k_pctile >= 65:
-                        scout_lines.append(f"**2-Strike**: {pw_2k_val:.0f}% 2K {cls_label} whiff ({_pct_label(pw_2k_pctile)}) — bury {pw_pitch}")
-                    elif pw_2k_pctile <= 25:
-                        scout_lines.append(f"**2-Strike**: Only {pw_2k_val:.0f}% 2K {cls_label} whiff ({_pct_label(pw_2k_pctile)}) — tough to put away")
-            # Swing tendencies by pitch class — only flag outliers we can exploit
-            _class_pitches = {
-                "swing_vs_hard": [n for n in ps_dict if n in _hard_pitches],
-                "swing_vs_sl": [n for n in ps_dict if n in ("Slider", "Sweeper")],
-                "swing_vs_cb": [n for n in ps_dict if n in ("Curveball", "Knuckle Curve")],
-                "swing_vs_ch": [n for n in ps_dict if n in ("Changeup", "Splitter")],
-            }
-            swing_items = [
-                ("swing_vs_hard", "Hard"), ("swing_vs_sl", "Slider"),
-                ("swing_vs_cb", "Curveball"), ("swing_vs_ch", "Changeup"),
-            ]
-            for key, label in swing_items:
-                matching = _class_pitches.get(key, [])
-                if not matching:
-                    continue
-                sw_val = hd.get(key, np.nan)
-                if pd.isna(sw_val):
-                    continue
-                sw_pctile = _pctile(_sw_pct_map.get(key, pd.Series(dtype=float)), sw_val)
-                if pd.isna(sw_pctile):
-                    continue
-                pitch_names = " / ".join(matching[:2])
-                if sw_pctile >= 80:
-                    scout_lines.append(f"**Swing tendency**: Aggressive vs {pitch_names} ({sw_val:.0f}%, {sw_pctile:.0f}th %ile) — tunnel into it, expand")
-                elif sw_pctile <= 20:
-                    scout_lines.append(f"**Swing tendency**: Won't swing at {pitch_names} ({sw_val:.0f}%, {sw_pctile:.0f}th %ile) — use for called strikes")
-                if len(scout_lines) >= 4:
-                    break
-            # Discipline
-            if not pd.isna(their_chase_val):
-                if their_chase_val > 32:
-                    best_chase_p = max(real_ps, key=lambda x: x[1].get("our_chase", 0) or 0)
-                    scout_lines.append(f"**Discipline**: Chaser ({their_chase_val:.0f}%) — expand early with {best_chase_p[0]}")
-                elif their_chase_val < 18:
-                    scout_lines.append(f"**Discipline**: Elite ({their_chase_val:.0f}% chase) — must throw strikes")
-            elif not pd.isna(hd.get("bb_pct", np.nan)) and hd["bb_pct"] > 14:
-                scout_lines.append(f"**Discipline**: Patient ({hd['bb_pct']:.0f}% BB) — attack zone, don't nibble")
-            if scout_lines:
-                st.markdown("**Hitter Scouting**")
-                for sl in scout_lines[:4]:
-                    st.markdown(f"- {sl}")
-
-            # ── 2. GAME PLAN — count plan IS the sequence, laid out by count ──
+            # ── UNIFIED AT-BAT SCRIPT ──
             if active_seq:
-                pw_whiff = ps_dict.get(seq_p3, {}).get("our_whiff", 0) or 0
-                is_pw_hard = seq_p3 in _hard_pitches
-                pw_2k = hd.get("whiff_2k_hard" if is_pw_hard else "whiff_2k_os", np.nan)
-                pw_2k_pct = pct_2k_hard if is_pw_hard else pct_2k_os
-                plan_lines = []
-                # 0-0: P1 from sequence
-                p1_line = f"**0-0**: {seq_p1}"
-                if fp_context == "aggressive" and seq_p1 not in _hard_pitches:
-                    p1_line += " — steal strike"
-                elif fp_context == "passive":
-                    p1_line += " — attack zone"
-                plan_lines.append(p1_line)
-                # 1-0: Behind — attack with best hard stuff
-                if best_hard_p:
-                    plan_lines.append(f"**1-0**: {best_hard_p[0]} — attack zone")
-                # 0-1: P2 from sequence with tunnel context
-                tun_12 = f" ({g12} tunnel)" if g12 not in ("-", "F", None) else ""
-                plan_lines.append(f"**0-1**: {seq_p2}{tun_12} — sets up {seq_p3}")
-                # 1-1 / 2-1: Compete with primary
-                if primary:
-                    plan_lines.append(f"**1-1 / 2-1**: {primary[0]} — compete")
-                # 2-0 / 3-2: Must-strike with best hard pitch
-                if best_hard_p:
-                    plan_lines.append(f"**2-0 / 3-2**: {best_hard_p[0]} — must throw strike")
-                # 0-2 / 1-2: Putaway options with locations from zone_eff + tunneling
-                # Collect unique putaway pitches from all sequences + fallback
+                st.markdown("**At-Bat Script**")
+
+                # ① FIRST PITCH
+                if fp_context == "passive":
+                    fp_line = f"**① FIRST PITCH:** {seq_p1} — attack zone"
+                    fp_ctx = f"Passive 1P hitter ({fp_hard:.0f}% swing, {fp_pct:.0f}th %ile) — free strike"
+                    st.markdown(fp_line)
+                    st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;_{fp_ctx}_")
+                elif fp_context == "aggressive":
+                    fp_line = f"**① FIRST PITCH:** {seq_p1} — steal strike"
+                    fp_ctx = f"Aggressive 1P hitter ({fp_hard:.0f}% swing, {fp_pct:.0f}th %ile) — will chase"
+                    st.markdown(fp_line)
+                    st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;_{fp_ctx}_")
+                else:
+                    st.markdown(f"**① FIRST PITCH:** {seq_p1} — compete")
+
+                # ② TUNNEL / SETUP
+                tun_12_str = f"{g12} tunnel from {seq_p1}" if g12 not in ("-", "F", None) else f"after {seq_p1}"
+                tun_23_str = f"{g23} tunnel into putaway" if g23 not in ("-", "F", None) else ""
+                setup_line = f"**② TUNNEL:** {seq_p2} ({tun_12_str}) — sets up {seq_p3}"
+                st.markdown(setup_line)
+                # Context: hitter swing% vs P2 class (only if outlier)
+                _p2_class_map = {
+                    **{p: "swing_vs_hard" for p in _hard_pitches},
+                    "Slider": "swing_vs_sl", "Sweeper": "swing_vs_sl",
+                    "Curveball": "swing_vs_cb", "Knuckle Curve": "swing_vs_cb",
+                    "Changeup": "swing_vs_ch", "Splitter": "swing_vs_ch",
+                }
+                p2_sw_key = _p2_class_map.get(seq_p2, "")
+                setup_ctx_parts = []
+                if p2_sw_key:
+                    p2_sw_val = hd.get(p2_sw_key, np.nan)
+                    if not pd.isna(p2_sw_val):
+                        p2_sw_pctile = _pctile(_sw_pct_map.get(p2_sw_key, pd.Series(dtype=float)), p2_sw_val)
+                        if not pd.isna(p2_sw_pctile) and (p2_sw_pctile >= 65 or p2_sw_pctile <= 25):
+                            sw_desc = "aggressive" if p2_sw_pctile >= 65 else "passive"
+                            setup_ctx_parts.append(f"Swings {p2_sw_val:.0f}% vs {seq_p2}s ({p2_sw_pctile:.0f}th %ile, {sw_desc})")
+                if tun_23_str:
+                    setup_ctx_parts.append(tun_23_str)
+                if setup_ctx_parts:
+                    st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;_{'; '.join(setup_ctx_parts)}_")
+
+                # ③ PUTAWAY (0-2 / 1-2)
                 pw_options = []
                 seen_pw = set()
-                # Option sources: sequences first, then any remaining offspeed
                 pw_candidates = []
                 for s in top_seqs:
                     if s["p3"] not in seen_pw:
                         pw_candidates.append((s["p3"], s["p2"], s))
                         seen_pw.add(s["p3"])
-                # Add any offspeed not already covered (strong putaway candidates)
                 for n, d in real_os:
                     if n not in seen_pw:
                         pw_candidates.append((n, None, None))
                         seen_pw.add(n)
-                for pw_name, setup_name, seq_obj in pw_candidates[:3]:
+                for pw_name, setup_name, seq_obj in pw_candidates[:2]:
                     pw_d = ps_dict.get(pw_name, {})
                     pw_w = pw_d.get("our_whiff", 0) or 0
                     ars_pw = arsenal["pitches"].get(pw_name, {})
-                    # Best zone location from Trackman zone_eff
-                    loc_label, loc_whiff = _best_putaway_zone(pw_name, ars_pw)
+                    loc_label, _ = _best_putaway_zone(pw_name, ars_pw)
                     loc_str = f" — {loc_label}" if loc_label else ""
-                    # Tunnel grade from setup pitch
                     if setup_name:
                         _, tg = _lookup_tunnel(setup_name, pw_name, tunnels)
-                        tun_str = f" ({tg} tunnel from {setup_name})" if tg not in ("-", "F", None) else ""
+                        tun_str = f", {tg} tunnel from {setup_name}" if tg not in ("-", "F", None) else ""
                     else:
                         tun_str = ""
-                    # Hitter 2K vulnerability
                     is_h = pw_name in _hard_pitches
                     t2k = hd.get("whiff_2k_hard" if is_h else "whiff_2k_os", np.nan)
                     t2k_p = pct_2k_hard if is_h else pct_2k_os
                     vuln_str = ""
                     if not pd.isna(t2k) and not pd.isna(t2k_p) and t2k_p >= 60:
                         vuln_str = f" — {t2k:.0f}% 2K {'hard' if is_h else 'OS'} ({_pct_label(t2k_p)})"
-                    pw_options.append(f"{pw_name} ({pw_w:.0f}% whiff){loc_str}{tun_str}{vuln_str}")
+                    pw_options.append(f"{pw_name}{loc_str} ({pw_w:.0f}% whiff{tun_str}){vuln_str}")
                 if pw_options:
-                    plan_lines.append(f"**0-2 / 1-2**:")
+                    st.markdown("**③ PUTAWAY (0-2 / 1-2):**")
                     for i, opt in enumerate(pw_options):
-                        plan_lines.append(f"&nbsp;&nbsp;{i+1}. {opt}")
-                st.markdown("**Game Plan**")
-                for pl in plan_lines:
-                    st.markdown(f"- {pl}")
-                # Sequence table — show all sequences as alternatives
-                st.markdown("**Sequences**")
-                seq_rows = []
-                for s in top_seqs:
-                    _, sg12 = _lookup_tunnel(s["p1"], s["p2"], tunnels)
-                    _, sg23 = _lookup_tunnel(s["p2"], s["p3"], tunnels)
-                    seq_rows.append({
-                        "Sequence": s["seq"],
-                        "Tunnel 1→2": str(sg12) if sg12 else "-",
-                        "Tunnel 2→3": str(sg23) if sg23 else "-",
-                        "Putaway Whiff": f"{s['sw23']:.0f}%" if not pd.isna(s.get("sw23")) else "-",
-                        "Their 2K": f"{s['their_2k']:.0f}%" if not pd.isna(s.get("their_2k")) else "-",
-                    })
-                st.dataframe(pd.DataFrame(seq_rows), use_container_width=True, hide_index=True)
+                        st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;{i+1}. {opt}")
+
+                # WHEN BEHIND
+                if best_hard_p:
+                    st.markdown(f"**WHEN BEHIND (1-0, 2-0, 3-2):** {best_hard_p[0]} — attack zone")
+
+                # Compact context footer
+                footer_parts = []
+                if not pd.isna(their_chase_val):
+                    if their_chase_val > 32:
+                        best_chase_p = max(real_ps, key=lambda x: x[1].get("our_chase", 0) or 0)
+                        footer_parts.append(f"Chaser ({their_chase_val:.0f}% chase) — expand early with {best_chase_p[0]}")
+                    elif their_chase_val < 18:
+                        footer_parts.append(f"Elite discipline ({their_chase_val:.0f}% chase) — must throw strikes")
+                if not footer_parts and not pd.isna(hd.get("bb_pct", np.nan)) and hd["bb_pct"] > 14:
+                    footer_parts.append(f"Patient ({hd['bb_pct']:.0f}% BB) — attack zone")
+                if footer_parts:
+                    st.caption(" | ".join(footer_parts))
+
             else:
-                # Fallback: no sequences — simple plan
-                plan_lines = []
-                if primary:
-                    plan_lines.append(f"**0-0**: {primary[0]}")
-                if best_hard_p:
-                    plan_lines.append(f"**1-0**: {best_hard_p[0]} — attack zone")
+                # Fallback: no sequences — simplified at-bat script
+                st.markdown("**At-Bat Script**")
+                p1_name = primary[0] if primary else (best_hard_p[0] if best_hard_p else None)
+                if p1_name:
+                    st.markdown(f"**① FIRST PITCH:** {p1_name} — compete")
                 if real_os:
-                    plan_lines.append(f"**0-1**: {real_os[0][0]} — expand")
-                if primary:
-                    plan_lines.append(f"**1-1 / 2-1**: {primary[0]} — compete")
-                if best_hard_p:
-                    plan_lines.append(f"**2-0 / 3-2**: {best_hard_p[0]} — must throw strike")
-                def _putaway_score(item):
-                    n, d = item
-                    comp = d.get("score", 50)
-                    our_w = d.get("our_whiff", 0) or 0
-                    our_ch = d.get("our_chase", 0) or 0
-                    is_h = n in _hard_pitches
-                    t2k = hd.get("whiff_2k_hard" if is_h else "whiff_2k_os", np.nan)
-                    sc = comp * 0.50
-                    if not pd.isna(t2k):
-                        sc += min(t2k / 40 * 100, 100) * 0.25
-                    sc += min(our_w / 50 * 100, 100) * 0.15
-                    sc += min(our_ch / 40 * 100, 100) * 0.10
-                    return sc
-                pw = max(real_ps, key=_putaway_score) if real_ps else None
+                    st.markdown(f"**② TUNNEL:** {real_os[0][0]} — expand off {p1_name or 'fastball'}")
+                pw = max(real_ps, key=lambda x: (x[1].get("our_whiff", 0) or 0)) if real_ps else None
                 if pw:
                     pw_w = pw[1].get("our_whiff", 0) or 0
-                    plan_lines.append(f"**0-2 / 1-2**: {pw[0]} ({pw_w:.0f}% whiff)")
-                if plan_lines:
-                    st.markdown("**Game Plan**")
-                    for pl in plan_lines:
-                        st.markdown(f"- {pl}")
+                    st.markdown(f"**③ PUTAWAY (0-2 / 1-2):** {pw[0]} ({pw_w:.0f}% whiff)")
+                if best_hard_p:
+                    st.markdown(f"**WHEN BEHIND (1-0, 2-0, 3-2):** {best_hard_p[0]} — attack zone")
 
 
 def _hitting_plan_content(tm, team, data, season_filter):
