@@ -1589,20 +1589,20 @@ def page_hitting(data):
                   f"{int(pr['PA'])} PA  |  {int(pr['BBE'])} Batted Balls  |  "
                   f"Seasons: {', '.join(str(int(s)) for s in sorted(season_filter))}")
 
-    # 9 tabs: Overview + 8 lab tabs
+    # 8 tabs: Overview + 7 lab tabs
     (tab_overview, tab_quality, tab_discipline, tab_coverage, tab_approach,
-     tab_pitch_type, tab_spray, tab_swing, tab_ai) = st.tabs([
+     tab_pitch_type, tab_spray, tab_swing) = st.tabs([
         "Overview", "Batted Ball Quality", "Plate Discipline", "Zone Coverage",
-        "Approach Analysis", "Pitch Type Performance", "Spray Lab", "Swing Path", "AI Report"
+        "Approach Analysis", "Pitch Type Performance", "Spray Lab", "Swing Path"
     ])
 
     with tab_overview:
         _hitting_overview(data, batter, season_filter, bdf, batted, pr, all_batter_stats)
 
-    # Tabs 2-9: delegate to lab content
+    # Tabs 2-8: delegate to lab content
     _hitting_lab_content(data, batter, season_filter, bdf, batted, pr, all_batter_stats,
                          tab_quality, tab_discipline, tab_coverage, tab_approach,
-                         tab_pitch_type, tab_spray, tab_swing, tab_ai)
+                         tab_pitch_type, tab_spray, tab_swing)
 
 
 # ──────────────────────────────────────────────
@@ -2276,20 +2276,20 @@ def page_pitching(data):
     # Compute Stuff+ for lab tabs
     stuff_df = _compute_stuff_plus(pdf, baseline=data)
 
-    # Tabs: Overview + 7 lab tabs
+    # Tabs: Overview + 6 lab tabs
     (tab_overview, tab_stuff, tab_tunnel, tab_seq, tab_loc,
-     tab_sim, tab_cmd, tab_ai) = st.tabs([
+     tab_sim, tab_cmd) = st.tabs([
         "Overview", "Stuff+ Grades", "Pitch Tunnels", "Sequencing",
-        "Location Lab", "Hitter's Eye", "Command+", "AI Report"
+        "Location Lab", "Hitter's Eye", "Command+"
     ])
 
     with tab_overview:
         _pitching_overview(data, pitcher, season_filter, pdf, pdf_raw, pr, all_pitcher_stats)
 
-    # Tabs 2-8: delegate to lab content
+    # Tabs 2-7: delegate to lab content
     _pitching_lab_content(data, pitcher, season_filter, pdf, stuff_df,
                           tab_stuff, tab_tunnel, tab_seq, tab_loc,
-                          tab_sim, tab_cmd, tab_ai)
+                          tab_sim, tab_cmd)
 
 
 # ──────────────────────────────────────────────
@@ -4891,8 +4891,8 @@ def page_scouting(data):
 
     team = st.selectbox("Opponent", all_tm_teams, key="sc_team_tm")
 
-    tab_overview, tab_hitters, tab_pitchers, tab_catchers, tab_ai, tab_gameplan = st.tabs([
-        "Team Overview", "Their Hitters", "Their Pitchers", "Their Catchers", "Scouting Report", "Game Plan"
+    tab_overview, tab_hitters, tab_pitchers, tab_catchers, tab_gameplan = st.tabs([
+        "Team Overview", "Their Hitters", "Their Pitchers", "Their Catchers", "Game Plan"
     ])
 
     # ── Tab 1: Team Overview ──
@@ -4911,11 +4911,7 @@ def page_scouting(data):
     with tab_catchers:
         _scouting_catcher_report(tm, team)
 
-    # ── Tab 5: AI Scouting Report ──
-    with tab_ai:
-        _scouting_ai_report(tm, team)
-
-    # ── Tab 6: Game Plan ──
+    # ── Tab 5: Game Plan ──
     with tab_gameplan:
         _game_plan_tab(tm, team, data)
 
@@ -6829,109 +6825,6 @@ def _scouting_catcher_report(tm, team):
             st.dataframe(pd.DataFrame(opp_data), use_container_width=True, hide_index=True)
 
 
-def _scouting_ai_report(tm, team):
-    """AI-generated scouting report tab."""
-    h_cnt = _tm_team(tm["hitting"]["counting"], team)
-    h_rate = _tm_team(tm["hitting"]["rate"], team)
-    h_exit = _tm_team(tm["hitting"]["exit"], team)
-    p_trad = _tm_team(tm["pitching"]["traditional"], team)
-    p_mov = _tm_team(tm["pitching"]["movement"], team)
-    p_rate = _tm_team(tm["pitching"]["rate"], team)
-
-    if h_cnt.empty and p_trad.empty:
-        st.info("Not enough data to generate a scouting report.")
-        return
-
-    st.markdown(f"## Scouting Report: {team}")
-    st.markdown("---")
-
-    # ── Offensive Scouting ──
-    if not h_cnt.empty:
-        st.markdown("### Offensive Identity")
-        total_pa = h_cnt["PA"].sum()
-        total_hr = h_cnt["HR"].sum()
-        total_sb = h_cnt["SB"].sum()
-        total_k = h_cnt["K"].sum()
-        total_bb = h_cnt["BB"].sum()
-        team_k_pct = total_k / max(total_pa, 1) * 100
-        team_bb_pct = total_bb / max(total_pa, 1) * 100
-
-        # Power vs Speed
-        if total_hr > 40 and total_sb > 50:
-            st.markdown("- **Power + speed combo** — this team can both mash and run. Pitchers must hold runners and avoid mistakes.")
-        elif total_hr > 40:
-            st.markdown(f"- **Power-heavy lineup** ({total_hr} HR) — built to hit for extra bases. Keep the ball down and out of the zone.")
-        elif total_sb > 50:
-            st.markdown(f"- **Speed-oriented** ({total_sb} SB) — will pressure on the bases. Quick pitching and catcher readiness critical.")
-
-        if team_k_pct > 22:
-            st.markdown(f"- **Strikeout-prone** ({team_k_pct:.1f}% K rate) — put-away pitches and expanding the zone will be effective.")
-        elif team_k_pct < 16:
-            st.markdown(f"- **Hard to strike out** ({team_k_pct:.1f}% K rate) — need quality stuff and precise location.")
-
-        if team_bb_pct > 10:
-            st.markdown(f"- **Patient lineup** ({team_bb_pct:.1f}% BB rate) — throwing strikes early is essential to avoid deep counts.")
-
-        # Key offensive threats
-        if not h_rate.empty:
-            top_hitters = h_rate.sort_values("OPS", ascending=False).head(3)
-            st.markdown("#### Key Offensive Threats")
-            for _, h in top_hitters.iterrows():
-                ops = h.get("OPS")
-                ba = h.get("BA")
-                ops_str = f"{ops:.3f}" if pd.notna(ops) else "?"
-                ba_str = f"{ba:.3f}" if pd.notna(ba) else "?"
-                name = h.get("playerFullName", "?")
-                pos = h.get("pos", "?")
-                st.markdown(f"- **{name}** ({pos}) — {ba_str}/{ops_str} OPS")
-
-    # ── Pitching Staff Scouting ──
-    if not p_trad.empty:
-        st.markdown("### Pitching Staff")
-        starters = p_trad[p_trad["GS"] > 3].sort_values("IP", ascending=False)
-        relievers = p_trad[p_trad["GS"] <= 3].sort_values("IP", ascending=False)
-
-        if not starters.empty:
-            st.markdown("#### Starting Rotation")
-            for _, p in starters.head(4).iterrows():
-                era = p.get("ERA")
-                whip = p.get("WHIP")
-                k9 = p.get("K/9")
-                era_str = f"{era:.2f}" if pd.notna(era) else "?"
-                whip_str = f"{whip:.2f}" if pd.notna(whip) else "?"
-                k9_str = f"{k9:.1f}" if pd.notna(k9) else "?"
-                name = p.get("playerFullName", "?")
-                throws = p.get("throwsHand", "?")
-                ip_val = p.get("IP", 0)
-                st.markdown(f"- **{name}** ({throws}HP, {ip_val:.0f} IP) — {era_str} ERA, {whip_str} WHIP, {k9_str} K/9")
-                # Quick analysis
-                if pd.notna(era) and era > 5.0:
-                    st.markdown(f"  - *Exploitable: high ERA, be aggressive*")
-                elif pd.notna(k9) and k9 > 10:
-                    st.markdown(f"  - *High-K arm: shorten swings, put ball in play*")
-
-        if not relievers.empty and len(relievers) > 0:
-            st.markdown("#### Key Relievers")
-            for _, p in relievers.head(3).iterrows():
-                era = p.get("ERA")
-                era_str = f"{era:.2f}" if pd.notna(era) else "?"
-                name = p.get("playerFullName", "?")
-                ip_val = p.get("IP", 0)
-                st.markdown(f"- **{name}** ({ip_val:.0f} IP) — {era_str} ERA")
-
-        # Staff tendencies from movement data
-        if not p_mov.empty:
-            avg_vel = p_mov["Vel"].mean() if "Vel" in p_mov.columns else None
-            avg_spin = p_mov["Spin"].mean() if "Spin" in p_mov.columns else None
-            st.markdown("#### Staff Tendencies")
-            if avg_vel is not None and not pd.isna(avg_vel):
-                if avg_vel > 91:
-                    st.markdown(f"- Hard-throwing staff (avg {avg_vel:.1f} mph) — time fastballs, prepare for velocity")
-                else:
-                    st.markdown(f"- Moderate velocity (avg {avg_vel:.1f} mph) — sit on secondary pitches and drive mistakes")
-
-    st.markdown("---")
-    st.caption("Report auto-generated from TrueMedia season data. Cross-reference with Trackman data for pitch-level detail.")
 
 
 # ──────────────────────────────────────────────
@@ -7245,217 +7138,11 @@ def _compute_pitch_pair_results(pdf, data):
     return pd.DataFrame(rows).sort_values("Whiff%", ascending=False).reset_index(drop=True)
 
 
-def _generate_ai_report(pdf, pitcher_name, stuff_df, tunnel_df, pair_df, all_data):
-    """Generate comprehensive AI scouting report with actionable recommendations."""
-    lines = []
-    lines.append(f"## AI Pitch Design Report: {display_name(pitcher_name)}")
-    lines.append("")
-
-    if stuff_df.empty:
-        lines.append("*Insufficient data to generate report.*")
-        return "\n".join(lines)
-
-    # ── Arsenal Overview ──
-    arsenal = stuff_df.groupby("TaggedPitchType").agg(
-        count=("StuffPlus", "count"),
-        stuff_avg=("StuffPlus", "mean"),
-        stuff_std=("StuffPlus", "std"),
-        velo=("RelSpeed", "mean"),
-        ivb=("InducedVertBreak", "mean"),
-        hb=("HorzBreak", "mean"),
-        spin=("SpinRate", "mean"),
-        vaa=("VertApprAngle", "mean"),
-        ext=("Extension", "mean"),
-    ).sort_values("count", ascending=False)
-
-    stuff_valid = arsenal["stuff_avg"].dropna()
-    if stuff_valid.empty:
-        lines.append("### Arsenal Grades")
-        lines.append("Insufficient data to compute Stuff+ grades.")
-        return "\n".join(lines)
-    best_pitch = stuff_valid.idxmax()
-    best_stuff = stuff_valid[best_pitch]
-    worst_pitch = stuff_valid.idxmin()
-    worst_stuff = stuff_valid[worst_pitch]
-
-    lines.append("### Arsenal Grades")
-    lines.append("")
-    for pt in arsenal.index:
-        s = arsenal.loc[pt, "stuff_avg"]
-        grade = "Elite" if s >= 120 else "Plus" if s >= 110 else "Above Avg" if s >= 105 else "Average" if s >= 95 else "Below Avg" if s >= 90 else "Poor"
-        emoji = "A+" if s >= 120 else "A" if s >= 110 else "B+" if s >= 105 else "B" if s >= 95 else "C" if s >= 90 else "D"
-        count = int(arsenal.loc[pt, "count"])
-        velo = arsenal.loc[pt, "velo"]
-        lines.append(f"- **{pt}** ({emoji}): Stuff+ {s:.0f} | {velo:.1f} mph | {count} pitches | *{grade}*")
-    lines.append("")
-
-    # ── Strengths ──
-    lines.append("### Key Strengths")
-    lines.append("")
-    if best_stuff >= 105:
-        lines.append(f"- **{best_pitch}** is the clear weapon pitch (Stuff+ {best_stuff:.0f})")
-        bv = arsenal.loc[best_pitch, "velo"]
-        bi = arsenal.loc[best_pitch, "ivb"]
-        bh = arsenal.loc[best_pitch, "hb"]
-        if best_pitch in ("Fastball", "Sinker", "Cutter"):
-            if bi > 15:
-                lines.append(f"  - Elite vertical carry ({bi:.1f} in IVB) — hitters swing under this pitch")
-            if bv >= 90:
-                lines.append(f"  - Plus velocity ({bv:.1f} mph) creates swing-and-miss at the top of the zone")
-        else:
-            if abs(bh) > 10:
-                lines.append(f"  - Elite horizontal movement ({bh:.1f} in) generates chase swings")
-            if bi < -5:
-                lines.append(f"  - Strong vertical drop ({bi:.1f} in IVB) plays well below the zone")
-
-    # Release consistency
-    rel_std_h = pdf.groupby("TaggedPitchType")["RelHeight"].std().mean()
-    rel_std_s = pdf.groupby("TaggedPitchType")["RelSide"].std().mean()
-    avg_rel_std = (rel_std_h + rel_std_s) / 2 if not pd.isna(rel_std_h) else 1.0
-    if avg_rel_std < 0.15:
-        lines.append("- **Excellent release point consistency** — all pitches look the same out of the hand")
-    elif avg_rel_std < 0.25:
-        lines.append("- **Good release point consistency** — pitches tunnel well at the release point")
-
-    # Velo spread
-    fb_types = [t for t in arsenal.index if t in ("Fastball", "Sinker", "Cutter")]
-    off_types = [t for t in arsenal.index if t in ("Changeup", "Splitter")]
-    if fb_types and off_types:
-        fb_velo = arsenal.loc[fb_types, "velo"].max()
-        off_velo = arsenal.loc[off_types, "velo"].min()
-        velo_diff = fb_velo - off_velo
-        if velo_diff >= 10:
-            lines.append(f"- **Strong velocity differential** ({velo_diff:.0f} mph gap) — effective speed change disrupts timing")
-
-    lines.append("")
-
-    # ── Areas for Improvement ──
-    lines.append("### Areas for Improvement")
-    lines.append("")
-    if worst_stuff < 95:
-        lines.append(f"- **{worst_pitch}** needs work (Stuff+ {worst_stuff:.0f})")
-        wv = arsenal.loc[worst_pitch, "velo"]
-        wi = arsenal.loc[worst_pitch, "ivb"]
-        wh = arsenal.loc[worst_pitch, "hb"]
-        if worst_pitch in ("Slider", "Sweeper", "Curveball", "Knuckle Curve") and abs(wh) < 5:
-            lines.append(f"  - *Recommendation*: Increase horizontal break — currently only {wh:.1f} in, aim for 8+ in")
-        if worst_pitch == "Changeup" and fb_types:
-            fb_v = arsenal.loc[fb_types[0], "velo"]
-            diff = fb_v - wv
-            if diff < 8:
-                lines.append(f"  - *Recommendation*: Increase velo separation — only {diff:.1f} mph gap (want 8-12 mph)")
-        if worst_pitch in ("Fastball", "Sinker") and wi < 12:
-            lines.append(f"  - *Recommendation*: Increase vertical carry — {wi:.1f} in IVB is below average (target 14+)")
-
-    if avg_rel_std >= 0.25:
-        lines.append(f"- **Release point inconsistency** (avg deviation: {avg_rel_std:.2f} ft) — work on repeating delivery")
-
-    # Check for missing pitch types
-    has_fb = any(t in arsenal.index for t in ("Fastball", "Sinker"))
-    has_breaking = any(t in arsenal.index for t in ("Slider", "Curveball", "Sweeper", "Knuckle Curve"))
-    has_offspeed = any(t in arsenal.index for t in ("Changeup", "Splitter"))
-    if has_fb and not has_offspeed:
-        lines.append("- **No offspeed pitch in arsenal** — adding a changeup would give hitters a different look and speed change")
-    if has_fb and not has_breaking:
-        lines.append("- **No breaking ball in arsenal** — adding a slider or curve would attack a different plane of movement")
-
-    lines.append("")
-
-    # ── Tunnel Recommendations ──
-    if not tunnel_df.empty:
-        lines.append("### Pitch Tunnel Analysis")
-        lines.append("")
-        for _, r in tunnel_df.iterrows():
-            grade = r.get("Grade", "?")
-            score = r.get("Tunnel Score", 0)
-            diag = r.get("Diagnosis", "")
-            fix = r.get("Fix", "")
-            lines.append(f"- **{r['Pitch A']} + {r['Pitch B']}** — Grade: **{grade}** (Score: {score})")
-            lines.append(f"  - Release: {r['Release Sep (in)']}\" | Commit: {r['Commit Sep (in)']}\" | Plate: {r['Plate Sep (in)']}\"")
-            lines.append(f"  - *{diag}*")
-            if fix and fix != "No changes needed":
-                lines.append(f"  - **Action:** {fix}")
-        lines.append("")
-
-    # ── Sequencing Recommendations ──
-    if not pair_df.empty:
-        lines.append("### Optimal Pitch Sequences")
-        lines.append("")
-        top_seq = pair_df[pair_df["Count"] >= 8].head(5)
-        for _, r in top_seq.iterrows():
-            ev_str = f" | EV Against: {r['Avg EV']:.1f}" if not pd.isna(r.get("Avg EV")) else ""
-            lines.append(f"- **{r['Setup Pitch']} --> {r['Follow Pitch']}**: {r['Whiff%']:.0f}% Whiff, {r['CSW%']:.0f}% CSW{ev_str}")
-        if len(top_seq) > 0:
-            best_seq = top_seq.iloc[0]
-            lines.append(f"\n  *Top combo*: Use **{best_seq['Setup Pitch']}** to set up **{best_seq['Follow Pitch']}** for swing-and-miss")
-        lines.append("")
-
-    # ── Location Strategy ──
-    lines.append("### Location Strategy Insights")
-    lines.append("")
-    for pt in arsenal.index:
-        pt_data = stuff_df[stuff_df["TaggedPitchType"] == pt]
-        whiff_data = pt_data[pt_data["PitchCall"] == "StrikeSwinging"]
-        if len(whiff_data) > 5:
-            avg_h = whiff_data["PlateLocHeight"].mean()
-            avg_s = whiff_data["PlateLocSide"].mean()
-            zone_desc = []
-            if avg_h > 3.0:
-                zone_desc.append("elevated")
-            elif avg_h < 2.0:
-                zone_desc.append("low")
-            if avg_s > 0.3:
-                zone_desc.append("arm-side")
-            elif avg_s < -0.3:
-                zone_desc.append("glove-side")
-            if zone_desc:
-                loc_str = " and ".join(zone_desc)
-                lines.append(f"- **{pt}** gets most whiffs when located **{loc_str}** (avg whiff loc: {avg_h:.1f}H, {avg_s:.1f}S)")
-    lines.append("")
-
-    # ── Overall Game Plan ──
-    lines.append("### Recommended Game Plan")
-    lines.append("")
-    primary = best_pitch
-    # Find best secondary
-    secondary = None
-    if not tunnel_df.empty:
-        top_t = tunnel_df.iloc[0]
-        secondary = top_t["Pitch B"] if top_t["Pitch A"] == primary else top_t["Pitch A"]
-    elif len(arsenal) > 1:
-        secondary = arsenal.index[1] if arsenal.index[0] == primary else arsenal.index[0]
-
-    lines.append(f"1. **Establish {primary}** early in counts to set the tone")
-    if secondary:
-        lines.append(f"2. **Tunnel {primary} into {secondary}** — these two pitches pair well together")
-        if not pair_df.empty:
-            best_2strike = pair_df[(pair_df["Whiff%"] >= 25) & (pair_df["Count"] >= 5)]
-            if len(best_2strike) > 0:
-                bs = best_2strike.iloc[0]
-                lines.append(f"3. **Putaway combo**: {bs['Setup Pitch']} --> {bs['Follow Pitch']} ({bs['Whiff%']:.0f}% whiff rate)")
-    if has_offspeed:
-        lines.append(f"4. **Use offspeed** to disrupt timing — especially effective after back-to-back fastballs")
-    lines.append("")
-
-    # ── Comparison to Database ──
-    lines.append("### Database Percentile Rankings")
-    lines.append("")
-    # Compare this pitcher's stuff+ to all pitchers in the database
-    all_pitchers_stuff = _compute_stuff_plus(all_data, baseline=all_data)
-    if not all_pitchers_stuff.empty:
-        for pt in arsenal.index:
-            my_stuff = arsenal.loc[pt, "stuff_avg"]
-            all_pt = all_pitchers_stuff[all_pitchers_stuff["TaggedPitchType"] == pt]["StuffPlus"]
-            if len(all_pt) > 10:
-                pctl = percentileofscore(all_pt.dropna(), my_stuff, kind="rank")
-                lines.append(f"- **{pt}**: {pctl:.0f}th percentile Stuff+ across all pitchers in database")
-
-    return "\n".join(lines)
 
 
 def _pitching_lab_content(data, pitcher, season_filter, pdf, stuff_df,
                           tab_stuff, tab_tunnel, tab_seq, tab_loc,
-                          tab_sim, tab_cmd, tab_ai):
+                          tab_sim, tab_cmd):
     """Render the Pitch Design Lab tabs. Called from page_pitching()."""
     if stuff_df is None or "StuffPlus" not in stuff_df.columns:
         with tab_stuff:
@@ -7862,22 +7549,6 @@ def _pitching_lab_content(data, pitcher, season_filter, pdf, stuff_df,
                     zone_df = pd.DataFrame(zone_rows)
                     st.dataframe(zone_df, use_container_width=True, hide_index=True)
 
-                    # AI insight for location
-                    if not zone_df.empty and zone_df["Whiff%"].notna().any():
-                        best_zone = zone_df.loc[zone_df["Whiff%"].idxmax()]
-                        worst_zone = zone_df.dropna(subset=["Avg EV"])
-                        if not worst_zone.empty and worst_zone["Avg EV"].notna().any():
-                            worst_zone = worst_zone.loc[worst_zone["Avg EV"].idxmax()]
-                            st.markdown(
-                                f'<div style="background:#f0f7ff;border-left:4px solid #2d7fc1;padding:12px 16px;'
-                                f'border-radius:4px;margin:8px 0;">'
-                                f'<b style="color:#1a1a2e;">AI Insight:</b><br>'
-                                f'<span style="color:#333;">Best location for whiffs: <b>{best_zone["Zone"]}</b> '
-                                f'({best_zone["Whiff%"]:.0f}% whiff rate). '
-                                f'Avoid <b>{worst_zone["Zone"]}</b> — hitters average '
-                                f'{worst_zone["Avg EV"]:.0f} mph exit velo there.</span></div>',
-                                unsafe_allow_html=True,
-                            )
 
     # ═══════════════════════════════════════════
     # TAB 5: HITTER'S EYE — PITCH FLIGHT SIMULATOR
@@ -8318,42 +7989,8 @@ def _pitching_lab_content(data, pitcher, season_filter, pdf, stuff_df,
                 )
                 st.plotly_chart(fig_loc, use_container_width=True)
 
-                # AI insight for command
-                spread = np.sqrt(std_s**2 + std_h**2)
-                grade = "Elite" if spread < 0.35 else "Plus" if spread < 0.45 else "Average" if spread < 0.6 else "Below Avg"
-                csw_val = loc_ptd["PitchCall"].isin(["StrikeCalled", "StrikeSwinging"]).mean() * 100
-                st.markdown(
-                    f'<div style="background:#f0f7ff;border-left:4px solid #2d7fc1;padding:12px 16px;'
-                    f'border-radius:4px;margin:8px 0;">'
-                    f'<b style="color:#1a1a2e;">Command Assessment — {loc_pitch_sel}:</b><br>'
-                    f'<span style="color:#333;">Location spread: <b>{spread:.2f} ft ({grade})</b> | '
-                    f'CSW%: <b>{csw_val:.1f}%</b> | '
-                    f'Avg location: ({mean_s:.2f}S, {mean_h:.2f}H)<br>'
-                    f'{"This pitch is located with precision — trust it in any count." if grade in ("Elite", "Plus") else "Work on tightening location consistency — wider spread means more mistakes over the plate."}'
-                    f'</span></div>',
-                    unsafe_allow_html=True,
-                )
 
     # ═══════════════════════════════════════════
-    # TAB 7: AI REPORT
-    # ═══════════════════════════════════════════
-    with tab_ai:
-        section_header("AI Scouting Report")
-        st.caption("Comprehensive AI-generated analysis with actionable recommendations")
-
-        tunnel_df_report = _compute_tunnel_score(pdf)
-        pair_df_report = _compute_pitch_pair_results(pdf, data)
-        report = _generate_ai_report(pdf, pitcher, stuff_df, tunnel_df_report, pair_df_report, data)
-        st.markdown(report)
-
-        # Downloadable report
-        st.download_button(
-            "Download Report as Text",
-            report,
-            file_name=f"pitch_design_report_{pitcher.replace(', ', '_')}.md",
-            mime="text/markdown",
-            key="pdl_download",
-        )
 
 
 # ──────────────────────────────────────────────
@@ -8455,174 +8092,6 @@ def _compute_expected_outcomes(batted_df):
     return odf.mean().to_dict()
 
 
-def _generate_hitter_ai_report(bdf, batter_name, all_data, season_filter):
-    """Generate a template-based AI scouting report for a hitter."""
-    lines = []
-    dn = display_name(batter_name)
-    lines.append(f"# AI Hitting Report: {dn}")
-    lines.append("")
-
-    all_stats = compute_batter_stats(all_data, season_filter=season_filter)
-    pr = all_stats[all_stats["Batter"] == batter_name]
-    if pr.empty:
-        lines.append("Insufficient data to generate report.")
-        return "\n".join(lines)
-    pr = pr.iloc[0]
-
-    batted = bdf[bdf["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
-    n_batted = len(batted)
-    avg_ev = pr.get("AvgEV", np.nan)
-    max_ev = pr.get("MaxEV", np.nan)
-    barrel_pct = pr.get("BarrelPct", np.nan)
-    hh_pct = pr.get("HardHitPct", np.nan)
-    ss_pct = pr.get("SweetSpotPct", np.nan)
-    k_pct = pr.get("KPct", np.nan)
-    bb_pct = pr.get("BBPct", np.nan)
-    whiff_pct = pr.get("WhiffPct", np.nan)
-    chase_pct = pr.get("ChasePct", np.nan)
-    gb_pct = pr.get("GBPct", np.nan)
-    fb_pct = pr.get("FBPct", np.nan)
-    ld_pct = pr.get("LDPct", np.nan)
-    pull_pct = pr.get("PullPct", np.nan)
-    oppo_pct = pr.get("OppoPct", np.nan)
-
-    if not pd.isna(avg_ev) and avg_ev >= 89 and not pd.isna(barrel_pct) and barrel_pct >= 8:
-        profile = "Power Hitter"
-    elif not pd.isna(k_pct) and k_pct < 15 and not pd.isna(whiff_pct) and whiff_pct < 20:
-        profile = "Contact-First Hitter"
-    elif not pd.isna(bb_pct) and bb_pct >= 12 and not pd.isna(chase_pct) and chase_pct < 25:
-        profile = "Disciplined Hitter"
-    else:
-        profile = "All-Around Hitter"
-
-    side = safe_mode(bdf["BatterSide"], "Unknown")
-    bats = {"Right": "R", "Left": "L", "Switch": "S"}.get(side, side)
-
-    lines.append(f"## Offensive Profile: {profile}")
-    lines.append(f"- **Bats**: {bats}")
-    lines.append(f"- **Pitches Seen**: {len(bdf)} | **Batted Balls**: {n_batted}")
-    lines.append(f"- **PA**: {int(pr.get('PA', 0))}")
-    lines.append("")
-
-    lines.append("## Batted Ball Quality")
-    ev_grade = "Elite" if not pd.isna(avg_ev) and avg_ev >= 91 else "Plus" if not pd.isna(avg_ev) and avg_ev >= 88 else "Average" if not pd.isna(avg_ev) and avg_ev >= 85 else "Below Average"
-    lines.append(f"- **Avg Exit Velo**: {avg_ev:.1f} mph ({ev_grade})" if not pd.isna(avg_ev) else "- **Avg Exit Velo**: N/A")
-    lines.append(f"- **Max Exit Velo**: {max_ev:.1f} mph" if not pd.isna(max_ev) else "- **Max Exit Velo**: N/A")
-    lines.append(f"- **Barrel%**: {barrel_pct:.1f}%" if not pd.isna(barrel_pct) else "- **Barrel%**: N/A")
-    lines.append(f"- **Hard-Hit%**: {hh_pct:.1f}%" if not pd.isna(hh_pct) else "- **Hard-Hit%**: N/A")
-    lines.append(f"- **Sweet Spot%**: {ss_pct:.1f}%" if not pd.isna(ss_pct) else "- **Sweet Spot%**: N/A")
-    lines.append("")
-
-    lines.append("## Batted Ball Profile")
-    if not any(pd.isna(x) for x in [gb_pct, ld_pct, fb_pct]):
-        lines.append(f"- **GB%**: {gb_pct:.1f}% | **LD%**: {ld_pct:.1f}% | **FB%**: {fb_pct:.1f}%")
-    else:
-        lines.append("- Insufficient batted ball data")
-    if not any(pd.isna(x) for x in [pull_pct, oppo_pct]):
-        lines.append(f"- **Pull%**: {pull_pct:.1f}% | **Oppo%**: {oppo_pct:.1f}%")
-    lines.append("")
-
-    lines.append("## Plate Discipline")
-    if not any(pd.isna(x) for x in [k_pct, bb_pct]):
-        lines.append(f"- **K%**: {k_pct:.1f}% | **BB%**: {bb_pct:.1f}%")
-    if not pd.isna(whiff_pct):
-        lines.append(f"- **Whiff%**: {whiff_pct:.1f}%")
-    if not pd.isna(chase_pct):
-        lines.append(f"- **Chase%**: {chase_pct:.1f}%")
-        if chase_pct > 35:
-            lines.append("  - *High chase rate — susceptible to pitches out of the zone*")
-        elif chase_pct < 22:
-            lines.append("  - *Excellent discipline — rarely chases out of zone*")
-    lines.append("")
-
-    # Best / worst pitch types
-    pt_evs = {}
-    for pt in bdf["TaggedPitchType"].dropna().unique():
-        pt_batted = bdf[(bdf["TaggedPitchType"] == pt) & (bdf["PitchCall"] == "InPlay")].dropna(subset=["ExitSpeed"])
-        if len(pt_batted) >= 3:
-            pt_evs[pt] = pt_batted["ExitSpeed"].mean()
-
-    lines.append("## Strengths")
-    strengths = []
-    if not pd.isna(avg_ev) and avg_ev >= 88:
-        strengths.append(f"Premium exit velocity ({avg_ev:.1f} mph avg)")
-    if not pd.isna(barrel_pct) and barrel_pct >= 8:
-        strengths.append(f"High barrel rate ({barrel_pct:.1f}%)")
-    if not pd.isna(chase_pct) and chase_pct < 25:
-        strengths.append(f"Elite plate discipline ({chase_pct:.1f}% chase)")
-    if not pd.isna(bb_pct) and bb_pct >= 12:
-        strengths.append(f"Strong walk rate ({bb_pct:.1f}%)")
-    if not pd.isna(ld_pct) and ld_pct >= 25:
-        strengths.append(f"Line drive machine ({ld_pct:.1f}% LD)")
-    if not pd.isna(hh_pct) and hh_pct >= 40:
-        strengths.append(f"Hard-hit rate ({hh_pct:.1f}%)")
-    if pt_evs:
-        best_pt = max(pt_evs, key=pt_evs.get)
-        strengths.append(f"Best vs **{best_pt}** ({pt_evs[best_pt]:.1f} mph avg EV)")
-    if not strengths:
-        strengths.append("Developing hitter — building strengths across the board")
-    for s in strengths:
-        lines.append(f"- {s}")
-    lines.append("")
-
-    lines.append("## Areas for Improvement")
-    weaknesses = []
-    if not pd.isna(k_pct) and k_pct > 25:
-        weaknesses.append(f"High strikeout rate ({k_pct:.1f}%)")
-    if not pd.isna(chase_pct) and chase_pct > 32:
-        weaknesses.append(f"Elevated chase rate ({chase_pct:.1f}%)")
-    if not pd.isna(whiff_pct) and whiff_pct > 30:
-        weaknesses.append(f"High whiff rate ({whiff_pct:.1f}%)")
-    if not pd.isna(gb_pct) and gb_pct > 55:
-        weaknesses.append(f"Ground ball heavy ({gb_pct:.1f}%) — needs to elevate")
-    if not pd.isna(avg_ev) and avg_ev < 83:
-        weaknesses.append(f"Below-average exit velocity ({avg_ev:.1f} mph)")
-    if pt_evs:
-        worst_pt = min(pt_evs, key=pt_evs.get)
-        if pt_evs[worst_pt] < 85:
-            weaknesses.append(f"Struggles vs **{worst_pt}** ({pt_evs[worst_pt]:.1f} mph avg EV)")
-    if not weaknesses:
-        weaknesses.append("No major weaknesses identified")
-    for w in weaknesses:
-        lines.append(f"- {w}")
-    lines.append("")
-
-    lines.append("## Scouting Report (Pitcher's Perspective)")
-    game_plan = []
-    if not pd.isna(chase_pct) and chase_pct > 30:
-        game_plan.append("Expand the zone early — hitter chases frequently")
-    if not pd.isna(whiff_pct) and whiff_pct > 28:
-        game_plan.append("Use swing-and-miss pitches to get strikeouts")
-    if pt_evs:
-        worst_pt = min(pt_evs, key=pt_evs.get)
-        game_plan.append(f"Attack with **{worst_pt}** — lowest damage pitch ({pt_evs[worst_pt]:.1f} mph avg EV)")
-    if not pd.isna(pull_pct) and pull_pct > 50:
-        game_plan.append(f"Heavy pull tendency ({pull_pct:.1f}%) — pitch away and shift")
-    if not pd.isna(gb_pct) and gb_pct > 50:
-        game_plan.append(f"Ground ball tendency ({gb_pct:.1f}%) — keep the ball down")
-    if not game_plan:
-        game_plan.append("Well-rounded hitter — mix pitches and locations")
-    for g in game_plan:
-        lines.append(f"- {g}")
-    lines.append("")
-
-    lines.append("## Development Recommendations")
-    recs = []
-    if not pd.isna(gb_pct) and gb_pct > 50:
-        recs.append("Focus on launch angle — tee work emphasizing driving the ball in the air")
-    if not pd.isna(chase_pct) and chase_pct > 30:
-        recs.append("Pitch recognition drills — improve ability to lay off out-of-zone pitches")
-    if not pd.isna(whiff_pct) and whiff_pct > 28:
-        recs.append("Contact drills — focus on barrel accuracy and timing")
-    if not pd.isna(avg_ev) and avg_ev < 85:
-        recs.append("Bat speed training — increase exit velocity through strength and mechanics")
-    if not pd.isna(oppo_pct) and oppo_pct < 15:
-        recs.append("Opposite field approach — practice staying through the ball")
-    if not recs:
-        recs.append("Continue refining current approach — maintain strengths while looking for marginal gains")
-    for r in recs:
-        lines.append(f"- {r}")
-    return "\n".join(lines)
 
 
 # ──────────────────────────────────────────────
@@ -8630,8 +8099,8 @@ def _generate_hitter_ai_report(bdf, batter_name, all_data, season_filter):
 # ──────────────────────────────────────────────
 def _hitting_lab_content(data, batter, season_filter, bdf, batted, pr, all_batter_stats,
                          tab_quality, tab_discipline, tab_coverage, tab_approach,
-                         tab_pitch_type, tab_spray, tab_swing, tab_ai):
-    """Render the 8 Hitters Lab tabs. Called from page_hitting()."""
+                         tab_pitch_type, tab_spray, tab_swing):
+    """Render the 7 Hitters Lab tabs. Called from page_hitting()."""
     side = safe_mode(bdf["BatterSide"], "")
     _iz_mask = in_zone_mask(bdf)
     out_zone_mask = ~_iz_mask & bdf["PlateLocSide"].notna() & bdf["PlateLocHeight"].notna()
@@ -9762,15 +9231,6 @@ def _hitting_lab_content(data, batter, season_filter, bdf, batted, pr, all_batte
             else:
                 st.info("Not enough zone-split data to generate swing path insights.")
 
-    # ─── Tab 8: AI Scouting Report ─────────────────────
-    with tab_ai:
-        section_header("AI Hitting Report")
-        report = _generate_hitter_ai_report(bdf, batter, data, season_filter)
-        st.markdown(report)
-        st.download_button(
-            "Download Report as Text", report,
-            file_name=f"hitting_report_{batter.replace(', ', '_')}.md",
-            mime="text/markdown", key="hl_download")
 
 
 # ──────────────────────────────────────────────
