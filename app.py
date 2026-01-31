@@ -3819,38 +3819,6 @@ def _scouting_hitter_report(tm, team, trackman_data):
             if sb_data:
                 st.dataframe(pd.DataFrame(sb_data), use_container_width=True, hide_index=True)
 
-    # ── Feature #2: Expected vs Actual Differential Flags ──
-    if not xrate.empty:
-        section_header("Expected vs Actual (Luck Indicator)")
-        st.caption("Positive diff = overperforming (lucky). Negative diff = underperforming (better than stats show).")
-        diff_rows = []
-        for lbl, act_col, x_col, df_col in [
-            ("AVG", "AVG", "xAVG", "xAVGDf"), ("SLG", "SLG", "xSLG", "xSLGDf"),
-            ("ISO", "ISO", "xISO", "xISODf"), ("wOBA", "wOBA", "xWOBA", "xWOBADf"),
-        ]:
-            act = _safe_num(xrate, act_col)
-            exp = _safe_num(xrate, x_col)
-            diff = _safe_num(xrate, df_col)
-            if not pd.isna(act) and not pd.isna(exp):
-                # Color code: green (underperforming, unlucky) / red (overperforming, lucky)
-                if not pd.isna(diff):
-                    if diff > 0.030:
-                        flag = "🔴 Overperforming"
-                    elif diff < -0.030:
-                        flag = "🟢 Underperforming"
-                    else:
-                        flag = "⚪ In line"
-                else:
-                    flag = "-"
-                diff_rows.append({
-                    "Stat": lbl, "Actual": f"{act:.3f}", "Expected": f"{exp:.3f}",
-                    "Diff": f"{diff:+.3f}" if not pd.isna(diff) else "-", "Signal": flag,
-                })
-        if diff_rows:
-            st.dataframe(pd.DataFrame(diff_rows), use_container_width=True, hide_index=True)
-
-    # ── Feature #5: Pitch Count Discipline Breakdown ──
-
     # ── Swing Tendencies by Pitch Type ──
     has_swing_data = not h_swpct.empty or not h_swstats.empty
     if has_swing_data:
