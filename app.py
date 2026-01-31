@@ -439,6 +439,8 @@ def _load_truemedia():
             "stolen_bases": _read(hit_dir, "Stolen Bases.csv"),
             "home_runs": _read(hit_dir, "Home Runs.csv"),
             "run_expectancy": _read(hit_dir, "Run Expectancy.csv"),
+            "swing_pct": _read(hit_dir, "1P Swing%.csv"),
+            "swing_stats": _read(hit_dir, "Swing stats.csv"),
         },
         "pitching": {
             "traditional": _read(pit_dir, "Traditional.csv"),
@@ -3493,6 +3495,8 @@ def _scouting_hitter_report(tm, team, trackman_data):
     h_pcounts = _tm_player(_tm_team(tm["hitting"]["pitch_counts"], team), hitter)
     h_ptcounts = _tm_player(_tm_team(tm["hitting"]["pitch_type_counts"], team), hitter)
     h_re = _tm_player(_tm_team(tm["hitting"]["run_expectancy"], team), hitter)
+    h_swpct = _tm_player(_tm_team(tm["hitting"]["swing_pct"], team), hitter)
+    h_swstats = _tm_player(_tm_team(tm["hitting"]["swing_stats"], team), hitter)
 
     # All D1 data for percentile context
     all_h_rate = tm["hitting"]["rate"]
@@ -3502,6 +3506,8 @@ def _scouting_hitter_report(tm, team, trackman_data):
     all_h_hl = tm["hitting"]["hit_locations"]
     all_h_spd = tm["hitting"]["speed"]
     all_h_re = tm["hitting"]["run_expectancy"]
+    all_h_swpct = tm["hitting"]["swing_pct"]
+    all_h_swstats = tm["hitting"]["swing_stats"]
 
     # Header
     pos = rate.iloc[0].get("pos", "?") if not rate.empty else "?"
@@ -3896,9 +3902,305 @@ def _scouting_hitter_report(tm, team, trackman_data):
                 elif not pd.isna(re_2out_pct) and re_2out_pct <= 25:
                     st.caption(f"✅ Less productive with 2 outs ({int(re_2out_pct)}th percentile) — can be aggressive in 2-out situations.")
 
+    # ── Swing Tendencies by Pitch Type ──
+    has_swing_data = not h_swpct.empty or not h_swstats.empty
+    if has_swing_data:
+        section_header("Swing Tendencies by Pitch Type")
+        st.caption("How aggressively this hitter swings at different pitch types — key for pitch sequencing")
+
+        swing_col1, swing_col2 = st.columns(2)
+
+        with swing_col1:
+            # Swing% by pitch type from 1P Swing%.csv
+            swing_rates = []
+            for lbl, col, color in [
+                ("Fastball", "Swing% vs Hard", "#d22d49"),
+                ("Slider", "Swing% vs SL", "#f7c631"),
+                ("Curveball", "Swing% vs CB", "#00d1ed"),
+                ("Changeup", "Swing% vs CH", "#1dbe3a"),
+            ]:
+                v = _safe_num(h_swpct, col)
+                if not pd.isna(v):
+                    pct = _tm_pctile(h_swpct, col, all_h_swpct)
+                    swing_rates.append({"Pitch": lbl, "Swing%": v, "Pctile": pct, "Color": color})
+
+            if swing_rates:
+                st.markdown("**Swing Rate by Pitch Type**")
+                # Bar chart
+                sr_df = pd.DataFrame(swing_rates)
+                fig_sw = go.Figure()
+                fig_sw.add_trace(go.Bar(
+                    x=sr_df["Pitch"], y=sr_df["Swing%"],
+                    marker_color=sr_df["Color"],
+                    text=sr_df["Swing%"].apply(lambda x: f"{x:.1f}%"),
+                    textposition="outside", textfont=dict(size=11, color="#1a1a2e"),
+                ))
+                fig_sw.update_layout(
+                    **CHART_LAYOUT, height=280,
+                    yaxis=dict(title="Swing %", range=[0, max(sr_df["Swing%"].max() * 1.2, 60)]),
+                    xaxis=dict(title=""),
+                    showlegend=False,
+                )
+                st.plotly_chart(fig_sw, use_container_width=True)
+
+                # Detail table with percentiles
+                tbl_data = []
+                for r in swing_rates:
+                    pct_str = f"{int(r['Pctile'])}th" if not pd.isna(r["Pctile"]) else "-"
+                    tbl_data.append({
+                        "Pitch": r["Pitch"],
+                        "Swing%": f"{r['Swing%']:.1f}%",
+                        "D1 %ile": pct_str,
+                    })
+                st.dataframe(pd.DataFrame(tbl_data), use_container_width=True, hide_index=True)
+
+                # Narrative: identify vulnerability
+                sorted_rates = sorted(swing_rates, key=lambda x: x["Swing%"], reverse=True)
+                highest = sorted_rates[0]
+                lowest = sorted_rates[-1]
+                if highest["Swing%"] - lowest["Swing%"] > 10:
+                    st.caption(
+                        f"⚡ Swings most aggressively at **{highest['Pitch']}** ({highest['Swing%']:.1f}%) "
+                        f"and least at **{lowest['Pitch']}** ({lowest['Swing%']:.1f}%). "
+                        f"Tunnel {highest['Pitch'].lower()} look early, then use "
+                        f"{lowest['Pitch'].lower()} to steal strikes."
+                    )
+
+        with swing_col2:
+            # First-pitch swing tendencies
+            fp_data = []
+            fp_hard = _safe_num(h_swpct, "1PSwing% vs Hard Empty")
+            if pd.isna(fp_hard):
+                fp_hard = _safe_num(h_swstats, "1PSwing% vs Hard Empty")
+            fp_ch = _safe_num(h_swstats, "1PSwing% vs CH Empty")
+
+            if not pd.isna(fp_hard) or not pd.isna(fp_ch):
+                st.markdown("**First-Pitch Aggressiveness**")
+                fp_items = []
+                if not pd.isna(fp_hard):
+                    pct_fp_hard = _tm_pctile(h_swstats if not h_swstats.empty else h_swpct,
+                                              "1PSwing% vs Hard Empty",
+                                              all_h_swstats if not all_h_swstats.empty else all_h_swpct)
+                    pct_str = f" ({int(pct_fp_hard)}th %ile)" if not pd.isna(pct_fp_hard) else ""
+                    fp_items.append({"Situation": "1st Pitch vs Fastball (empty)", "Swing%": f"{fp_hard:.0f}%", "D1 %ile": pct_str.strip()})
+                if not pd.isna(fp_ch):
+                    pct_fp_ch = _tm_pctile(h_swstats, "1PSwing% vs CH Empty", all_h_swstats)
+                    pct_str = f" ({int(pct_fp_ch)}th %ile)" if not pd.isna(pct_fp_ch) else ""
+                    fp_items.append({"Situation": "1st Pitch vs Changeup (empty)", "Swing%": f"{fp_ch:.0f}%", "D1 %ile": pct_str.strip()})
+                if fp_items:
+                    st.dataframe(pd.DataFrame(fp_items), use_container_width=True, hide_index=True)
+
+                # First-pitch narrative
+                if not pd.isna(fp_hard):
+                    if fp_hard >= 40:
+                        st.caption(f"🔴 Very aggressive first-pitch hitter vs fastballs ({fp_hard:.0f}%) — start offspeed or off the plate.")
+                    elif fp_hard <= 20:
+                        st.caption(f"🟢 Patient first-pitch approach vs fastballs ({fp_hard:.0f}%) — can attack zone early with strikes.")
+                    else:
+                        st.caption(f"⚪ Moderate first-pitch approach ({fp_hard:.0f}%) — varies game to game.")
+
+            # InZone Swing%, Chase%, Contact% from Swing stats
+            if not h_swstats.empty:
+                disc_from_sw = []
+                for lbl, col in [("In-Zone Swing%", "InZoneSwing%"), ("Chase%", "Chase%"), ("Contact%", "Contact%")]:
+                    v = _safe_num(h_swstats, col)
+                    if not pd.isna(v):
+                        pct = _tm_pctile(h_swstats, col, all_h_swstats)
+                        pct_str = f"{int(pct)}th" if not pd.isna(pct) else "-"
+                        disc_from_sw.append({"Metric": lbl, "Value": f"{v:.1f}%", "D1 %ile": pct_str})
+                if disc_from_sw:
+                    st.markdown("**Zone Discipline (Swing Stats)**")
+                    st.dataframe(pd.DataFrame(disc_from_sw), use_container_width=True, hide_index=True)
+
+    # ── 2-Strike Whiff Profile ──
+    if not h_swstats.empty:
+        has_whiff = any(not pd.isna(_safe_num(h_swstats, c)) for c in
+                        ["2K Whiff vs LHP Hard", "2K Whiff vs LHP OS", "2K Whiff vs RHP Hard", "2K Whiff vs RHP OS"])
+        if has_whiff:
+            section_header("2-Strike Whiff Profile")
+            st.caption("Whiff rates in 2-strike counts — the key to putting this hitter away")
+
+            whiff_col1, whiff_col2 = st.columns(2)
+
+            with whiff_col1:
+                st.markdown("**vs LHP (2 Strikes)**")
+                lhp_data = []
+                for lbl, col, color in [
+                    ("Hard (FB/Sinker)", "2K Whiff vs LHP Hard", "#d22d49"),
+                    ("Offspeed (SL/CB/CH)", "2K Whiff vs LHP OS", "#1dbe3a"),
+                ]:
+                    v = _safe_num(h_swstats, col)
+                    if not pd.isna(v):
+                        pct = _tm_pctile(h_swstats, col, all_h_swstats)
+                        pct_str = f"{int(pct)}th" if not pd.isna(pct) else "-"
+                        lhp_data.append({"Pitch Type": lbl, "Whiff%": f"{v:.1f}%", "D1 %ile": pct_str, "val": v, "color": color})
+                if lhp_data:
+                    st.dataframe(pd.DataFrame(lhp_data)[["Pitch Type", "Whiff%", "D1 %ile"]],
+                                 use_container_width=True, hide_index=True)
+
+            with whiff_col2:
+                st.markdown("**vs RHP (2 Strikes)**")
+                rhp_data = []
+                for lbl, col, color in [
+                    ("Hard (FB/Sinker)", "2K Whiff vs RHP Hard", "#d22d49"),
+                    ("Offspeed (SL/CB/CH)", "2K Whiff vs RHP OS", "#1dbe3a"),
+                ]:
+                    v = _safe_num(h_swstats, col)
+                    if not pd.isna(v):
+                        pct = _tm_pctile(h_swstats, col, all_h_swstats)
+                        pct_str = f"{int(pct)}th" if not pd.isna(pct) else "-"
+                        rhp_data.append({"Pitch Type": lbl, "Whiff%": f"{v:.1f}%", "D1 %ile": pct_str, "val": v, "color": color})
+                if rhp_data:
+                    st.dataframe(pd.DataFrame(rhp_data)[["Pitch Type", "Whiff%", "D1 %ile"]],
+                                 use_container_width=True, hide_index=True)
+
+            # Combined whiff bar chart
+            all_whiff = []
+            for lbl, col, color in [
+                ("vs LHP Hard", "2K Whiff vs LHP Hard", "#d22d49"),
+                ("vs LHP OS", "2K Whiff vs LHP OS", "#e65730"),
+                ("vs RHP Hard", "2K Whiff vs RHP Hard", "#3d7dab"),
+                ("vs RHP OS", "2K Whiff vs RHP OS", "#14365d"),
+            ]:
+                v = _safe_num(h_swstats, col)
+                if not pd.isna(v):
+                    all_whiff.append({"Matchup": lbl, "Whiff%": v, "Color": color})
+
+            if len(all_whiff) >= 2:
+                aw_df = pd.DataFrame(all_whiff)
+                fig_wh = go.Figure()
+                fig_wh.add_trace(go.Bar(
+                    x=aw_df["Matchup"], y=aw_df["Whiff%"],
+                    marker_color=aw_df["Color"],
+                    text=aw_df["Whiff%"].apply(lambda x: f"{x:.1f}%"),
+                    textposition="outside", textfont=dict(size=11, color="#1a1a2e"),
+                ))
+                fig_wh.update_layout(
+                    **CHART_LAYOUT, height=280,
+                    yaxis=dict(title="Whiff %", range=[0, max(aw_df["Whiff%"].max() * 1.3, 40)]),
+                    xaxis=dict(title=""),
+                    showlegend=False,
+                )
+                st.plotly_chart(fig_wh, use_container_width=True)
+
+            # Whiff narrative — identify the putaway pitch
+            whiff_vals = {}
+            for lbl, col in [("LHP Hard", "2K Whiff vs LHP Hard"), ("LHP OS", "2K Whiff vs LHP OS"),
+                              ("RHP Hard", "2K Whiff vs RHP Hard"), ("RHP OS", "2K Whiff vs RHP OS")]:
+                v = _safe_num(h_swstats, col)
+                if not pd.isna(v):
+                    whiff_vals[lbl] = v
+
+            if whiff_vals:
+                max_whiff = max(whiff_vals, key=whiff_vals.get)
+                min_whiff = min(whiff_vals, key=whiff_vals.get)
+                max_v = whiff_vals[max_whiff]
+                min_v = whiff_vals[min_whiff]
+
+                putaway_notes = []
+                if max_v >= 30:
+                    putaway_notes.append(
+                        f"🔴 **Highest whiff vulnerability: {max_whiff}** ({max_v:.1f}%) — this is the putaway sequence."
+                    )
+                if min_v <= 12:
+                    putaway_notes.append(
+                        f"🟢 **Hardest to strike out with: {min_whiff}** ({min_v:.1f}%) — avoid relying on this to finish ABs."
+                    )
+                # Hard vs offspeed comparison
+                rhp_hard = whiff_vals.get("RHP Hard")
+                rhp_os = whiff_vals.get("RHP OS")
+                if rhp_hard is not None and rhp_os is not None:
+                    if rhp_os > rhp_hard + 10:
+                        putaway_notes.append(
+                            f"⚡ vs RHP: Much more vulnerable to offspeed ({rhp_os:.1f}%) than hard stuff ({rhp_hard:.1f}%) — "
+                            f"establish fastball early, finish with breaking ball."
+                        )
+                    elif rhp_hard > rhp_os + 10:
+                        putaway_notes.append(
+                            f"⚡ vs RHP: More vulnerable to hard stuff ({rhp_hard:.1f}%) than offspeed ({rhp_os:.1f}%) — "
+                            f"elevate fastball for the strikeout."
+                        )
+                lhp_hard = whiff_vals.get("LHP Hard")
+                lhp_os = whiff_vals.get("LHP OS")
+                if lhp_hard is not None and lhp_os is not None:
+                    if lhp_os > lhp_hard + 10:
+                        putaway_notes.append(
+                            f"⚡ vs LHP: More vulnerable to offspeed ({lhp_os:.1f}%) than hard ({lhp_hard:.1f}%)."
+                        )
+                    elif lhp_hard > lhp_os + 10:
+                        putaway_notes.append(
+                            f"⚡ vs LHP: More vulnerable to hard stuff ({lhp_hard:.1f}%) than offspeed ({lhp_os:.1f}%)."
+                        )
+                for note in putaway_notes:
+                    st.markdown(note)
+
+    # ── Platoon Splits ──
+    if not h_swstats.empty:
+        woba_lhp = _safe_num(h_swstats, "wOBA LHP")
+        woba_rhp = _safe_num(h_swstats, "wOBA RHP")
+        if not pd.isna(woba_lhp) or not pd.isna(woba_rhp):
+            section_header("Platoon Splits")
+            split_col1, split_col2 = st.columns(2)
+            with split_col1:
+                if not pd.isna(woba_lhp):
+                    pct_lhp = _tm_pctile(h_swstats, "wOBA LHP", all_h_swstats)
+                    pct_str = f" ({int(pct_lhp)}th %ile)" if not pd.isna(pct_lhp) else ""
+                    st.metric("wOBA vs LHP", f"{woba_lhp:.3f}", help=f"D1 percentile{pct_str}")
+            with split_col2:
+                if not pd.isna(woba_rhp):
+                    pct_rhp = _tm_pctile(h_swstats, "wOBA RHP", all_h_swstats)
+                    pct_str = f" ({int(pct_rhp)}th %ile)" if not pd.isna(pct_rhp) else ""
+                    st.metric("wOBA vs RHP", f"{woba_rhp:.3f}", help=f"D1 percentile{pct_str}")
+
+            if not pd.isna(woba_lhp) and not pd.isna(woba_rhp):
+                diff = woba_lhp - woba_rhp
+                if abs(diff) >= 0.050:
+                    better_side = "LHP" if diff > 0 else "RHP"
+                    worse_side = "RHP" if diff > 0 else "LHP"
+                    st.caption(
+                        f"⚠️ **Significant platoon split** — {abs(diff):.3f} wOBA gap. "
+                        f"Much better vs {better_side} (.{int(max(woba_lhp, woba_rhp)*1000):03d}) "
+                        f"than vs {worse_side} (.{int(min(woba_lhp, woba_rhp)*1000):03d}). "
+                        f"Match up {worse_side} pitchers against this hitter when possible."
+                    )
+                elif abs(diff) < 0.020:
+                    st.caption("✅ No significant platoon split — handles both sides equally.")
+
     # ── How to Attack ──
     section_header("How to Attack")
     notes = _hitter_attack_plan(rate, exit_d, pr, ht, hl)
+
+    # Enhance attack plan with swing data
+    if not h_swpct.empty:
+        sw_hard = _safe_num(h_swpct, "Swing% vs Hard")
+        sw_sl = _safe_num(h_swpct, "Swing% vs SL")
+        sw_cb = _safe_num(h_swpct, "Swing% vs CB")
+        sw_ch = _safe_num(h_swpct, "Swing% vs CH")
+        if not pd.isna(sw_hard) and not pd.isna(sw_cb):
+            if sw_cb < sw_hard - 15:
+                notes.append(f"Low curveball swing rate ({sw_cb:.1f}% vs {sw_hard:.1f}% FB) — use curves to steal strikes, set up fastball.")
+        if not pd.isna(sw_ch) and not pd.isna(sw_hard):
+            if sw_ch >= sw_hard:
+                notes.append(f"Chases changeups at high rate ({sw_ch:.1f}%) — use CH as putaway pitch.")
+
+    if not h_swstats.empty:
+        fp_sw = _safe_num(h_swstats, "1PSwing% vs Hard Empty")
+        if pd.isna(fp_sw):
+            fp_sw = _safe_num(h_swpct, "1PSwing% vs Hard Empty")
+        if not pd.isna(fp_sw) and fp_sw >= 40:
+            notes.append(f"Aggressive first-pitch swinger ({fp_sw:.0f}%) — start offspeed or off the plate to steal strike one.")
+        elif not pd.isna(fp_sw) and fp_sw <= 18:
+            notes.append(f"Takes first pitch often ({fp_sw:.0f}%) — attack the zone early with a strike.")
+
+        # 2K whiff recommendations
+        rhp_hard = _safe_num(h_swstats, "2K Whiff vs RHP Hard")
+        rhp_os = _safe_num(h_swstats, "2K Whiff vs RHP OS")
+        if not pd.isna(rhp_hard) and not pd.isna(rhp_os):
+            if rhp_os > rhp_hard and rhp_os > 25:
+                notes.append(f"With 2 strikes (vs RHP): finish with offspeed ({rhp_os:.1f}% whiff) — breaking ball is the out-pitch.")
+            elif rhp_hard > rhp_os and rhp_hard > 25:
+                notes.append(f"With 2 strikes (vs RHP): finish with hard stuff ({rhp_hard:.1f}% whiff) — elevated fastball to finish.")
+
     for n in notes:
         st.markdown(f"- {n}")
 
