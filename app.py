@@ -3484,12 +3484,18 @@ def _build_3pitch_sequences(sorted_ps, hd, tun_df, seq_df):
     """Build best 3-pitch sequences: setup → bridge → putaway.
     HITTER-AWARE: Picks the putaway pitch based on the hitter's specific
     vulnerability, then finds the best setup/bridge path to get there.
-    Returns up to 3 sequences with different putaway pitches."""
+    P1 (setup) must be a primary pitch (>= 15% usage) — you don't lead with
+    a 10% sinker. Returns up to 3 sequences with different putaway pitches."""
     pitches = [name for name, data in sorted_ps if data.get("count", 0) >= 10]
     pitch_data = {name: data for name, data in sorted_ps if data.get("count", 0) >= 10}
+    pitch_usage = {name: data.get("usage", 0) or 0 for name, data in sorted_ps}
     comp_scores = {name: data.get("score", 50) for name, data in sorted_ps}
     if len(pitches) < 2:
         return []
+    # P1 candidates: must have meaningful usage (>= 15%), or fallback to top 2 by usage
+    setup_candidates = [p for p in pitches if pitch_usage.get(p, 0) >= 15]
+    if len(setup_candidates) < 2:
+        setup_candidates = sorted(pitches, key=lambda p: pitch_usage.get(p, 0), reverse=True)[:2]
 
     # ── Step 1: Rank putaway candidates by hitter-specific vulnerability ──
     putaway_scores = {}
@@ -3499,7 +3505,6 @@ def _build_3pitch_sequences(sorted_ps, hd, tun_df, seq_df):
         comp = comp_scores.get(p, 50)
         whiff = pitch_data.get(p, {}).get("our_whiff", np.nan)
         chase = pitch_data.get(p, {}).get("our_chase", np.nan)
-        # Putaway score: composite (already hitter-specific) + 2K whiff + our whiff/chase
         score = comp * 0.50
         if not pd.isna(their_2k):
             score += min(their_2k / 40 * 100, 100) * 0.25
@@ -3508,7 +3513,6 @@ def _build_3pitch_sequences(sorted_ps, hd, tun_df, seq_df):
         if not pd.isna(chase):
             score += min(chase / 40 * 100, 100) * 0.10
         putaway_scores[p] = score
-    # Sort putaway candidates
     ranked_putaways = sorted(putaway_scores.items(), key=lambda x: x[1], reverse=True)
 
     # ── Step 2: For each putaway, find best setup → bridge path ──
@@ -3521,12 +3525,11 @@ def _build_3pitch_sequences(sorted_ps, hd, tun_df, seq_df):
                 t_self, _ = _lookup_tunnel(p2, p3, tun_df)
                 if pd.isna(t_self) or t_self <= 70:
                     continue
-            for p1 in pitches:
+            for p1 in setup_candidates:  # P1 restricted to primary pitches
                 if p1 == p2:
                     continue
                 t12, g12 = _lookup_tunnel(p1, p2, tun_df)
                 t23, g23 = _lookup_tunnel(p2, p3, tun_df)
-                # Minimum tunnel gate
                 t12_bad = pd.isna(t12) or t12 < 30
                 t23_bad = pd.isna(t23) or t23 < 30
                 if t12_bad and t23_bad:
@@ -4489,13 +4492,18 @@ def _pitching_plan_content(tm, team, data, season_filter):
                     return zone_labels.get(best_z, best_z)
                 return ""
 
-            # ── Derive sequence-based plan ──
-            # The best sequence drives everything: 1st pitch, count plan, zone targets
-            best_seq = top_seqs[0] if top_seqs else None
-            p1_name = best_seq["p1"] if best_seq else (sorted_ps[0][0] if sorted_ps else None)
-            p2_name = best_seq["p2"] if best_seq else (sorted_ps[1][0] if len(sorted_ps) >= 2 else None)
-            p3_name = best_seq["p3"] if best_seq else None
-            # Putaway: from best sequence, or highest whiff/2K blend
+            # ── Shared data for count plan ──
+            ps_dict = dict(sorted_ps)
+            real_ps = [(n, d) for n, d in sorted_ps if d.get("usage", 0) >= 10]
+            if not real_ps:
+                real_ps = sorted_ps[:3]
+            real_hard = [(n, d) for n, d in real_ps if n in _hard_pitches]
+            real_os = [(n, d) for n, d in real_ps if n not in _hard_pitches]
+            # Primary = highest usage pitch overall
+            primary = max(real_ps, key=lambda x: x[1].get("usage", 0) or 0) if real_ps else None
+            # Best hard pitch by composite
+            best_hard_p = real_hard[0] if real_hard else (real_ps[0] if real_ps else None)
+            # Putaway: best whiff% × 2K vulnerability blend
             def _putaway_score(item):
                 n, d = item
                 our_w = d.get("our_whiff", 0) or 0
@@ -4503,18 +4511,24 @@ def _pitching_plan_content(tm, team, data, season_filter):
                 their_2k = hd.get("whiff_2k_hard" if is_h else "whiff_2k_os", np.nan)
                 t2k = their_2k if not pd.isna(their_2k) else 0
                 return our_w * 0.5 + t2k * 0.5
-            real_ps = [(n, d) for n, d in sorted_ps if d.get("usage", 0) >= 10]
-            if not real_ps:
-                real_ps = sorted_ps[:3]
-            putaway_pitch = p3_name or (max(real_ps, key=_putaway_score)[0] if real_ps else None)
-            putaway_data = dict(sorted_ps).get(putaway_pitch, {}) if putaway_pitch else {}
+            putaway = max(real_ps, key=_putaway_score) if real_ps else None
+            # Best bridge to putaway: pitch with best tunnel grade to putaway pitch
+            bridge = None
+            if putaway and isinstance(tunnels, pd.DataFrame) and not tunnels.empty:
+                pw_name = putaway[0]
+                t_m = tunnels[(tunnels["Pitch A"]==pw_name)|(tunnels["Pitch B"]==pw_name)]
+                if not t_m.empty:
+                    for _, trow in t_m.iterrows():
+                        partner = trow["Pitch B"] if trow["Pitch A"]==pw_name else trow["Pitch A"]
+                        if partner != pw_name and partner in ps_dict:
+                            bridge = (partner, ps_dict[partner], trow["Grade"])
+                            break
 
             # ── Zone Targets (compact, one line) ──
             zone_target_parts = []
             for pt_name, pt_data in sorted_ps[:4]:
                 zl = _best_zone_for(pt_name, pt_data)
                 if not zl:
-                    # Fallback
                     is_hard = pt_name in _hard_pitches
                     if is_hard:
                         pt_ivb = pt_data.get("ivb", np.nan) if isinstance(pt_data, dict) else np.nan
@@ -4531,49 +4545,80 @@ def _pitching_plan_content(tm, team, data, season_filter):
                 st.markdown("**Zone Targets**")
                 st.markdown(" | ".join(zone_target_parts))
 
-            # ── Count Plan (derived from best sequence + putaway) ──
+            # ── Count Plan (each count is a hitter-aware decision) ──
             count_lines = []
-            # 0-0: Lead with sequence P1 (the setup pitch)
-            if p1_name:
-                p1_zone = _best_zone_for(p1_name, dict(sorted_ps).get(p1_name, {}))
-                p1_csw = dict(sorted_ps).get(p1_name, {}).get("our_csw", 0) or 0
-                csw_str = f" ({p1_csw:.0f}% CSW)" if p1_csw > 0 else ""
-                count_lines.append(f"**0-0 / 1-0**: {p1_name} {p1_zone or 'zone'}{csw_str}")
-            # 0-1 / 1-1: Bridge pitch (P2 from sequence) — expand or tunnel
-            if p2_name:
-                p2_zone = _best_zone_for(p2_name, dict(sorted_ps).get(p2_name, {}))
-                # Get tunnel grade between P1→P2
-                _, g12 = _lookup_tunnel(p1_name, p2_name, tunnels) if p1_name else (np.nan, "-")
-                tun_str = f" ({g12} tunnel)" if g12 and g12 != "-" else ""
-                count_lines.append(f"**0-1 / 1-1**: {p2_name} {p2_zone or 'expand'}{tun_str}")
-            # 2-0 / 3-2: Compete with best hard pitch
-            best_hard = next((n for n, d in sorted_ps if n in _hard_pitches), p1_name)
-            if best_hard:
-                count_lines.append(f"**2-0 / 3-2**: {best_hard} compete")
-            # 0-2 / 1-2: Putaway pitch with zone + whiff data
-            if putaway_pitch:
-                pw_whiff = putaway_data.get("our_whiff", 0) or 0
-                pw_zone = _best_zone_for(putaway_pitch, putaway_data)
-                is_pw_hard = putaway_pitch in _hard_pitches
+            fp_hard = hd.get("fp_swing_hard", np.nan)
+            fp_ch = hd.get("fp_swing_ch", np.nan)
+            their_chase_val = hd.get("chase_pct", np.nan)
+
+            # --- 0-0 / 1-0: First pitch decision ---
+            # Uses: hitter 1P swing% vs hard/offspeed, our CSW%, primary pitch
+            fp_pitch = None
+            fp_reason = ""
+            if not pd.isna(fp_hard):
+                if fp_hard < 35 and best_hard_p:
+                    # Very passive vs hard → free strike with hard stuff in zone
+                    fp_pitch = best_hard_p[0]
+                    fp_zone = _best_zone_for(fp_pitch, best_hard_p[1])
+                    fp_csw = best_hard_p[1].get("our_csw", 0) or 0
+                    fp_reason = f"passive vs hard 1P ({fp_hard:.0f}% swing)"
+                    count_lines.append(f"**0-0**: {fp_pitch} {fp_zone or 'zone'} ({fp_csw:.0f}% CSW) — {fp_reason}")
+                elif fp_hard > 55 and real_os:
+                    # Aggressive vs hard → steal strike with offspeed
+                    fp_pitch = real_os[0][0]
+                    fp_zone = _best_zone_for(fp_pitch, real_os[0][1])
+                    fp_reason = f"aggressive vs hard 1P ({fp_hard:.0f}% swing)"
+                    count_lines.append(f"**0-0**: {fp_pitch} {fp_zone or 'zone'} — {fp_reason}")
+                elif not pd.isna(fp_ch) and fp_ch > 45 and real_os:
+                    # Swings at offspeed 1P → use that aggressiveness
+                    fp_pitch = real_os[0][0]
+                    fp_zone = _best_zone_for(fp_pitch, real_os[0][1])
+                    fp_reason = f"swings at offspeed 1P ({fp_ch:.0f}%)"
+                    count_lines.append(f"**0-0**: {fp_pitch} {fp_zone or 'zone'} — {fp_reason}")
+            if not fp_pitch and primary:
+                # Default: lead with primary pitch
+                fp_pitch = primary[0]
+                fp_zone = _best_zone_for(fp_pitch, primary[1])
+                fp_csw = primary[1].get("our_csw", 0) or 0
+                count_lines.append(f"**0-0**: {fp_pitch} {fp_zone or 'zone'} ({fp_csw:.0f}% CSW)")
+
+            # --- 0-1 / 1-1: Bridge to putaway (got ahead, set up finish) ---
+            if bridge:
+                br_name, br_data, br_grade = bridge
+                br_zone = _best_zone_for(br_name, br_data)
+                count_lines.append(f"**0-1 / 1-1**: {br_name} {br_zone or 'expand'} ({br_grade} tunnel to {putaway[0]})")
+            elif putaway and len(real_ps) >= 2:
+                # Fallback: use 2nd-best pitch as bridge
+                alt = [p for p in real_ps if p[0] != putaway[0]]
+                if alt:
+                    br_zone = _best_zone_for(alt[0][0], alt[0][1])
+                    count_lines.append(f"**0-1 / 1-1**: {alt[0][0]} {br_zone or 'expand'}")
+
+            # --- 2-0 / 3-2: Must-compete count → best hard pitch in zone ---
+            if best_hard_p:
+                bh_zone = _best_zone_for(best_hard_p[0], best_hard_p[1])
+                count_lines.append(f"**2-0 / 3-2**: {best_hard_p[0]} {bh_zone or 'compete'}")
+
+            # --- 0-2 / 1-2: Putaway with 2K vulnerability context ---
+            if putaway:
+                pw_name, pw_data = putaway
+                pw_whiff = pw_data.get("our_whiff", 0) or 0
+                pw_zone = _best_zone_for(pw_name, pw_data)
+                is_pw_hard = pw_name in _hard_pitches
                 pw_2k = hd.get("whiff_2k_hard" if is_pw_hard else "whiff_2k_os", np.nan)
                 pw_2k_pct = pct_2k_hard if is_pw_hard else pct_2k_os
-                # Tunnel from bridge to putaway
-                _, g23 = _lookup_tunnel(p2_name, putaway_pitch, tunnels) if p2_name else (np.nan, "-")
-                tun_str = f" ({g23} tunnel)" if g23 and g23 != "-" else ""
-                pw_str = f"**0-2 / 1-2**: {putaway_pitch} {pw_zone or 'bury'} ({pw_whiff:.0f}% whiff)"
+                pw_str = f"**0-2 / 1-2**: {pw_name} {pw_zone or 'bury'} ({pw_whiff:.0f}% whiff)"
                 if not pd.isna(pw_2k) and not pd.isna(pw_2k_pct) and pw_2k_pct >= 60:
                     pct_label = "elite" if pw_2k_pct >= 85 else "above avg" if pw_2k_pct >= 70 else "exploitable"
-                    pw_str += f" — {pw_2k:.0f}% 2K whiff ({pct_label})"
-                pw_str += tun_str
+                    pw_str += f" — {pw_2k:.0f}% 2K {'hard' if is_pw_hard else 'OS'} whiff ({pct_label})"
                 count_lines.append(pw_str)
+
             # Discipline note (only if extreme)
-            their_chase_val = hd.get("chase_pct", np.nan)
-            their_bb = hd.get("bb_pct", np.nan)
             if not pd.isna(their_chase_val) and their_chase_val > 32:
-                best_chase_pitch = max(real_ps, key=lambda x: x[1].get("our_chase", 0) or 0)
-                count_lines.append(f"*Chaser ({their_chase_val:.0f}%) — expand early with {best_chase_pitch[0]}*")
-            elif not pd.isna(their_bb) and their_bb > 14:
-                count_lines.append(f"*Patient ({their_bb:.0f}% BB) — attack zone, don't nibble*")
+                best_chase_p = max(real_ps, key=lambda x: x[1].get("our_chase", 0) or 0)
+                count_lines.append(f"*Chaser ({their_chase_val:.0f}%) — expand early with {best_chase_p[0]}*")
+            elif not pd.isna(hd.get("bb_pct", np.nan)) and hd["bb_pct"] > 14:
+                count_lines.append(f"*Patient ({hd['bb_pct']:.0f}% BB) — attack zone, don't nibble*")
             if count_lines:
                 st.markdown("**Count Plan**")
                 for cl in count_lines:
