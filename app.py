@@ -3366,6 +3366,12 @@ def _pitching_plan_content(tm, team, data, season_filter):
     # ── Tunnel Grades + Best Sequences ──
     tunnels = arsenal.get("tunnels", pd.DataFrame())
     sequences = arsenal.get("sequences", pd.DataFrame())
+    # Filter sequences to only include pitches thrown >= 10 times
+    if isinstance(sequences, pd.DataFrame) and not sequences.empty:
+        valid_pitches = {name for name, pt in arsenal["pitches"].items() if pt.get("count", 0) >= 10}
+        sequences = sequences[
+            sequences["Setup Pitch"].isin(valid_pitches) & sequences["Follow Pitch"].isin(valid_pitches)
+        ]
     col_tun, col_seq = st.columns(2)
     with col_tun:
         st.markdown("**Tunnel Grades**")
@@ -3394,7 +3400,7 @@ def _pitching_plan_content(tm, team, data, season_filter):
             for _, sr in sequences.head(6).iterrows():
                 # Look up tunnel grade for this pair
                 tun_grade = "-"
-                if not isinstance(tunnels, pd.DataFrame) or not tunnels.empty:
+                if isinstance(tunnels, pd.DataFrame) and not tunnels.empty:
                     match = tunnels[
                         ((tunnels["Pitch A"] == sr["Setup Pitch"]) & (tunnels["Pitch B"] == sr["Follow Pitch"])) |
                         ((tunnels["Pitch A"] == sr["Follow Pitch"]) & (tunnels["Pitch B"] == sr["Setup Pitch"]))
@@ -3699,6 +3705,61 @@ def _pitching_plan_content(tm, team, data, season_filter):
                     "Tunnel": tun_info,
                 })
             st.dataframe(pd.DataFrame(pitch_rows), use_container_width=True, hide_index=True)
+            # ── 1st Pitch Plan ──
+            fp_hard = hd.get("fp_swing_hard", np.nan)
+            fp_ch = hd.get("fp_swing_ch", np.nan)
+            # Build 1st-pitch recommendation from hitter tendencies + our pitch composites
+            fp_lines = []
+            # Categorise hitter's 1st-pitch aggression by pitch class
+            fp_swing_by_class = {}  # "hard" / "offspeed" → swing%
+            if not pd.isna(fp_hard):
+                fp_swing_by_class["hard"] = fp_hard
+            if not pd.isna(fp_ch):
+                fp_swing_by_class["offspeed"] = fp_ch
+            # For each pitch class the hitter swings at, find our best pitch in that class
+            best_hard = max(
+                [(n, composites.get(n, 0)) for n, _ in sorted_ps if n in _hard_pitches and composites.get(n, 0) > 0],
+                key=lambda x: x[1], default=None,
+            )
+            best_os = max(
+                [(n, composites.get(n, 0)) for n, _ in sorted_ps if n not in _hard_pitches and composites.get(n, 0) > 0],
+                key=lambda x: x[1], default=None,
+            )
+            # Decide recommendation
+            if fp_swing_by_class:
+                # If hitter is aggressive on hard (>60%), lead with offspeed to steal strike
+                # If hitter is passive on hard (<40%), challenge with hard for easy strike
+                if not pd.isna(fp_hard):
+                    if fp_hard > 60:
+                        if best_os:
+                            fp_lines.append(f"Aggressive vs Hard 1P ({fp_hard:.0f}% swing) → Lead with **{best_os[0]}** (Comp {best_os[1]:.0f}) to exploit")
+                        elif best_hard:
+                            fp_lines.append(f"Aggressive vs Hard 1P ({fp_hard:.0f}% swing) → Use **{best_hard[0]}** (Comp {best_hard[1]:.0f}) on edges")
+                    elif fp_hard < 40:
+                        if best_hard:
+                            fp_lines.append(f"Passive vs Hard 1P ({fp_hard:.0f}% swing) → Attack with **{best_hard[0]}** (Comp {best_hard[1]:.0f}) in zone")
+                        elif best_os:
+                            fp_lines.append(f"Passive vs Hard 1P ({fp_hard:.0f}% swing) → Steal strike with **{best_os[0]}** (Comp {best_os[1]:.0f})")
+                    else:
+                        # Neutral — lead with our highest composite pitch
+                        top_pitch = sorted_ps[0] if sorted_ps else None
+                        if top_pitch:
+                            fp_lines.append(f"Neutral vs Hard 1P ({fp_hard:.0f}% swing) → Lead with **{top_pitch[0]}** (Comp {composites.get(top_pitch[0], 0):.0f})")
+                if not pd.isna(fp_ch):
+                    if fp_ch > 55:
+                        if best_os:
+                            fp_lines.append(f"Aggressive vs CH 1P ({fp_ch:.0f}% swing) → **{best_os[0]}** out of zone can get early chase")
+                    elif fp_ch < 30:
+                        if best_os:
+                            fp_lines.append(f"Passive vs CH 1P ({fp_ch:.0f}% swing) → **{best_os[0]}** in zone for free strike")
+            if not fp_lines:
+                # Fallback: just recommend our top composite pitch
+                if sorted_ps:
+                    top_p = sorted_ps[0]
+                    fp_lines.append(f"Lead with **{top_p[0]}** (Comp {composites.get(top_p[0], 0):.0f})")
+            st.markdown("**1st Pitch Plan**")
+            for line in fp_lines:
+                st.markdown(f"- {line}")
             # ── 3-Pitch Sequences ──
             if top_seqs:
                 st.markdown("**3-Pitch Sequences**")
