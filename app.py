@@ -4332,17 +4332,23 @@ def page_hitters_lab(data):
             with col_ev_dist:
                 section_header("Exit Velocity Distribution")
                 all_batted = data[data["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
-                fig_violin = go.Figure()
-                fig_violin.add_trace(go.Violin(y=all_batted["ExitSpeed"], name="All Hitters",
-                                                box_visible=True, meanline_visible=True,
-                                                fillcolor="rgba(158,158,158,0.3)", line_color="#9e9e9e", opacity=0.6))
-                fig_violin.add_trace(go.Violin(y=batted["ExitSpeed"], name=display_name(batter),
-                                                box_visible=True, meanline_visible=True,
-                                                fillcolor="rgba(210,45,73,0.4)", line_color="#d22d49", opacity=0.8))
-                fig_violin.update_layout(**CHART_LAYOUT, height=320, showlegend=True,
-                                          yaxis_title="Exit Velocity (mph)",
-                                          legend=dict(orientation="h", y=1.08, x=0.5, xanchor="center", font=dict(size=10)))
-                st.plotly_chart(fig_violin, use_container_width=True)
+                fig_ev_hist = go.Figure()
+                fig_ev_hist.add_trace(go.Histogram(
+                    x=all_batted["ExitSpeed"], name="All Hitters",
+                    marker_color="rgba(158,158,158,0.45)", nbinsx=30,
+                    histnorm="probability density",
+                ))
+                fig_ev_hist.add_trace(go.Histogram(
+                    x=batted["ExitSpeed"], name=display_name(batter),
+                    marker_color="rgba(210,45,73,0.55)", nbinsx=25,
+                    histnorm="probability density",
+                ))
+                fig_ev_hist.update_layout(
+                    **CHART_LAYOUT, height=320, barmode="overlay",
+                    xaxis_title="Exit Velocity (mph)", yaxis_title="Density",
+                    legend=dict(orientation="h", y=1.08, x=0.5, xanchor="center", font=dict(size=10)),
+                )
+                st.plotly_chart(fig_ev_hist, use_container_width=True)
 
             with col_la_dist:
                 section_header("Launch Angle Distribution")
