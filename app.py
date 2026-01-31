@@ -4577,18 +4577,30 @@ def _pitching_plan_content(tm, team, data, season_filter):
                     return "low-and-away" if same_side else "down in zone"
 
             zone_target_parts = []
-            used_zones = {}  # track zone → pitch to detect redundancy
+            used_zones = set()  # track zone labels already assigned
             for pt_name, pt_data in sorted_ps:
                 pt_ivb = pt_data.get("ivb", np.nan) if isinstance(pt_data, dict) else np.nan
                 zl = _best_zone_for(pt_name, pt_data)
                 default_zl = _pitch_default_zone(pt_name, pt_ivb)
                 if not zl:
                     zl = default_zl
-                # Break redundancy: if another pitch already has this exact zone label,
-                # swap to the pitch-specific default (which is unique per pitch type)
-                if zl in used_zones and zl != default_zl:
-                    zl = default_zl
-                used_zones[zl] = pt_name
+                # Break redundancy: if this exact label is already used, swap
+                if zl in used_zones:
+                    if default_zl != zl:
+                        zl = default_zl
+                    else:
+                        # Default also collides — pick a differentiated fallback
+                        if pt_name in ("Curveball", "Knuckle Curve"):
+                            zl = "12-6 below zone"
+                        elif pt_name in ("Slider", "Sweeper"):
+                            zl = "glove-side low" if same_side else "back door"
+                        elif pt_name == "Changeup":
+                            zl = "arm-side low" if same_side else "low-and-in"
+                        elif pt_name == "Sinker":
+                            zl = "down in zone"
+                        else:
+                            zl = "compete in zone"
+                used_zones.add(zl)
                 zone_target_parts.append(f"**{pt_name}**: {zl}")
             if zone_target_parts:
                 st.markdown("**Zone Targets**")
@@ -4742,24 +4754,32 @@ def _pitching_plan_content(tm, team, data, season_filter):
 
             # ── Key Hitter Notes (percentile-defined outliers only) ──
             notes = []
-            # Swing tendencies by pitch class — only flag if percentile is outlier AND we have the pitch
+            # Swing tendencies by pitch class — only flag if percentile is outlier AND we have a pitch in that class
+            _class_pitches = {
+                "swing_vs_hard": [n for n in ps_dict if n in _hard_pitches],
+                "swing_vs_sl": [n for n in ps_dict if n in ("Slider", "Sweeper")],
+                "swing_vs_cb": [n for n in ps_dict if n in ("Curveball", "Knuckle Curve")],
+                "swing_vs_ch": [n for n in ps_dict if n in ("Changeup", "Splitter")],
+            }
             swing_items = [
-                ("swing_vs_hard", "Fastball"), ("swing_vs_sl", "Slider"),
+                ("swing_vs_hard", "Hard"), ("swing_vs_sl", "Slider"),
                 ("swing_vs_cb", "Curveball"), ("swing_vs_ch", "Changeup"),
             ]
             for key, label in swing_items:
+                matching = _class_pitches.get(key, [])
+                if not matching:
+                    continue
                 sw = hd.get(key, np.nan)
                 if pd.isna(sw):
-                    continue
-                if label not in ps_dict:
                     continue
                 sw_pct = _pctile(_sw_pct_map.get(key, pd.Series(dtype=float)), sw)
                 if pd.isna(sw_pct):
                     continue
+                pitch_names = " / ".join(matching[:2])
                 if sw_pct >= 75:
-                    notes.append(f"Aggressive vs **{label}** ({sw:.0f}%, {sw_pct:.0f}th %ile) — tunnel into it, expand")
+                    notes.append(f"Aggressive vs **{pitch_names}** ({sw:.0f}%, {sw_pct:.0f}th %ile) — tunnel into it, expand")
                 elif sw_pct <= 25:
-                    notes.append(f"Won't swing at **{label}** ({sw:.0f}%, {sw_pct:.0f}th %ile) — use for called strikes")
+                    notes.append(f"Won't swing at **{pitch_names}** ({sw:.0f}%, {sw_pct:.0f}th %ile) — use for called strikes")
             # 2K whiff context removed — already shown in 0-2 putaway line of count plan
             # Chase / discipline
             if not pd.isna(their_chase_val) and their_chase_val < 18:
