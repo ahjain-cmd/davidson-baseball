@@ -9328,190 +9328,6 @@ def _hitting_lab_content(data, batter, season_filter, bdf, batted, pr, all_batte
 
 
 
-# ──────────────────────────────────────────────
-# PAGE: GAME PREP (Pitcher Strategy)
-# ──────────────────────────────────────────────
-def page_game_prep(data):
-    st.markdown('<div class="section-header">Game Prep</div>', unsafe_allow_html=True)
-    st.caption("Pre-game intelligence — pitcher strategy")
-    _game_planning_content(data)
-
-
-def _matchup_optimizer_content(data):
-    """Rank Davidson hitters by expected performance against a specific opposing pitcher's arsenal."""
-
-    # Select opponent pitcher
-    opp_pitching = data[~data["Pitcher"].isin(ROSTER_2026) & data["PitcherTeam"].notna()].copy()
-    if opp_pitching.empty:
-        st.warning("No opponent pitching data found.")
-        return
-
-    opp_pitchers = sorted(opp_pitching["Pitcher"].unique())
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        opp_pitcher = st.selectbox("Select Opposing Pitcher", opp_pitchers,
-                                    format_func=display_name, key="mo_pitcher")
-    with col2:
-        seasons = sorted(data["Season"].dropna().unique())
-        season_filter = st.multiselect("Season", seasons, default=seasons, key="mo_season")
-
-    opdf = opp_pitching[opp_pitching["Pitcher"] == opp_pitcher]
-    if season_filter:
-        opdf = opdf[opdf["Season"].isin(season_filter)]
-    if len(opdf) < 10:
-        st.warning("Not enough data for this pitcher (need 10+ pitches).")
-        return
-
-    throws = safe_mode(opdf["PitcherThrows"], "?")
-    team = safe_mode(opdf["PitcherTeam"], "?")
-
-    # Pitcher arsenal summary
-    section_header(f"{display_name(opp_pitcher)} — {team} ({throws}HP) — {len(opdf)} pitches")
-
-    arsenal = []
-    for pt in sorted(opdf["TaggedPitchType"].dropna().unique()):
-        pt_df = opdf[opdf["TaggedPitchType"] == pt]
-        pct = len(pt_df) / len(opdf) * 100
-        avg_velo = pt_df["RelSpeed"].mean() if pt_df["RelSpeed"].notna().any() else np.nan
-        arsenal.append({"Pitch": pt, "Usage": f"{pct:.0f}%", "Avg Velo": f"{avg_velo:.1f}" if not pd.isna(avg_velo) else "-",
-                        "usage_num": pct})
-    arsenal_df = pd.DataFrame(arsenal).sort_values("usage_num", ascending=False).drop(columns=["usage_num"])
-    st.dataframe(arsenal_df.set_index("Pitch"), use_container_width=True)
-
-    # Score each Davidson hitter vs this pitcher's pitch type mix
-    section_header("Hitter Rankings vs This Pitcher")
-    dav_hitting = filter_davidson(data, role="batter")
-    if season_filter:
-        dav_hitting = dav_hitting[dav_hitting["Season"].isin(season_filter)]
-
-    pitch_mix = opdf["TaggedPitchType"].value_counts(normalize=True)
-
-    hitter_scores = []
-    for batter in dav_hitting["Batter"].unique():
-        bdf = dav_hitting[dav_hitting["Batter"] == batter]
-        if len(bdf) < 20:
-            continue
-        side = safe_mode(bdf["BatterSide"], "?")
-        bats = {"Right": "R", "Left": "L", "Switch": "S"}.get(side, side)
-
-        # Weighted score across pitch types
-        weighted_ev = 0
-        weighted_whiff = 0
-        weighted_chase = 0
-        total_weight = 0
-        pt_details = {}
-
-        for pt, pct in pitch_mix.items():
-            pt_bdf = bdf[bdf["TaggedPitchType"] == pt]
-            if len(pt_bdf) < 3:
-                continue
-            sw = pt_bdf[pt_bdf["PitchCall"].isin(SWING_CALLS)]
-            wh = pt_bdf[pt_bdf["PitchCall"] == "StrikeSwinging"]
-            bt = pt_bdf[pt_bdf["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
-            oz = pt_bdf[(~in_zone_mask(pt_bdf)) & pt_bdf["PlateLocSide"].notna()]
-            ch = oz[oz["PitchCall"].isin(SWING_CALLS)]
-
-            avg_ev = bt["ExitSpeed"].mean() if len(bt) > 0 else 75
-            whiff_rate = len(wh) / max(len(sw), 1) * 100 if len(sw) > 0 else 50
-            chase_rate = len(ch) / max(len(oz), 1) * 100 if len(oz) > 0 else 30
-
-            weighted_ev += avg_ev * pct
-            weighted_whiff += whiff_rate * pct
-            weighted_chase += chase_rate * pct
-            total_weight += pct
-            pt_details[pt] = {"EV": f"{avg_ev:.1f}", "Whiff": f"{whiff_rate:.0f}%"}
-
-        if total_weight < 0.3:
-            continue
-
-        weighted_ev /= total_weight
-        weighted_whiff /= total_weight
-        weighted_chase /= total_weight
-
-        # Composite score: higher EV good, lower whiff good, lower chase good
-        composite = (weighted_ev - 75) * 2 - weighted_whiff * 0.5 - weighted_chase * 0.3
-
-        # Platoon advantage
-        platoon = ""
-        if throws == "Right" and bats == "L":
-            platoon = "Platoon+"
-        elif throws == "Left" and bats == "R":
-            platoon = "Platoon+"
-        elif throws == "Right" and bats == "R":
-            platoon = "Same"
-        elif throws == "Left" and bats == "L":
-            platoon = "Same"
-
-        hitter_scores.append({
-            "Hitter": batter,
-            "Bats": bats,
-            "Platoon": platoon,
-            "Pitches": len(bdf),
-            "xEV": round(weighted_ev, 1),
-            "xWhiff%": round(weighted_whiff, 1),
-            "xChase%": round(weighted_chase, 1),
-            "Score": round(composite, 1),
-            "_score": composite,
-        })
-
-    if hitter_scores:
-        score_df = pd.DataFrame(hitter_scores).sort_values("_score", ascending=False)
-
-        # Color-code ranks
-        st.markdown("*Higher Score = better matchup. Score combines expected EV, whiff rate, and chase rate weighted by pitcher's pitch mix.*")
-
-        display_scores = score_df.drop(columns=["_score"]).copy()
-        display_scores.insert(0, "Rank", range(1, len(display_scores) + 1))
-        display_scores["Hitter"] = display_scores["Hitter"].apply(display_name)
-        st.dataframe(display_scores.set_index("Rank"), use_container_width=True, height=min(len(display_scores) * 40 + 50, 600))
-
-        # Top 9 lineup recommendation
-        section_header("Recommended Lineup (Top 9)")
-        top9 = score_df.head(9)
-        lineup_cols = st.columns(3)
-        for i, (_, row) in enumerate(top9.iterrows()):
-            with lineup_cols[i % 3]:
-                clr = "#2ca02c" if row["Score"] > 10 else "#f7c631" if row["Score"] > 0 else "#d22d49"
-                st.markdown(
-                    f'<div style="padding:10px;background:white;border-radius:8px;border:1px solid #eee;margin:4px 0;'
-                    f'border-left:4px solid {clr};">'
-                    f'<div style="font-size:20px;font-weight:800;color:#1a1a2e !important;">#{i+1}</div>'
-                    f'<div style="font-size:14px;font-weight:700;color:#1a1a2e !important;">{display_name(row["Hitter"])}</div>'
-                    f'<div style="font-size:11px;color:#666 !important;">Bats: {row["Bats"]} | {row["Platoon"]} | '
-                    f'xEV: {row["xEV"]} | Score: {row["Score"]}</div></div>', unsafe_allow_html=True)
-
-        # Detailed matchup breakdown for selected hitter
-        section_header("Detailed Matchup Breakdown")
-        selected = st.selectbox("Select Hitter for Detail", score_df["Hitter"].tolist(),
-                                 format_func=display_name, key="mo_detail")
-        sel_bdf = dav_hitting[dav_hitting["Batter"] == selected]
-        detail_rows = []
-        for pt in sorted(opdf["TaggedPitchType"].dropna().unique()):
-            pt_usage = len(opdf[opdf["TaggedPitchType"] == pt]) / len(opdf) * 100
-            pt_bdf = sel_bdf[sel_bdf["TaggedPitchType"] == pt]
-            if len(pt_bdf) < 3:
-                detail_rows.append({"Pitch": pt, "Opp Usage": f"{pt_usage:.0f}%", "Seen": len(pt_bdf),
-                                     "Swing%": "-", "Whiff%": "-", "Avg EV": "-", "Barrel%": "-"})
-                continue
-            sw = pt_bdf[pt_bdf["PitchCall"].isin(SWING_CALLS)]
-            wh = pt_bdf[pt_bdf["PitchCall"] == "StrikeSwinging"]
-            bt = pt_bdf[pt_bdf["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
-            br = bt[is_barrel_mask(bt)] if len(bt) > 0 else pd.DataFrame()
-            detail_rows.append({
-                "Pitch": pt,
-                "Opp Usage": f"{pt_usage:.0f}%",
-                "Seen": len(pt_bdf),
-                "Swing%": f"{len(sw)/len(pt_bdf)*100:.1f}%",
-                "Whiff%": f"{len(wh)/max(len(sw),1)*100:.1f}%" if len(sw) > 0 else "-",
-                "Avg EV": f"{bt['ExitSpeed'].mean():.1f}" if len(bt) > 0 else "-",
-                "Barrel%": f"{len(br)/max(len(bt),1)*100:.1f}%" if len(bt) > 0 else "-",
-            })
-        if detail_rows:
-            st.dataframe(pd.DataFrame(detail_rows).set_index("Pitch"), use_container_width=True)
-    else:
-        st.info("Not enough Davidson hitting data against these pitch types.")
-
-
 def _game_planning_content(data, pitcher=None, season_filter=None, pdf=None, key_prefix="gp"):
     """Pitch sequencing engine, count leverage analysis, and effective velocity.
     If pitcher/pdf provided, skip the pitcher selector (used from Pitching page)."""
@@ -11237,7 +11053,6 @@ def main():
         "Pitching",
         "Catcher Analytics",
         "Player Development",
-        "Game Prep",
         "Defensive Positioning",
         "Opponent Scouting",
     ], label_visibility="collapsed")
@@ -11265,8 +11080,6 @@ def main():
         page_team(data)
     elif page == "Player Development":
         page_development(data)
-    elif page == "Game Prep":
-        page_game_prep(data)
     elif page == "Defensive Positioning":
         page_defensive_positioning(data)
     elif page == "Opponent Scouting":
