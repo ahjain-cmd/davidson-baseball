@@ -95,6 +95,12 @@ ZONE_HEIGHT_TOP = 3.5     # default top (ft)
 MIN_CALLED_STRIKES_FOR_ADAPTIVE_ZONE = 20
 
 
+def safe_mode(series, default=""):
+    """Return the mode of a Series, or *default* if no mode exists."""
+    m = series.mode()
+    return m.iloc[0] if len(m) > 0 else default
+
+
 def is_barrel(ev, la):
     """Statcast barrel definition: EV >= 98 with LA range that widens as EV rises.
 
@@ -395,7 +401,8 @@ def compute_batter_stats(data, season_filter=None):
         n = len(batted)
         hard = len(batted[batted["ExitSpeed"] >= 95]) if n > 0 else 0
         barrels = int(is_barrel_mask(batted).sum()) if n > 0 else 0
-        la_sweet = len(batted[batted["Angle"].between(8, 32)]) if n > 0 else 0
+        batted_la = batted.dropna(subset=["Angle"])
+        la_sweet = len(batted_la[batted_la["Angle"].between(8, 32)]) if len(batted_la) > 0 else 0
         ks = len(grp[grp["KorBB"] == "Strikeout"])
         bbs = len(grp[grp["KorBB"] == "Walk"])
 
@@ -408,7 +415,7 @@ def compute_batter_stats(data, season_filter=None):
         # Directional
         pull_mask = batted["Direction"].notna()
         if pull_mask.any():
-            side = grp["BatterSide"].mode().iloc[0] if grp["BatterSide"].notna().any() else "Right"
+            side = safe_mode(grp["BatterSide"], "Right")
             if side == "Left":
                 pull = len(batted[batted["Direction"] > 15])
                 oppo = len(batted[batted["Direction"] < -15])
@@ -723,7 +730,7 @@ def page_hitter_card(data):
 
     jersey = JERSEY.get(selected, "")
     pos = POSITION.get(selected, "")
-    side = bdf["BatterSide"].mode().iloc[0] if bdf["BatterSide"].notna().any() else ""
+    side = safe_mode(bdf["BatterSide"], "")
     bats = {"Right": "R", "Left": "L", "Switch": "S"}.get(side, side)
 
     player_header(selected, jersey, pos,
@@ -1375,7 +1382,7 @@ def page_pitcher_card(data):
 
     jersey = JERSEY.get(selected, "")
     pos = POSITION.get(selected, "")
-    throws = pdf["PitcherThrows"].mode().iloc[0] if pdf["PitcherThrows"].notna().any() else ""
+    throws = safe_mode(pdf["PitcherThrows"], "")
     thr = {"Right": "R", "Left": "L"}.get(throws, throws)
 
     # Arsenal summary line
@@ -1442,7 +1449,7 @@ def page_pitcher_card(data):
             "EV Ag": round(sub_ip["ExitSpeed"].mean(), 1) if len(sub_ip) > 0 else None,
         }
         if "Tilt" in sub.columns and sub["Tilt"].notna().any():
-            row["Tilt"] = sub["Tilt"].mode().iloc[0] if sub["Tilt"].notna().any() else None
+            row["Tilt"] = safe_mode(sub["Tilt"], None)
         if "ZoneSpeed" in sub.columns and sub["ZoneSpeed"].notna().any():
             row["Zone Velo"] = round(sub["ZoneSpeed"].mean(), 1)
         if "VertApprAngle" in sub.columns and sub["VertApprAngle"].notna().any():
@@ -2190,12 +2197,13 @@ def page_team(data):
                                     f'</div>', unsafe_allow_html=True)
 
                 # Max single hit
-                max_ev_row = week_inplay.loc[week_inplay["ExitSpeed"].idxmax()]
-                st.markdown(f'<div class="leader-card leader-card-grn">'
-                            f'<div class="cat">Hardest Single Hit</div>'
-                            f'<div class="name">{display_name(max_ev_row["Batter"])}</div>'
-                            f'<div class="stat">{max_ev_row["ExitSpeed"]:.1f} mph</div>'
-                            f'</div>', unsafe_allow_html=True)
+                if week_inplay["ExitSpeed"].notna().any():
+                    max_ev_row = week_inplay.loc[week_inplay["ExitSpeed"].idxmax()]
+                    st.markdown(f'<div class="leader-card leader-card-grn">'
+                                f'<div class="cat">Hardest Single Hit</div>'
+                                f'<div class="name">{display_name(max_ev_row["Batter"])}</div>'
+                                f'<div class="stat">{max_ev_row["ExitSpeed"]:.1f} mph</div>'
+                                f'</div>', unsafe_allow_html=True)
             else:
                 st.caption("Not enough in-play data this week.")
 
@@ -2364,10 +2372,10 @@ def page_game_log(data):
 
     opts = games["GameID"].tolist()
     if opts:
+        _game_labels = {row["GameID"]: f"{row['Date'].strftime('%Y-%m-%d')} {row['Away']} @ {row['Home']}"
+                        for _, row in games.iterrows()}
         sel = st.selectbox("Drill into game", opts,
-                           format_func=lambda g: f"{games[games['GameID']==g]['Date'].iloc[0].strftime('%Y-%m-%d')} "
-                                                 f"{games[games['GameID']==g]['Away'].iloc[0]} @ "
-                                                 f"{games[games['GameID']==g]['Home'].iloc[0]}")
+                           format_func=lambda g: _game_labels.get(g, str(g)))
         gd = dav[dav["GameID"] == sel]
         c1, c2 = st.columns(2)
         with c1:
@@ -2801,10 +2809,15 @@ def _generate_ai_report(pdf, pitcher_name, stuff_df, tunnel_df, pair_df, all_dat
         ext=("Extension", "mean"),
     ).sort_values("count", ascending=False)
 
-    best_pitch = arsenal["stuff_avg"].idxmax()
-    best_stuff = arsenal.loc[best_pitch, "stuff_avg"]
-    worst_pitch = arsenal["stuff_avg"].idxmin()
-    worst_stuff = arsenal.loc[worst_pitch, "stuff_avg"]
+    stuff_valid = arsenal["stuff_avg"].dropna()
+    if stuff_valid.empty:
+        lines.append("### Arsenal Grades")
+        lines.append("Insufficient data to compute Stuff+ grades.")
+        return "\n".join(lines)
+    best_pitch = stuff_valid.idxmax()
+    best_stuff = stuff_valid[best_pitch]
+    worst_pitch = stuff_valid.idxmin()
+    worst_stuff = stuff_valid[worst_pitch]
 
     lines.append("### Arsenal Grades")
     lines.append("")
@@ -4059,7 +4072,7 @@ def _generate_hitter_ai_report(bdf, batter_name, all_data, season_filter):
     else:
         profile = "All-Around Hitter"
 
-    side = bdf["BatterSide"].mode().iloc[0] if bdf["BatterSide"].notna().any() else "Unknown"
+    side = safe_mode(bdf["BatterSide"], "Unknown")
     bats = {"Right": "R", "Left": "L", "Switch": "S"}.get(side, side)
 
     lines.append(f"## Offensive Profile: {profile}")
@@ -4219,7 +4232,7 @@ def page_hitters_lab(data):
 
     jersey = JERSEY.get(batter, "")
     pos = POSITION.get(batter, "")
-    side = bdf["BatterSide"].mode().iloc[0] if bdf["BatterSide"].notna().any() else ""
+    side = safe_mode(bdf["BatterSide"], "")
     bats_str = {"Right": "R", "Left": "L", "Switch": "S"}.get(side, side)
 
     player_header(batter, jersey, pos,
@@ -4753,7 +4766,7 @@ def page_hitters_lab(data):
                 section_header("Pull / Center / Oppo")
                 bd = in_play.dropna(subset=["Direction", "ExitSpeed"]).copy()
                 if not bd.empty:
-                    bs = bdf["BatterSide"].mode().iloc[0] if bdf["BatterSide"].notna().any() else "Right"
+                    bs = safe_mode(bdf["BatterSide"], "Right")
                     if bs == "Left":
                         pull_m = bd["Direction"] > 15
                         oppo_m = bd["Direction"] < -15
@@ -4789,7 +4802,7 @@ def page_hitters_lab(data):
                 section_header("Launch Angle by Direction")
                 bla = in_play.dropna(subset=["Direction", "Angle"]).copy()
                 if not bla.empty:
-                    bs = bdf["BatterSide"].mode().iloc[0] if bdf["BatterSide"].notna().any() else "Right"
+                    bs = safe_mode(bdf["BatterSide"], "Right")
                     if bs == "Left":
                         bla["Field"] = np.where(bla["Direction"] > 15, "Pull",
                                                  np.where(bla["Direction"] < -15, "Oppo", "Center"))
@@ -4834,7 +4847,7 @@ def page_hitters_lab(data):
         contacts = bdf[bdf["PitchCall"].isin(CONTACT_CALLS)].copy()
         inplay = bdf[(bdf["PitchCall"] == "InPlay")].copy()
         inplay_ev = inplay.dropna(subset=["ExitSpeed", "PlateLocSide", "PlateLocHeight"])
-        _bs = bdf["BatterSide"].mode().iloc[0] if "BatterSide" in bdf.columns and bdf["BatterSide"].notna().any() else "Right"
+        _bs = safe_mode(bdf["BatterSide"], "Right") if "BatterSide" in bdf.columns else "Right"
 
         if len(swings) < 10:
             st.info("Not enough swing data (need 10+ swings).")
@@ -4861,9 +4874,14 @@ def page_hitters_lab(data):
                 # Regression: LA vs pitch height on hard-hit balls
                 # Slope = path adjustment rate (how much hitter changes plane per ft of pitch height)
                 # Value at 2.5ft = mid-zone baseline attack angle
-                v_slope, v_int, v_r, _, _ = sp_stats.linregress(hard_hit["PlateLocHeight"].values, hard_hit["Angle"].values)
-                mid_zone_aa = v_int + v_slope * 2.5
-                path_adjust = v_slope
+                if len(hard_hit) >= 3:
+                    v_slope, v_int, v_r, _, _ = sp_stats.linregress(hard_hit["PlateLocHeight"].values, hard_hit["Angle"].values)
+                    mid_zone_aa = v_int + v_slope * 2.5
+                    path_adjust = v_slope
+                else:
+                    v_slope, v_int, v_r = 0, attack_angle, 0
+                    mid_zone_aa = attack_angle
+                    path_adjust = 0
 
                 # ── HORIZONTAL BAT PATH ──
                 # Direction vs PlateLocSide on hard-hit: slope = horizontal path tendency
@@ -5393,8 +5411,8 @@ def page_matchup_optimizer(data):
         st.warning("Not enough data for this pitcher (need 10+ pitches).")
         return
 
-    throws = opdf["PitcherThrows"].mode().iloc[0] if opdf["PitcherThrows"].notna().any() else "?"
-    team = opdf["PitcherTeam"].mode().iloc[0] if opdf["PitcherTeam"].notna().any() else "?"
+    throws = safe_mode(opdf["PitcherThrows"], "?")
+    team = safe_mode(opdf["PitcherTeam"], "?")
 
     # Pitcher arsenal summary
     section_header(f"{display_name(opp_pitcher)} — {team} ({throws}HP) — {len(opdf)} pitches")
@@ -5422,7 +5440,7 @@ def page_matchup_optimizer(data):
         bdf = dav_hitting[dav_hitting["Batter"] == batter]
         if len(bdf) < 20:
             continue
-        side = bdf["BatterSide"].mode().iloc[0] if bdf["BatterSide"].notna().any() else "?"
+        side = safe_mode(bdf["BatterSide"], "?")
         bats = {"Right": "R", "Left": "L", "Switch": "S"}.get(side, side)
 
         # Weighted score across pitch types
@@ -5573,7 +5591,7 @@ def page_game_planning(data):
 
     jersey = JERSEY.get(pitcher, "")
     pos = POSITION.get(pitcher, "")
-    throws = pdf["PitcherThrows"].mode().iloc[0] if pdf["PitcherThrows"].notna().any() else ""
+    throws = safe_mode(pdf["PitcherThrows"], "")
     t_str = {"Right": "R", "Left": "L"}.get(throws, throws)
 
     player_header(pitcher, jersey, pos,
@@ -5953,7 +5971,7 @@ def page_game_planning(data):
 
                             # Tunnel data for the pair transitions
                             pitches = s3.split(" → ")
-                            if len(pitches) < 3:
+                            if len(pitches) != 3:
                                 continue
                             tn_12 = tunnel_lookup.get((pitches[0], pitches[1]))
                             tn_23 = tunnel_lookup.get((pitches[1], pitches[2]))
@@ -6188,11 +6206,11 @@ def page_game_planning(data):
                             # Outcome summary on pitch 2
                             outcomes = []
                             if len(wh2) > 0:
-                                outcomes.append(f"Whiff {len(wh2)/max(len(sw2),1)*100:.0f}%")
+                                outcomes.append(f"Whiff {len(wh2)/len(sw2)*100:.0f}%" if len(sw2) > 0 else "Whiff -")
                             if len(csw2) > 0:
                                 outcomes.append(f"CSW {len(csw2)/len(p2_df)*100:.0f}%")
                             if len(ip2) > 0:
-                                ev_avg = ip2.merge(sdf2[["ExitSpeed"]], left_index=True, right_index=True, suffixes=("", "_dup"))["ExitSpeed"].mean()
+                                ev_avg = sdf2.loc[ip2.index, "ExitSpeed"].dropna().mean() if "ExitSpeed" in sdf2.columns else np.nan
                                 outcomes.append(f"InPlay {len(ip2)} ({ev_avg:.0f} EV)" if not pd.isna(ev_avg) else f"InPlay {len(ip2)}")
 
                             branch_rows.append({
@@ -6264,8 +6282,8 @@ def page_game_planning(data):
                             b_row = cmp_rows[1]
                             a_whiff = float(a_row["Whiff%"].replace("%", "")) if a_row["Whiff%"] != "-" else 0
                             b_whiff = float(b_row["Whiff%"].replace("%", "")) if b_row["Whiff%"] != "-" else 0
-                            a_csw = float(a_row["CSW%"].replace("%", ""))
-                            b_csw = float(b_row["CSW%"].replace("%", ""))
+                            a_csw = float(a_row["CSW%"].replace("%", "")) if a_row["CSW%"] != "-" else 0
+                            b_csw = float(b_row["CSW%"].replace("%", "")) if b_row["CSW%"] != "-" else 0
                             if a_whiff + a_csw > b_whiff + b_csw:
                                 winner = seq_a
                                 w_clr = "#2ca02c"
@@ -6407,9 +6425,9 @@ def page_game_planning(data):
                 "Situation": sit,
                 "Pitches": len(sit_df),
                 "Top Pitch": top_pt,
-                "Zone%": f"{in_zone_mask(sit_df).sum()/max(len(sit_df[sit_df['PlateLocSide'].notna()]),1)*100:.1f}%",
-                "Whiff%": f"{len(wh)/max(len(sw),1)*100:.1f}%",
-                "CSW%": f"{len(csw)/len(sit_df)*100:.1f}%",
+                "Zone%": f"{in_zone_mask(sit_df).sum()/len(sit_df[sit_df['PlateLocSide'].notna()])*100:.1f}%" if sit_df["PlateLocSide"].notna().any() else "-",
+                "Whiff%": f"{len(wh)/len(sw)*100:.1f}%" if len(sw) > 0 else "-",
+                "CSW%": f"{len(csw)/len(sit_df)*100:.1f}%" if len(sit_df) > 0 else "-",
                 "Avg EV": f"{bt['ExitSpeed'].mean():.1f}" if len(bt) > 0 else "-",
             })
         if sit_rows:
@@ -6893,7 +6911,7 @@ def page_defensive_positioning(data):
                     zone_rows.append({
                         "Zone": zname,
                         "Count": z["count"],
-                        "Hit%": f"{z['count']/max(len(filt),1)*100:.1f}%",
+                        "Hit%": f"{z['count']/len(filt)*100:.1f}%" if len(filt) > 0 else "-",
                         "Out%": f"{z['out_rate']:.1f}%",
                         "H Rate": f"{z['hit_rate']:.1f}%",
                         "Avg EV": f"{z['avg_ev']:.1f}" if not pd.isna(z.get("avg_ev", np.nan)) else "-",
@@ -6954,7 +6972,8 @@ def page_defensive_positioning(data):
             oppo_pct = len(spray_all[spray_all["Dir"] == "Oppo"]) / total * 100
             gb_pct = len(spray_all[spray_all["TaggedHitType"] == "GroundBall"]) / total * 100 if "TaggedHitType" in spray_all.columns else 0
             gb_pull = spray_all[(spray_all["TaggedHitType"] == "GroundBall") & (spray_all["Dir"] == "Pull")] if "TaggedHitType" in spray_all.columns else pd.DataFrame()
-            gb_pull_pct = len(gb_pull) / max(len(spray_all[spray_all["TaggedHitType"] == "GroundBall"]), 1) * 100 if "TaggedHitType" in spray_all.columns else 0
+            n_gb = len(spray_all[spray_all["TaggedHitType"] == "GroundBall"]) if "TaggedHitType" in spray_all.columns else 0
+            gb_pull_pct = len(gb_pull) / n_gb * 100 if n_gb > 0 else 0
 
             # Shift recommendation
             if pull_pct > 45 and gb_pct > 45:
