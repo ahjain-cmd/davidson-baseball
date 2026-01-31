@@ -4351,7 +4351,6 @@ def _pitching_plan_content(tm, team, data, season_filter):
         ps = m["pitch_scores"]
         hd = m.get("hitter_data", {})
         sorted_ps = sorted(ps.items(), key=lambda x: x[1]["score"], reverse=True)
-        best_pt = sorted_ps[0][0] if sorted_ps else "?"
         # Build top 3-pitch seq for summary (cache on matchup for bullpen card reuse)
         top_seqs = _build_3pitch_sequences(sorted_ps, hd, tunnels, sequences)
         m["_cached_seqs"] = top_seqs
@@ -4368,7 +4367,6 @@ def _pitching_plan_content(tm, team, data, season_filter):
             "Hitter": display_name(m["hitter"]), "B": m["bats"],
             "Platoon": m["platoon"],
             "Score": round(m["overall_score"], 1),
-            "Go-To": best_pt,
             "Best Sequence": seq_str,
             "Putaway Why": putaway_note,
         })
