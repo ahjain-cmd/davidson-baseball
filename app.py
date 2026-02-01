@@ -4915,6 +4915,8 @@ def _pitching_plan_content(tm, team, data, season_filter):
                     for line in twok_lines:
                         st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;{line}")
                     # Per-pitch putaway ranking for 2K counts
+                    # Hitter's 2K whiff by class is dominant — it's the hitter's
+                    # actual vulnerability, not our pitcher's general whiff rate.
                     pw_rank = []
                     for n, d in real_ps:
                         pw_w = d.get("our_whiff", 0) or 0
@@ -4923,7 +4925,8 @@ def _pitching_plan_content(tm, team, data, season_filter):
                         t2k_val = hd.get("whiff_2k_hard" if is_h else "whiff_2k_os", np.nan)
                         ars_n = arsenal["pitches"].get(n, {})
                         loc, _ = _best_putaway_zone(n, ars_n)
-                        pw_score = pw_w * 0.5 + pw_ch * 0.3 + (t2k_val * 0.2 if not pd.isna(t2k_val) else 0)
+                        # Weight: hitter 2K whiff (50%) > our whiff (25%) > chase (25%)
+                        pw_score = (t2k_val * 0.50 if not pd.isna(t2k_val) else 0) + pw_w * 0.25 + pw_ch * 0.25
                         pw_rank.append((n, pw_score, pw_w, pw_ch, loc))
                     pw_rank.sort(key=lambda x: x[1], reverse=True)
                     if pw_rank:
