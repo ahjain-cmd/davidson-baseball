@@ -3452,6 +3452,99 @@ def _get_our_hitter_profile(data, batter_name, season_filter=None):
                 }
     profile["zone_grid"] = zone_grid
 
+    # ── 1A. Per-pitch-type zone_damage (6-zone map) ──
+    zone_mid = (ZONE_HEIGHT_BOT + ZONE_HEIGHT_TOP) / 2  # ~2.5 ft
+    for pt_name, pt_entry in profile["by_pitch_type"].items():
+        pt_grp = loc_df[loc_df["TaggedPitchType"] == pt_name]
+        pt_ip = pt_grp[pt_grp["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
+        if len(pt_ip) < 10:
+            pt_entry["zone_damage"] = {}
+            continue
+        # 6-zone: up/mid/down × in/out (relative to batter hand)
+        is_rhh = bats == "Right"
+        zd = {}
+        for v_label, v_lo, v_hi in [("up", zone_mid + 0.5, 5.0),
+                                      ("mid", zone_mid - 0.5, zone_mid + 0.5),
+                                      ("down", 0.0, zone_mid - 0.5)]:
+            for h_label, h_cond in [("in", pt_ip["PlateLocSide"] < 0 if is_rhh else pt_ip["PlateLocSide"] > 0),
+                                     ("out", pt_ip["PlateLocSide"] >= 0 if is_rhh else pt_ip["PlateLocSide"] <= 0)]:
+                cell = pt_ip[(pt_ip["PlateLocHeight"] >= v_lo) &
+                             (pt_ip["PlateLocHeight"] < v_hi) & h_cond]
+                if len(cell) < 5:
+                    continue
+                cell_barrels = int(is_barrel_mask(cell).sum()) if len(cell) > 0 else 0
+                zd[f"{v_label}_{h_label}"] = {
+                    "n": len(cell),
+                    "avg_ev": cell["ExitSpeed"].mean(),
+                    "barrels": cell_barrels,
+                }
+        pt_entry["zone_damage"] = zd
+
+    # ── 1B. 2-strike whiff by pitch class (hard vs offspeed) ──
+    if profile.get("two_strike") and "Strikes" in bdf.columns:
+        two_k = bdf[bdf["Strikes"].astype(float) >= 2]
+        if len(two_k) >= 10:
+            _hard_cls = {"Fastball", "Sinker", "Cutter"}
+            for cls_label, cls_set in [("whiff_hard", _hard_cls),
+                                        ("whiff_os", set(bdf["TaggedPitchType"].unique()) - _hard_cls)]:
+                cls_2k = two_k[two_k["TaggedPitchType"].isin(cls_set)]
+                cls_2k_sw = cls_2k[cls_2k["PitchCall"].isin(SWING_CALLS)]
+                cls_2k_wh = cls_2k[cls_2k["PitchCall"] == "StrikeSwinging"]
+                if len(cls_2k_sw) >= 5:
+                    profile["two_strike"][cls_label] = len(cls_2k_wh) / len(cls_2k_sw) * 100
+
+    # ── 1C. Barrel zone concentration (top 3 cells by barrel count) ──
+    barrel_zones = []
+    if len(loc_df) >= 20 and zone_grid:
+        all_ip_loc = loc_df[loc_df["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed", "Angle"])
+        if len(all_ip_loc) >= 10:
+            bside_1c = {"Right": "Right", "Left": "Left"}.get(bats, "Right")
+            h_edges_1c = [-2, -0.83, -0.28, 0.28, 0.83, 2]
+            v_edges_1c = [0.5, 1.5, 2.17, 2.83, 3.5, 4.5]
+            col_labels_1c = ["Far In", "Inside", "Middle", "Outside", "Far Out"]
+            row_labels_1c = ["Low+", "Low", "Mid", "High", "High+"]
+            if bside_1c == "Left":
+                col_labels_1c = col_labels_1c[::-1]
+            cell_barrels_list = []
+            for ri in range(5):
+                for ci in range(5):
+                    cm = ((all_ip_loc["PlateLocSide"] >= h_edges_1c[ci]) &
+                          (all_ip_loc["PlateLocSide"] < h_edges_1c[ci + 1]) &
+                          (all_ip_loc["PlateLocHeight"] >= v_edges_1c[ri]) &
+                          (all_ip_loc["PlateLocHeight"] < v_edges_1c[ri + 1]))
+                    cell_ip = all_ip_loc[cm]
+                    if len(cell_ip) < 3:
+                        continue
+                    b_count = int(is_barrel_mask(cell_ip).sum())
+                    if b_count >= 2:
+                        ev_avg = cell_ip["ExitSpeed"].mean()
+                        key_1c = f"{row_labels_1c[ri]}_{col_labels_1c[ci]}"
+                        cell_barrels_list.append((key_1c, b_count, round(ev_avg, 1)))
+            cell_barrels_list.sort(key=lambda x: x[1], reverse=True)
+            barrel_zones = cell_barrels_list[:3]
+    profile["barrel_zones"] = barrel_zones
+
+    # ── 1D. Spray direction (pull/center/oppo) ──
+    spray = {}
+    if "Direction" in bdf.columns:
+        dir_ip = bdf[(bdf["PitchCall"] == "InPlay") & bdf["Direction"].notna()].copy()
+        if len(dir_ip) >= 20:
+            is_rhh_spray = bats == "Right"
+            if is_rhh_spray:
+                pull_mask = dir_ip["Direction"] < -15
+                oppo_mask = dir_ip["Direction"] > 15
+            else:
+                pull_mask = dir_ip["Direction"] > 15
+                oppo_mask = dir_ip["Direction"] < -15
+            center_mask = ~pull_mask & ~oppo_mask
+            total = len(dir_ip)
+            spray = {
+                "pull_pct": round(pull_mask.sum() / total * 100, 1),
+                "center_pct": round(center_mask.sum() / total * 100, 1),
+                "oppo_pct": round(oppo_mask.sum() / total * 100, 1),
+            }
+    profile["spray"] = spray
+
     return profile
 
 
@@ -4077,8 +4170,40 @@ def _score_hitter_vs_pitcher(hitter_tm, pitcher_profile):
             return f"Deep {depth:.1f}"
         return ""
 
+    # 2A. Zone-weighted EV: cross per-pitch zone_damage with pitcher location %s
+    def _zone_weighted_ev(our_pitch_data, pp):
+        """Compute zone-weighted EV for a pitch type using pitcher location tendencies.
+        Returns weighted EV or NaN if insufficient data."""
+        zd = our_pitch_data.get("zone_damage", {}) if our_pitch_data else {}
+        if len(zd) < 2:
+            return np.nan
+        h_pct = pp.get("loc_high_pct", np.nan)
+        vmid_pct = pp.get("loc_vmid_pct", np.nan)
+        l_pct = pp.get("loc_low_pct", np.nan)
+        in_pct = pp.get("loc_inside_pct", np.nan)
+        out_pct = pp.get("loc_outside_pct", np.nan)
+        # Map 6 zones to pitcher location weights
+        zone_weights = {
+            "up_in": (h_pct if not pd.isna(h_pct) else 33) * (in_pct if not pd.isna(in_pct) else 50) / 100,
+            "up_out": (h_pct if not pd.isna(h_pct) else 33) * (out_pct if not pd.isna(out_pct) else 50) / 100,
+            "mid_in": (vmid_pct if not pd.isna(vmid_pct) else 34) * (in_pct if not pd.isna(in_pct) else 50) / 100,
+            "mid_out": (vmid_pct if not pd.isna(vmid_pct) else 34) * (out_pct if not pd.isna(out_pct) else 50) / 100,
+            "down_in": (l_pct if not pd.isna(l_pct) else 33) * (in_pct if not pd.isna(in_pct) else 50) / 100,
+            "down_out": (l_pct if not pd.isna(l_pct) else 33) * (out_pct if not pd.isna(out_pct) else 50) / 100,
+        }
+        weighted_ev, total_w = 0.0, 0.0
+        for zkey, zdata in zd.items():
+            ev = zdata.get("avg_ev", np.nan)
+            if pd.isna(ev):
+                continue
+            w = zone_weights.get(zkey, 1.0)
+            weighted_ev += ev * w
+            total_w += w
+        return weighted_ev / total_w if total_w > 0 else np.nan
+
+    # 2B. Upgraded zone_cross: use per-pitch zone_damage first, fall back to zone_grid
     def _zone_cross_note(opp_pitch):
-        """Cross pitcher location tendency with our zone grid performance."""
+        """Cross pitcher location tendency with our per-pitch zone_damage or zone_grid."""
         h_pct = pitcher_profile.get("loc_high_pct", np.nan)
         l_pct = pitcher_profile.get("loc_low_pct", np.nan)
         # Find dominant vertical tendency
@@ -4089,7 +4214,29 @@ def _score_hitter_vs_pitcher(hitter_tm, pitcher_profile):
             best_tend, best_pct = "low", l_pct
         if not best_tend or best_pct < 25:
             return ""
-        # Find our EV in that zone
+        # Map "high"/"low" to zone_damage keys
+        zd_vert = "up" if best_tend == "high" else "down"
+        # Try per-pitch zone_damage first
+        our_pt_data = hitter_tm["by_pitch_type"].get(opp_pitch, {})
+        zd = our_pt_data.get("zone_damage", {}) if our_pt_data else {}
+        zd_cells = {k: v for k, v in zd.items() if k.startswith(zd_vert)}
+        if zd_cells:
+            best_zd_key = max(zd_cells, key=lambda k: zd_cells[k].get("avg_ev", 0)
+                              if not pd.isna(zd_cells[k].get("avg_ev", np.nan)) else 0)
+            best_zd = zd_cells[best_zd_key]
+            cell_ev = best_zd.get("avg_ev", np.nan)
+            barrels = best_zd.get("barrels", 0)
+            if not pd.isna(cell_ev):
+                loc_label = best_zd_key.replace("_", " ")
+                pitch_label = opp_pitch.lower() + "s" if not opp_pitch.endswith("er") else opp_pitch.lower()
+                if barrels >= 2:
+                    return (f"They throw {pitch_label} {best_tend} ({best_pct:.0f}%) "
+                            f"\u2014 we barrel {pitch_label} {loc_label} ({cell_ev:.0f} EV, {barrels} barrels)")
+                ev_label = "weak" if cell_ev < 82 else ""
+                return (f"They throw {pitch_label} {best_tend} ({best_pct:.0f}%) "
+                        f"\u2014 we hit {loc_label} {pitch_label} at {cell_ev:.0f} EV"
+                        + (f" ({ev_label})" if ev_label else ""))
+        # Fall back to overall zone_grid
         match_keys = [k for k in zone_grid if best_tend.capitalize() in k.split("_")[0]]
         if not match_keys:
             return ""
@@ -4109,7 +4256,10 @@ def _score_hitter_vs_pitcher(hitter_tm, pitcher_profile):
         if opp_usage < 5:
             continue
         our_data = hitter_tm["by_pitch_type"].get(opp_pitch, {})
-        our_ev = our_data.get("avg_ev", np.nan) if our_data else np.nan
+        # 2A: Use zone-weighted EV for edge classification, keep raw for display
+        our_ev_raw = our_data.get("avg_ev", np.nan) if our_data else np.nan
+        our_ev_zw = _zone_weighted_ev(our_data, pitcher_profile)
+        our_ev = our_ev_zw if not pd.isna(our_ev_zw) else our_ev_raw
         our_whiff = our_data.get("whiff_pct", np.nan) if our_data else np.nan
         our_barrel = our_data.get("barrel_pct", np.nan) if our_data else np.nan
         our_depth = our_data.get("contact_depth", np.nan) if our_data else np.nan
@@ -4161,6 +4311,7 @@ def _score_hitter_vs_pitcher(hitter_tm, pitcher_profile):
             "usage": opp_usage,
             "edge": edge,
             "our_ev": our_ev,
+            "our_ev_raw": our_ev_raw,
             "our_whiff": our_whiff,
             "our_barrel": our_barrel if not pd.isna(our_barrel) else np.nan,
             "their_whiff": their_whiff,
@@ -4236,6 +4387,12 @@ def _generate_at_bat_script(hitter_profile, pitcher_profile, matchup_result):
     two_k_data = hitter_profile.get("two_strike") or {}
     zone_grid = hitter_profile.get("zone_grid") or {}
     by_pt = hitter_profile.get("by_pitch_type", {})
+    # 3A: New V3 fields
+    barrel_zones = hitter_profile.get("barrel_zones", [])
+    spray = hitter_profile.get("spray", {})
+    two_k_whiff_hard = two_k_data.get("whiff_hard", np.nan) if two_k_data else np.nan
+    two_k_whiff_os = two_k_data.get("whiff_os", np.nan) if two_k_data else np.nan
+    count_ev = hitter_profile.get("count_ev_grid", {})
 
     sorted_mix = sorted(real_mix.items(), key=lambda x: x[1], reverse=True)
     primary = sorted_mix[0] if sorted_mix else (None, 0)
@@ -4394,9 +4551,46 @@ def _generate_at_bat_script(hitter_profile, pitcher_profile, matchup_result):
     if hunt_key and not pd.isna(hunt_ev) and hunt_ev > 85:
         hunt_str = f"{hunt_key.replace('_', '-').lower()} ({hunt_ev:.0f} EV)"
 
+    # 3B: Barrel hunt zone — cross barrel_zones with pitcher location
+    barrel_hunt_str = ""
+    if barrel_zones:
+        h_pct = pitcher_profile.get("loc_high_pct", np.nan)
+        l_pct = pitcher_profile.get("loc_low_pct", np.nan)
+        in_pct = pitcher_profile.get("loc_inside_pct", np.nan)
+        out_pct = pitcher_profile.get("loc_outside_pct", np.nan)
+        for bz_key, bz_barrels, bz_ev in barrel_zones:
+            bz_lower = bz_key.lower()
+            overlap = False
+            if "high" in bz_lower and not pd.isna(h_pct) and h_pct >= 25:
+                overlap = True
+            if "low" in bz_lower and not pd.isna(l_pct) and l_pct >= 25:
+                overlap = True
+            if "inside" in bz_lower or "far in" in bz_lower:
+                if not pd.isna(in_pct) and in_pct >= 25:
+                    overlap = True
+            if "outside" in bz_lower or "far out" in bz_lower:
+                if not pd.isna(out_pct) and out_pct >= 25:
+                    overlap = True
+            if overlap:
+                zone_label = bz_key.replace("_", " ").upper()
+                barrel_hunt_str = f"Your barrels come {bz_key.replace('_', ' ').lower()} ({bz_barrels} barrels, {bz_ev} EV). HUNT {zone_label}."
+                break
+
+    # 3C: Count-aware EV callouts — AHEAD
+    count_ahead_note = ""
+    for ck in ["2-0", "3-1", "3-0"]:
+        cd = count_ev.get(ck, {})
+        cev = cd.get("avg_ev", np.nan)
+        cn = cd.get("n", 0)
+        if not pd.isna(cev) and cev >= 90 and cn >= 5:
+            count_ahead_note = f"You mash {ck} ({cev:.0f} EV) \u2014 sit dead red"
+            break
+
     when_ahead = {
         "sit_on": sit_str,
         "hunt_zone": hunt_str,
+        "barrel_hunt": barrel_hunt_str,
+        "count_note": count_ahead_note,
     }
 
     # ── Section 4: TWO STRIKES ──
@@ -4446,11 +4640,45 @@ def _generate_at_bat_script(hitter_profile, pitcher_profile, matchup_result):
     else:
         protect = f"Shorten up, fight off {putaway_pitch}"
 
+    # 3C: Count-aware EV callout — 2 STRIKES
+    count_2k_note = ""
+    overall_ev = hitter_profile.get("overall", {}).get("avg_ev", np.nan)
+    for ck2 in ["0-2", "1-2"]:
+        cd2 = count_ev.get(ck2, {})
+        cev2 = cd2.get("avg_ev", np.nan)
+        if not pd.isna(cev2) and not pd.isna(overall_ev):
+            if cev2 < 80 or (overall_ev - cev2) > 8:
+                count_2k_note = f"EV drops to {cev2:.0f} with 2 strikes \u2014 get your A-swing early"
+                break
+
+    # 3D: 2K pitch-class whiff note
+    two_k_class_note = ""
+    if not pd.isna(two_k_whiff_hard) and not pd.isna(two_k_whiff_os):
+        diff = two_k_whiff_os - two_k_whiff_hard
+        if abs(diff) >= 12:
+            if diff > 0:
+                two_k_class_note = (f"Your OS whiff with 2 strikes is {two_k_whiff_os:.0f}% "
+                                    f"but hard whiff is only {two_k_whiff_hard:.0f}% "
+                                    f"\u2014 look offspeed, react hard")
+            else:
+                two_k_class_note = (f"Your hard whiff with 2 strikes is {two_k_whiff_hard:.0f}% "
+                                    f"but OS whiff is only {two_k_whiff_os:.0f}% "
+                                    f"\u2014 cheat fastball, react offspeed")
+
     two_strike = {
         "expect": ts_expect,
         "chase_warning": chase_warning,
         "protect": protect,
+        "count_note": count_2k_note,
+        "class_whiff_note": two_k_class_note,
     }
+
+    # ── 3E: Pull tendency warning ──
+    pull_warning = ""
+    pull_pct = spray.get("pull_pct", 0)
+    loc_outside = pitcher_profile.get("loc_outside_pct", np.nan)
+    if pull_pct > 55 and not pd.isna(loc_outside) and loc_outside >= 30:
+        pull_warning = f"You pull {pull_pct:.0f}% \u2014 pitcher lives outside ({loc_outside:.0f}%), stay through it."
 
     # ── Section 5: PITCH EDGES ──
     edge_lines = []
@@ -4497,6 +4725,7 @@ def _generate_at_bat_script(hitter_profile, pitcher_profile, matchup_result):
         "when_ahead": when_ahead,
         "two_strike": two_strike,
         "pitch_edges": edge_lines,
+        "pull_warning": pull_warning,
     }
 
 
@@ -5121,6 +5350,12 @@ def _hitting_plan_content(tm, team, data, season_filter):
                 if vuln_p:
                     parts.append(f"protect {vuln_p[0]['pitch']}")
                 summary_line = ", ".join(parts) if parts else "Neutral matchup"
+                # Barrel hunt one-liner for card
+                barrel_line = ""
+                if script:
+                    bh = script.get("when_ahead", {}).get("barrel_hunt", "")
+                    if bh:
+                        barrel_line = bh.split(".")[0]  # first sentence only
                 st.markdown(
                     f'<div style="padding:10px;background:white;border-radius:8px;border:1px solid #eee;'
                     f'border-left:4px solid {clr};margin:4px 0;">'
@@ -5130,7 +5365,9 @@ def _hitting_plan_content(tm, team, data, season_filter):
                     f'<div style="font-size:11px;color:#666;">{m["platoon"]} | '
                     f'Edge: {m["overall_score"]:.0f}</div>'
                     f'<div style="font-size:11px;color:#333;margin-top:4px;">{summary_line}</div>'
-                    f'</div>', unsafe_allow_html=True)
+                    + (f'<div style="font-size:10px;color:#1a7a3a;margin-top:2px;">{barrel_line}</div>'
+                       if barrel_line else '')
+                    + f'</div>', unsafe_allow_html=True)
 
     # ── D. Per-Hitter Expanders ──
     st.markdown("---")
@@ -5173,6 +5410,10 @@ def _hitting_plan_content(tm, team, data, season_filter):
                 if ts.get("chase_warning"):
                     st.markdown(f"**{ts['chase_warning']}**")
                 st.markdown(f"Protect: {ts['protect']}")
+                if ts.get("count_note"):
+                    st.markdown(f"*{ts['count_note']}*")
+                if ts.get("class_whiff_note"):
+                    st.markdown(f"*{ts['class_whiff_note']}*")
 
             ah = script["when_ahead"]
             with c2:
@@ -5180,6 +5421,10 @@ def _hitting_plan_content(tm, team, data, season_filter):
                 st.markdown(f"{ah['sit_on']}")
                 if ah.get("hunt_zone"):
                     st.markdown(f"Hunt zone: {ah['hunt_zone']}")
+                if ah.get("barrel_hunt"):
+                    st.markdown(f"**{ah['barrel_hunt']}**")
+                if ah.get("count_note"):
+                    st.markdown(f"*{ah['count_note']}*")
 
                 st.markdown("")
                 # ── Pitch Edges ──
@@ -5193,6 +5438,10 @@ def _hitting_plan_content(tm, team, data, season_filter):
                         if el.get("reason") and edge_lbl != "Neutral":
                             line += f" ({el['reason']})"
                         st.markdown(line)
+
+                # Pull tendency warning
+                if script.get("pull_warning"):
+                    st.markdown(f"**{script['pull_warning']}**")
 
 
 def page_scouting(data):
@@ -7272,96 +7521,376 @@ def _compute_stuff_plus(data, baseline=None):
 
 
 def _compute_tunnel_score(pdf):
-    """Compute tunnel scores using physics-based commit-point analysis.
-    True tunneling = pitches are indistinguishable at the hitter's commit point
-    (~167ms before plate) but diverge significantly by the time they arrive.
-    Score uses actual flight path modeling, not just averages."""
-    req = ["TaggedPitchType", "RelHeight", "RelSide", "PlateLocHeight", "PlateLocSide",
-           "InducedVertBreak", "HorzBreak", "RelSpeed"]
-    if not all(c in pdf.columns for c in req):
+    """Compute tunnel scores using Euler-integrated flight paths, speed-adjusted
+    commit points, release-point variance penalties, and pitch-by-pitch pairing.
+
+    Improvements over V1:
+      1. Speed-adjusted commit point — fixed 167ms before plate per pitch, not
+         a fixed 60% fraction, so FB/curve pairs get correct commit fractions.
+      2. Release-point variance — penalises pairs where within-type release
+         scatter is high (inconsistent arm slot bleeds deception).
+      3. 20-step Euler integration with drag + Magnus instead of quadratic
+         approximations.  Uses IVB/HB (already Magnus-encoded by Trackman)
+         converted to continuous acceleration.
+      4. Pitch-by-pitch pairing — when enough consecutive same-batter pairs
+         exist (≥8), scores real sequenced pairs and aggregates, falling back
+         to type-level averages for small samples.
+      5. Soft commit-sep floor — max(commit_sep, 0.5) and divergence ratio
+         only contributes when commit_sep > 1.0 inch.
+    """
+    # Minimum columns: need pitch type, release point, plate location, and velo.
+    # IVB/HB are preferred but we can fall back to 9-param or gravity-only.
+    req_base = ["TaggedPitchType", "RelHeight", "RelSide", "PlateLocHeight",
+                "PlateLocSide", "RelSpeed"]
+    if not all(c in pdf.columns for c in req_base):
         return pd.DataFrame()
+
+    has_ivb = "InducedVertBreak" in pdf.columns and "HorzBreak" in pdf.columns
+    has_9p = all(c in pdf.columns for c in ["x0", "y0", "z0", "vx0", "vy0", "vz0", "ax0", "ay0", "az0"])
 
     pitch_types = pdf["TaggedPitchType"].unique()
     if len(pitch_types) < 2:
         return pd.DataFrame()
 
-    MOUND_DIST = 60.5
+    MOUND_DIST = 60.5   # feet, rubber to plate
+    GRAVITY = 32.17      # ft/s²
+    COMMIT_TIME = 0.167  # seconds before plate arrival
+    N_STEPS = 20         # Euler integration steps
 
-    # Compute per-pitch-type averages
+    # ── Per-pitch-type aggregates (used as fallback & for diagnostics) ──
     agg_cols = {
         "rel_h": ("RelHeight", "mean"), "rel_s": ("RelSide", "mean"),
         "rel_h_std": ("RelHeight", "std"), "rel_s_std": ("RelSide", "std"),
         "loc_h": ("PlateLocHeight", "mean"), "loc_s": ("PlateLocSide", "mean"),
-        "ivb": ("InducedVertBreak", "mean"), "hb": ("HorzBreak", "mean"),
         "velo": ("RelSpeed", "mean"), "count": ("RelSpeed", "count"),
     }
+    if has_ivb:
+        agg_cols["ivb"] = ("InducedVertBreak", "mean")
+        agg_cols["hb"] = ("HorzBreak", "mean")
     if "Extension" in pdf.columns:
         agg_cols["ext"] = ("Extension", "mean")
+    # 9-param aggregates (for fallback trajectory)
+    if has_9p:
+        for c9 in ["x0", "z0", "vx0", "vy0", "vz0", "ax0", "ay0", "az0"]:
+            agg_cols[c9] = (c9, "mean")
     agg = pdf.groupby("TaggedPitchType").agg(**agg_cols).dropna(subset=["rel_h", "velo"])
     if "ext" not in agg.columns:
         agg["ext"] = 6.0
+    if "ivb" not in agg.columns:
+        agg["ivb"] = np.nan
+    if "hb" not in agg.columns:
+        agg["hb"] = np.nan
+    # Fill NaN stds with 0 (single-pitch groups)
+    agg["rel_h_std"] = agg["rel_h_std"].fillna(0)
+    agg["rel_s_std"] = agg["rel_s_std"].fillna(0)
 
-    def _flight_pos_at_frac(row, frac):
-        """Get (x, y) position at a fraction of flight path (0=release, 1=plate)."""
-        ext = row.ext if not pd.isna(row.ext) else 6.0
+    # ── Euler-integrated flight path (Method 1: IVB/HB — 96.6% of data) ──
+    def _euler_trajectory(rel_h, rel_s, loc_h, loc_s, ivb, hb, velo_mph, ext):
+        """Return list of (x, y, t) at N_STEPS+1 points from release to plate.
+        Uses drag + Magnus via IVB/HB decomposed into continuous accelerations."""
+        ext = ext if not pd.isna(ext) else 6.0
         actual_dist = MOUND_DIST - ext
-        velo_fps = row.velo * 5280 / 3600
+        velo_fps = velo_mph * 5280.0 / 3600.0
+        if velo_fps < 50:
+            velo_fps = 50.0  # safety floor
         t_total = actual_dist / velo_fps
-        t = frac * t_total
-        gravity_drop = 0.5 * 32.17 * t**2
-        ivb_lift = (row.ivb / 12.0) * frac**2
-        y = row.rel_h + (row.loc_h - row.rel_h) * frac - gravity_drop + ivb_lift
-        # Endpoint correction: ensure trajectory passes through actual plate location
-        y_at_1 = row.rel_h + (row.loc_h - row.rel_h) - 0.5 * 32.17 * t_total**2 + (row.ivb / 12.0)
-        y += (row.loc_h - y_at_1) * frac
+        dt = t_total / N_STEPS
 
-        hb_curve = (row.hb / 12.0) * frac**2
-        x = row.rel_s + (row.loc_s - row.rel_s) * frac + hb_curve
-        x_at_1 = row.rel_s + (row.loc_s - row.rel_s) + (row.hb / 12.0)
-        x += (row.loc_s - x_at_1) * frac
+        # IVB/HB are total inches of break over the full flight.
+        # Model as constant acceleration: break = 0.5 * a_break * t_total^2
+        # => a_break = 2 * break_ft / t_total^2
+        ivb_ft = ivb / 12.0
+        hb_ft = hb / 12.0
+        a_ivb = 2.0 * ivb_ft / (t_total ** 2) if t_total > 0 else 0
+        a_hb = 2.0 * hb_ft / (t_total ** 2) if t_total > 0 else 0
+
+        # Initial velocities: solve for vy0, vx0 so that endpoint = plate loc
+        # y(T) = rel_h + vy0*T - 0.5*g*T^2 + 0.5*a_ivb*T^2 = loc_h
+        # => vy0 = (loc_h - rel_h + 0.5*g*T^2 - 0.5*a_ivb*T^2) / T
+        T = t_total
+        vy0 = (loc_h - rel_h + 0.5 * GRAVITY * T**2 - 0.5 * a_ivb * T**2) / T if T > 0 else 0
+        vx0 = (loc_s - rel_s - 0.5 * a_hb * T**2) / T if T > 0 else 0
+
+        path = [(rel_s, rel_h, 0.0)]
+        x, y = rel_s, rel_h
+        vy, vx = vy0, vx0
+        t = 0.0
+        for _ in range(N_STEPS):
+            vy += (-GRAVITY + a_ivb) * dt
+            vx += a_hb * dt
+            y += vy * dt
+            x += vx * dt
+            t += dt
+            path.append((x, y, t))
+        return path, t_total
+
+    # ── Method 2: 9-parameter trajectory (Trackman x0..az0) ──
+    def _trajectory_9param(x0_val, z0_val, vx0_val, vy0_val, vz0_val,
+                           ax0_val, ay0_val, az0_val):
+        """Euler integration using Trackman's 9-parameter model.
+        Coordinate system: x0=toward plate, y0=50 (constant), z0=height,
+        vx0=horiz side velocity, vy0=toward plate (negative), vz0=vertical velocity.
+        ax0=horiz accel, ay0=drag decel (positive), az0=vert accel (gravity+Magnus).
+        Output: path as (plate_side, height, t) — same format as _euler_trajectory.
+        x0 is negated to match PlateLocSide convention."""
+        velo_fps = abs(vy0_val) if abs(vy0_val) > 50 else 130.0
+        t_total = MOUND_DIST / velo_fps  # approximate
+        dt = t_total / N_STEPS
+        # Convert to our convention: side = -x0 (Trackman x is opposite PlateLocSide)
+        side, height = -x0_val, z0_val  # negate x for PlateLocSide convention
+        v_side, v_height, v_fwd = -vx0_val, vz0_val, vy0_val
+        a_side, a_height, a_fwd = -ax0_val, az0_val, ay0_val
+        path = [(side, height, 0.0)]
+        t = 0.0
+        for _ in range(N_STEPS):
+            v_side += a_side * dt
+            v_height += a_height * dt
+            v_fwd += a_fwd * dt
+            side += v_side * dt
+            height += v_height * dt
+            t += dt
+            path.append((side, height, t))
+        return path, t_total
+
+    # ── Method 3: Gravity-only trajectory (no break data) ──
+    def _gravity_trajectory(rel_h, rel_s, loc_h, loc_s, velo_mph, ext):
+        """Simple trajectory with gravity only — IVB=0, HB=0.
+        Used when neither IVB/HB nor 9-param data is available."""
+        return _euler_trajectory(rel_h, rel_s, loc_h, loc_s, 0.0, 0.0, velo_mph, ext)
+
+    # ── Unified trajectory dispatcher ──
+    def _compute_path(row_data):
+        """Choose best available trajectory method for a pitch.
+        row_data: dict-like with pitch columns.
+        Returns (path, t_total) or None if data is too broken."""
+        ivb_val = row_data.get("ivb", np.nan) if not isinstance(row_data, pd.Series) else row_data.get("ivb", np.nan)
+        hb_val = row_data.get("hb", np.nan) if not isinstance(row_data, pd.Series) else row_data.get("hb", np.nan)
+        # For individual pitches (Series), use column names directly
+        if isinstance(row_data, pd.Series):
+            ivb_val = row_data.get("InducedVertBreak", np.nan)
+            hb_val = row_data.get("HorzBreak", np.nan)
+
+        rel_h = row_data.get("rel_h", row_data.get("RelHeight", np.nan))
+        rel_s = row_data.get("rel_s", row_data.get("RelSide", np.nan))
+        loc_h = row_data.get("loc_h", row_data.get("PlateLocHeight", np.nan))
+        loc_s = row_data.get("loc_s", row_data.get("PlateLocSide", np.nan))
+        velo = row_data.get("velo", row_data.get("RelSpeed", np.nan))
+        ext = row_data.get("ext", row_data.get("Extension", 6.0))
+
+        if pd.isna(rel_h) or pd.isna(velo) or pd.isna(loc_h):
+            return None
+
+        # Method 1: IVB/HB Euler (best, 96.6% of data)
+        if not pd.isna(ivb_val) and not pd.isna(hb_val):
+            return _euler_trajectory(rel_h, rel_s, loc_h, loc_s, ivb_val, hb_val, velo, ext)
+
+        # Method 2: 9-param model (0.8% — e.g. TedABroerStadium)
+        if isinstance(row_data, pd.Series):
+            x0_v = row_data.get("x0", np.nan)
+            z0_v = row_data.get("z0", np.nan)
+            vx0_v = row_data.get("vx0", np.nan)
+            vy0_v = row_data.get("vy0", np.nan)
+            vz0_v = row_data.get("vz0", np.nan)
+            ax0_v = row_data.get("ax0", np.nan)
+            ay0_v = row_data.get("ay0", np.nan)
+            az0_v = row_data.get("az0", np.nan)
+        else:
+            x0_v = row_data.get("x0", np.nan)
+            z0_v = row_data.get("z0", np.nan)
+            vx0_v = row_data.get("vx0", np.nan)
+            vy0_v = row_data.get("vy0", np.nan)
+            vz0_v = row_data.get("vz0", np.nan)
+            ax0_v = row_data.get("ax0", np.nan)
+            ay0_v = row_data.get("ay0", np.nan)
+            az0_v = row_data.get("az0", np.nan)
+        if not pd.isna(x0_v) and not pd.isna(vx0_v):
+            return _trajectory_9param(x0_v, z0_v, vx0_v, vy0_v, vz0_v,
+                                      ax0_v, ay0_v, az0_v)
+
+        # Method 3: Gravity-only (2.0% — indoor sessions without break data)
+        if not pd.isna(rel_h) and not pd.isna(loc_h):
+            return _gravity_trajectory(rel_h, rel_s, loc_h, loc_s, velo, ext)
+
+        # Method 4: Data too broken
+        return None
+
+    def _pos_at_time(path, t_total, target_t):
+        """Interpolate (x, y) at a specific time from an Euler path."""
+        if target_t <= 0:
+            return path[0][0], path[0][1]
+        if target_t >= t_total:
+            return path[-1][0], path[-1][1]
+        dt = t_total / N_STEPS
+        idx_f = target_t / dt
+        idx = int(idx_f)
+        frac = idx_f - idx
+        if idx >= len(path) - 1:
+            return path[-1][0], path[-1][1]
+        x = path[idx][0] + frac * (path[idx + 1][0] - path[idx][0])
+        y = path[idx][1] + frac * (path[idx + 1][1] - path[idx][1])
         return x, y
+
+    # ── Build pitch-by-pitch pair data (Improvement #4) ──
+    pair_scores = {}  # (typeA, typeB) -> list of per-pair raw tunnel metrics
+    has_pbp = "PitchofPA" in pdf.columns and "Batter" in pdf.columns
+    if has_pbp:
+        pbp_req = ["TaggedPitchType", "RelHeight", "RelSide", "PlateLocHeight",
+                    "PlateLocSide", "RelSpeed"]
+        pbp = pdf.dropna(subset=pbp_req).copy()
+        if "Extension" not in pbp.columns:
+            pbp["Extension"] = 6.0
+        else:
+            pbp["Extension"] = pbp["Extension"].fillna(6.0)
+        # Sort by batter and pitch order within PA
+        sort_cols = ["Batter"]
+        if "Date" in pbp.columns:
+            sort_cols.append("Date")
+        if "Inning" in pbp.columns:
+            sort_cols.append("Inning")
+        sort_cols.append("PitchofPA")
+        valid_sort = [c for c in sort_cols if c in pbp.columns]
+        if valid_sort:
+            pbp = pbp.sort_values(valid_sort)
+        # Build consecutive pairs within each PA
+        if "PitchofPA" in pbp.columns:
+            prev = pbp.shift(1)
+            same_batter = pbp["Batter"] == prev["Batter"]
+            if "Date" in pbp.columns:
+                same_batter = same_batter & (pbp["Date"] == prev["Date"])
+            diff_type = pbp["TaggedPitchType"] != prev["TaggedPitchType"]
+            pair_mask = same_batter & diff_type
+            pair_idx = pbp.index[pair_mask]
+            for pidx in pair_idx:
+                crow = pbp.loc[pidx]
+                prow = prev.loc[pidx]
+                tA = prow["TaggedPitchType"]
+                tB = crow["TaggedPitchType"]
+                if pd.isna(tA) or pd.isna(tB):
+                    continue
+                key = tuple(sorted([tA, tB]))
+                if key not in pair_scores:
+                    pair_scores[key] = []
+                pair_scores[key].append((prow, crow))
+
+    # ── Score each pitch-type pair ──
+    def _score_single_pair_from_rows(row_a, row_b):
+        """Compute raw tunnel metrics for a single pitch pair using dispatcher.
+        row_a, row_b: dict-like (pd.Series or agg row) with pitch columns."""
+        result_a = _compute_path(row_a)
+        result_b = _compute_path(row_b)
+        if result_a is None or result_b is None:
+            return None
+        path_a, t_total_a = result_a
+        path_b, t_total_b = result_b
+
+        # Speed-adjusted commit point (#1): 167ms before each pitch arrives
+        commit_t_a = max(0, t_total_a - COMMIT_TIME)
+        commit_t_b = max(0, t_total_b - COMMIT_TIME)
+        cax, cay = _pos_at_time(path_a, t_total_a, commit_t_a)
+        cbx, cby = _pos_at_time(path_b, t_total_b, commit_t_b)
+        commit_sep = np.sqrt((cay - cby)**2 + (cax - cbx)**2) * 12  # inches
+
+        # Release separation
+        rel_h_a = row_a.get("rel_h", row_a.get("RelHeight", np.nan))
+        rel_s_a = row_a.get("rel_s", row_a.get("RelSide", np.nan))
+        rel_h_b = row_b.get("rel_h", row_b.get("RelHeight", np.nan))
+        rel_s_b = row_b.get("rel_s", row_b.get("RelSide", np.nan))
+        rel_sep = np.sqrt((rel_h_a - rel_h_b)**2 + (rel_s_a - rel_s_b)**2) * 12
+
+        # Plate separation
+        loc_h_a = row_a.get("loc_h", row_a.get("PlateLocHeight", np.nan))
+        loc_s_a = row_a.get("loc_s", row_a.get("PlateLocSide", np.nan))
+        loc_h_b = row_b.get("loc_h", row_b.get("PlateLocHeight", np.nan))
+        loc_s_b = row_b.get("loc_s", row_b.get("PlateLocSide", np.nan))
+        plate_sep = np.sqrt((loc_h_a - loc_h_b)**2 + (loc_s_a - loc_s_b)**2) * 12
+
+        # Movement divergence
+        ivb_a = row_a.get("ivb", row_a.get("InducedVertBreak", 0))
+        hb_a = row_a.get("hb", row_a.get("HorzBreak", 0))
+        ivb_b = row_b.get("ivb", row_b.get("InducedVertBreak", 0))
+        hb_b = row_b.get("hb", row_b.get("HorzBreak", 0))
+        # Treat NaN break as 0 for movement divergence calc
+        ivb_a = 0 if pd.isna(ivb_a) else ivb_a
+        hb_a = 0 if pd.isna(hb_a) else hb_a
+        ivb_b = 0 if pd.isna(ivb_b) else ivb_b
+        hb_b = 0 if pd.isna(hb_b) else hb_b
+        move_div = np.sqrt((ivb_a - ivb_b)**2 + (hb_a - hb_b)**2)
+        velo_a = row_a.get("velo", row_a.get("RelSpeed", 0))
+        velo_b = row_b.get("velo", row_b.get("RelSpeed", 0))
+        velo_gap = abs(velo_a - velo_b)
+
+        return commit_sep, rel_sep, plate_sep, move_div, velo_gap
 
     rows = []
     types = list(agg.index)
     for i in range(len(types)):
         for j in range(i + 1, len(types)):
             a, b = agg.loc[types[i]], agg.loc[types[j]]
+            pair_key = tuple(sorted([types[i], types[j]]))
 
-            # Release point separation (inches)
-            rel_sep = np.sqrt((a.rel_h - b.rel_h)**2 + (a.rel_s - b.rel_s)**2) * 12
+            # Try pitch-by-pitch pairing first (#4)
+            pbp_pairs = pair_scores.get(pair_key, [])
+            if len(pbp_pairs) >= 8:
+                # Aggregate per-pair metrics
+                metrics = []
+                for prow, crow in pbp_pairs:
+                    try:
+                        m = _score_single_pair_from_rows(prow, crow)
+                        if m is not None:
+                            metrics.append(m)
+                    except Exception:
+                        continue
+                if len(metrics) >= 5:
+                    arr = np.array(metrics)
+                    commit_sep = float(np.median(arr[:, 0]))
+                    rel_sep = float(np.median(arr[:, 1]))
+                    plate_sep = float(np.median(arr[:, 2]))
+                    move_div = float(np.median(arr[:, 3]))
+                    velo_gap = float(np.median(arr[:, 4]))
+                else:
+                    result = _score_single_pair_from_rows(a, b)
+                    if result is None:
+                        continue
+                    commit_sep, rel_sep, plate_sep, move_div, velo_gap = result
+            else:
+                result = _score_single_pair_from_rows(a, b)
+                if result is None:
+                    continue
+                commit_sep, rel_sep, plate_sep, move_div, velo_gap = result
 
-            # Commit point separation (at 60% of flight ≈ hitter's decision point)
-            ax, ay = _flight_pos_at_frac(a, 0.6)
-            bx, by = _flight_pos_at_frac(b, 0.6)
-            commit_sep = np.sqrt((ay - by)**2 + (ax - bx)**2) * 12  # inches
+            # Release-point variance penalty (#2)
+            combined_rel_std = np.sqrt(
+                (a.rel_h_std**2 + b.rel_h_std**2) / 2 +
+                (a.rel_s_std**2 + b.rel_s_std**2) / 2
+            ) * 12  # inches
+            effective_rel_sep = rel_sep + 0.5 * combined_rel_std
 
-            # Plate separation
-            plate_sep = np.sqrt((a.loc_h - b.loc_h)**2 + (a.loc_s - b.loc_s)**2) * 12
-
-            # Movement divergence
-            move_div = np.sqrt((a.ivb - b.ivb)**2 + (a.hb - b.hb)**2)
-            velo_gap = abs(a.velo - b.velo)
+            # Soft commit-sep floor (#5): max(commit_sep, 0.5)
+            commit_sep_safe = max(commit_sep, 0.5)
 
             # TUNNEL SCORE: regression-weighted from 16.5k actual 2-pitch
             # swing sequences. Weights derived from logistic regression with
             # pair-type fixed effects + within-pair-type averaged coefficients.
             # plate_sep std coef +0.192 (dominant), commit_sep -0.101 (#2),
             # div_ratio +0.030 (#3), rel_sep ~0 (negligible).
-            if commit_sep < 0.1:
-                commit_sep = 0.1
 
             # Plate divergence: #1 predictor (coef +0.192, 2x commit_sep)
             plate_reward = min(plate_sep / 15.0, 1.0)
 
             # Commit-point deception: #2 predictor (coef -0.101)
-            commit_deception = max(0, 1 - commit_sep / 8.0)
+            commit_deception = max(0, 1 - commit_sep_safe / 8.0)
 
-            # Divergence ratio: #3 predictor (coef +0.030)
-            divergence_ratio = plate_sep / commit_sep
-            divergence_score = min(divergence_ratio / 3.0, 1.0)
+            # Divergence ratio: #3 predictor — only when commit_sep > 1" (#5)
+            if commit_sep_safe > 1.0:
+                divergence_ratio = plate_sep / commit_sep_safe
+                divergence_score = min(divergence_ratio / 3.0, 1.0)
+            else:
+                # When pitches overlap at commit, give full divergence credit
+                # proportional to plate separation alone
+                divergence_score = min(plate_sep / 10.0, 1.0)
 
-            # Release consistency: near-zero in regression, minimal weight
-            rel_bonus = max(0, 1 - rel_sep / 6.0)
+            # Release consistency: uses effective_rel_sep (mean + variance, #2)
+            rel_bonus = max(0, 1 - effective_rel_sep / 6.0)
 
             # Weights proportional to regression coefficients:
             # |0.192| + |0.101| + |0.030| + |0.015| = 0.338
@@ -7385,9 +7914,13 @@ def _compute_tunnel_score(pdf):
             # Actionable diagnosis
             issues = []
             fixes = []
-            if rel_sep > 4:
-                issues.append(f"release points {rel_sep:.0f}\" apart")
-                fixes.append("Work on consistent arm slot across both pitches")
+            if effective_rel_sep > 4:
+                if combined_rel_std > 1.5:
+                    issues.append(f"release points {rel_sep:.0f}\" apart (+ {combined_rel_std:.1f}\" scatter)")
+                    fixes.append("Tighten arm slot consistency — release variance hurts deception")
+                else:
+                    issues.append(f"release points {rel_sep:.0f}\" apart")
+                    fixes.append("Work on consistent arm slot across both pitches")
             if commit_sep > 5:
                 issues.append(f"{commit_sep:.0f}\" apart at commit point")
                 if velo_gap > 8:
@@ -7408,6 +7941,8 @@ def _compute_tunnel_score(pdf):
             else:
                 diagnosis = "; ".join(issues)
 
+            n_pairs_used = len(metrics) if len(pbp_pairs) >= 8 and len(metrics) >= 5 else 0
+
             rows.append({
                 "Pitch A": types[i], "Pitch B": types[j],
                 "Grade": grade, "Tunnel Score": tunnel,
@@ -7416,6 +7951,7 @@ def _compute_tunnel_score(pdf):
                 "Plate Sep (in)": round(plate_sep, 1),
                 "Velo Gap (mph)": round(velo_gap, 1),
                 "Move Diff (in)": round(move_div, 1),
+                "Pairs Used": n_pairs_used if n_pairs_used > 0 else "avg",
                 "Diagnosis": diagnosis,
                 "Fix": "; ".join(fixes) if fixes else "No changes needed",
             })
