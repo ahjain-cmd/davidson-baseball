@@ -1,0 +1,679 @@
+"""Tunnel score computation — physics-based pitch pair analysis."""
+
+import os
+import json
+import math
+
+import streamlit as st
+import pandas as pd
+import numpy as np
+from scipy.stats import percentileofscore
+
+from config import (
+    PARQUET_PATH, CACHE_DIR, TUNNEL_BENCH_PATH, TUNNEL_WEIGHTS_PATH,
+    PLATE_SIDE_MAX, PLATE_HEIGHT_MIN, PLATE_HEIGHT_MAX,
+    MIN_PITCH_USAGE_PCT, filter_minor_pitches, SWING_CALLS,
+)
+from data.loader import _precompute_table_exists, _read_precompute_table
+
+
+def _parquet_fingerprint():
+    try:
+        return {"path": PARQUET_PATH, "mtime": os.path.getmtime(PARQUET_PATH), "size": os.path.getsize(PARQUET_PATH)}
+    except OSError:
+        return {"path": PARQUET_PATH, "mtime": None, "size": None}
+
+
+def _load_tunnel_benchmarks():
+    if not os.path.exists(TUNNEL_BENCH_PATH):
+        if _precompute_table_exists("tunnel_benchmarks"):
+            df = _read_precompute_table("tunnel_benchmarks")
+            if df.empty:
+                return None
+            benches = {}
+            for _, row in df.iterrows():
+                pair = row.get("pair_type")
+                if not pair:
+                    continue
+                benches[pair] = (
+                    float(row.get("p10", np.nan)),
+                    float(row.get("p25", np.nan)),
+                    float(row.get("p50", np.nan)),
+                    float(row.get("p75", np.nan)),
+                    float(row.get("p90", np.nan)),
+                    float(row.get("mean", np.nan)),
+                    float(row.get("std", np.nan)),
+                )
+            return benches or None
+        return None
+    try:
+        with open(TUNNEL_BENCH_PATH, "r", encoding="utf-8") as f:
+            blob = json.load(f)
+        if blob.get("fingerprint") != _parquet_fingerprint():
+            # Fallback to precomputed DB if available
+            if _precompute_table_exists("tunnel_benchmarks"):
+                df = _read_precompute_table("tunnel_benchmarks")
+                if df.empty:
+                    return None
+                benches = {}
+                for _, row in df.iterrows():
+                    pair = row.get("pair_type")
+                    if not pair:
+                        continue
+                    benches[pair] = (
+                        float(row.get("p10", np.nan)),
+                        float(row.get("p25", np.nan)),
+                        float(row.get("p50", np.nan)),
+                        float(row.get("p75", np.nan)),
+                        float(row.get("p90", np.nan)),
+                        float(row.get("mean", np.nan)),
+                        float(row.get("std", np.nan)),
+                    )
+                return benches or None
+            return None
+        return blob.get("benchmarks")
+    except Exception:
+        if _precompute_table_exists("tunnel_benchmarks"):
+            df = _read_precompute_table("tunnel_benchmarks")
+            if df.empty:
+                return None
+            benches = {}
+            for _, row in df.iterrows():
+                pair = row.get("pair_type")
+                if not pair:
+                    continue
+                benches[pair] = (
+                    float(row.get("p10", np.nan)),
+                    float(row.get("p25", np.nan)),
+                    float(row.get("p50", np.nan)),
+                    float(row.get("p75", np.nan)),
+                    float(row.get("p90", np.nan)),
+                    float(row.get("mean", np.nan)),
+                    float(row.get("std", np.nan)),
+                )
+            return benches or None
+        return None
+
+
+def _save_tunnel_benchmarks(benchmarks):
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    blob = {"fingerprint": _parquet_fingerprint(), "benchmarks": benchmarks}
+    with open(TUNNEL_BENCH_PATH, "w", encoding="utf-8") as f:
+        json.dump(blob, f)
+
+
+def _load_tunnel_weights():
+    if not os.path.exists(TUNNEL_WEIGHTS_PATH):
+        if _precompute_table_exists("tunnel_weights"):
+            df = _read_precompute_table("tunnel_weights")
+            if not df.empty and "weights_json" in df.columns:
+                try:
+                    return json.loads(df.iloc[0]["weights_json"])
+                except Exception:
+                    return None
+        return None
+    try:
+        with open(TUNNEL_WEIGHTS_PATH, "r", encoding="utf-8") as f:
+            blob = json.load(f)
+        if blob.get("fingerprint") != _parquet_fingerprint():
+            if _precompute_table_exists("tunnel_weights"):
+                df = _read_precompute_table("tunnel_weights")
+                if not df.empty and "weights_json" in df.columns:
+                    try:
+                        return json.loads(df.iloc[0]["weights_json"])
+                    except Exception:
+                        return None
+            return None
+        return blob.get("weights")
+    except Exception:
+        if _precompute_table_exists("tunnel_weights"):
+            df = _read_precompute_table("tunnel_weights")
+            if not df.empty and "weights_json" in df.columns:
+                try:
+                    return json.loads(df.iloc[0]["weights_json"])
+                except Exception:
+                    return None
+        return None
+
+
+def _save_tunnel_weights(weights):
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    blob = {"fingerprint": _parquet_fingerprint(), "weights": weights}
+    with open(TUNNEL_WEIGHTS_PATH, "w", encoding="utf-8") as f:
+        json.dump(blob, f)
+
+
+@st.cache_data(show_spinner="Building tunnel population database...")
+def _build_tunnel_population(_data):
+    """Compute raw tunnel composites for every pitcher in the database.
+
+    Returns dict: pair_type (e.g. 'Fastball/Slider') → sorted numpy array of
+    raw tunnel scores across all pitchers.  Used for percentile grading — a
+    pitcher's Fastball/Slider tunnel is ranked against *all* Fastball/Slider
+    tunnels in college baseball.
+    """
+    pop = {}  # pair_type → [raw_score, ...]
+    # Pre-filter: only pitchers with ≥50 pitches and ≥2 pitch types qualify
+    # for tunnel computation (reduces 12k → ~2-3k meaningful pitchers)
+    pitcher_counts = _data.groupby("Pitcher").agg(
+        n=("Pitcher", "size"),
+        n_types=("TaggedPitchType", "nunique"),
+    )
+    eligible = pitcher_counts[(pitcher_counts["n"] >= 50) & (pitcher_counts["n_types"] >= 2)].index
+    for pitcher in eligible:
+        pdf = _data[_data["Pitcher"] == pitcher]
+        tdf = _compute_tunnel_score(pdf)  # raw mode (no tunnel_pop)
+        if tdf.empty:
+            continue
+        for _, row in tdf.iterrows():
+            pair_key = '/'.join(sorted([row["Pitch A"], row["Pitch B"]]))
+            pop.setdefault(pair_key, []).append(row["Tunnel Score"])
+    # Convert to sorted arrays for fast percentile lookup
+    for k in pop:
+        pop[k] = np.array(sorted(pop[k]))
+    return pop
+
+
+def _compute_tunnel_score(pdf, tunnel_pop=None):
+    """Compute tunnel scores using Euler-integrated flight paths and
+    data-driven percentile grading.
+
+    V5 — Backtest-calibrated rebuild:
+      1. Commit point at 280ms before plate (research-backed decision window),
+         not 167ms.  Produces realistic commit separations (median ~3.3").
+      2. Percentile grading relative to SAME PAIR TYPE — a Sinker/Slider pair
+         is compared to other Sinker/Slider tunnels, not to Fastball/Changeup.
+      3. Regression-weighted composite score from 46,934 actual consecutive
+         pitch pairs.  Weights derived from logistic regression on whiff:
+           commit_sep  55%  (lower → more whiffs — induces bad swings)
+           plate_sep   19%  (higher → more whiffs given swing — late break)
+           rel_sep     10%  (lower → better — consistent arm slot)
+           rel_angle    8%  (lower → better — similar launch angles)
+           move_div     6%  (minor — captured by plate_sep)
+           velo_gap     2%  (negligible)
+      4. Release-point variance penalty, pitch-by-pitch pairing unchanged.
+    """
+    # Minimum columns: need pitch type, release point, plate location, and velo.
+    # IVB/HB are preferred but we can fall back to 9-param or gravity-only.
+    req_base = ["TaggedPitchType", "RelHeight", "RelSide", "PlateLocHeight",
+                "PlateLocSide", "RelSpeed"]
+    if not all(c in pdf.columns for c in req_base):
+        return pd.DataFrame()
+
+    # Filter to plausible plate locations and drop low-usage pitch types.
+    pdf = pdf[
+        pdf["PlateLocSide"].between(-PLATE_SIDE_MAX, PLATE_SIDE_MAX) &
+        pdf["PlateLocHeight"].between(PLATE_HEIGHT_MIN, PLATE_HEIGHT_MAX)
+    ].copy()
+    pdf = filter_minor_pitches(pdf, min_pct=MIN_PITCH_USAGE_PCT)
+    if pdf.empty:
+        return pd.DataFrame()
+
+    has_ivb = "InducedVertBreak" in pdf.columns and "HorzBreak" in pdf.columns
+    has_rel_angle = "VertRelAngle" in pdf.columns and "HorzRelAngle" in pdf.columns
+    has_9p = all(c in pdf.columns for c in ["x0", "y0", "z0", "vx0", "vy0", "vz0", "ax0", "ay0", "az0"])
+
+    pitch_types = pdf["TaggedPitchType"].unique()
+    if len(pitch_types) < 2:
+        return pd.DataFrame()
+
+    MOUND_DIST = 60.5   # feet, rubber to plate
+    GRAVITY = 32.17      # ft/s²
+    COMMIT_TIME = 0.280  # seconds before plate arrival (research-backed)
+    N_STEPS = 20         # Euler integration steps
+
+    # Pair-type benchmarks loaded from population cache (commit_sep percentiles).
+    # Format: (p10, p25, p50, p75, p90, mean, std)
+    PAIR_BENCHMARKS = _load_tunnel_benchmarks() or {}
+    DEFAULT_BENCHMARK = (1.2, 2.1, 3.3, 4.9, 6.8, 3.8, 2.7)
+
+    # ── Per-pitch-type aggregates (used as fallback & for diagnostics) ──
+    agg_cols = {
+        "rel_h": ("RelHeight", "mean"), "rel_s": ("RelSide", "mean"),
+        "rel_h_std": ("RelHeight", "std"), "rel_s_std": ("RelSide", "std"),
+        "loc_h": ("PlateLocHeight", "mean"), "loc_s": ("PlateLocSide", "mean"),
+        "velo": ("RelSpeed", "mean"), "count": ("RelSpeed", "count"),
+    }
+    if has_ivb:
+        agg_cols["ivb"] = ("InducedVertBreak", "mean")
+        agg_cols["hb"] = ("HorzBreak", "mean")
+    if "Extension" in pdf.columns:
+        agg_cols["ext"] = ("Extension", "mean")
+    # 9-param aggregates (for fallback trajectory)
+    if has_rel_angle:
+        agg_cols["vert_rel_angle"] = ("VertRelAngle", "mean")
+        agg_cols["horz_rel_angle"] = ("HorzRelAngle", "mean")
+    if has_9p:
+        for c9 in ["x0", "z0", "vx0", "vy0", "vz0", "ax0", "ay0", "az0"]:
+            agg_cols[c9] = (c9, "mean")
+    agg = pdf.groupby("TaggedPitchType").agg(**agg_cols).dropna(subset=["rel_h", "velo"])
+    agg = agg[agg["count"] >= 10]  # need meaningful sample per pitch type
+    if len(agg) < 2:
+        return pd.DataFrame()
+    if "ext" not in agg.columns:
+        agg["ext"] = 6.0
+    if "ivb" not in agg.columns:
+        agg["ivb"] = np.nan
+    if "hb" not in agg.columns:
+        agg["hb"] = np.nan
+    # Fill NaN stds with 0 (single-pitch groups)
+    agg["rel_h_std"] = agg["rel_h_std"].fillna(0)
+    agg["rel_s_std"] = agg["rel_s_std"].fillna(0)
+
+    # ── Kinematic positions at commit/plate (no Euler discretization) ──
+    def _commit_plate_9param(x0_val, y0_val, z0_val, vx0_val, vy0_val, vz0_val,
+                             ax0_val, ay0_val, az0_val):
+        """Compute commit/plate positions using Trackman 9-parameter model."""
+        # Solve y0 + vy0*t + 0.5*ay0*t^2 = 0 for t>0
+        a = 0.5 * ay0_val
+        b = vy0_val
+        c = y0_val
+        if a == 0 and b == 0:
+            return None
+        if a == 0:
+            t_candidates = [(-c / b)] if b != 0 else []
+        else:
+            disc = b * b - 4 * a * c
+            if disc < 0:
+                return None
+            sqrt_disc = np.sqrt(disc)
+            t_candidates = [(-b - sqrt_disc) / (2 * a), (-b + sqrt_disc) / (2 * a)]
+        t_candidates = [t for t in t_candidates if t > 0]
+        if not t_candidates:
+            return None
+        t_total = min(t_candidates)
+        commit_t = max(0, t_total - COMMIT_TIME)
+
+        def _pos_at(t):
+            x = x0_val + vx0_val * t + 0.5 * ax0_val * t * t
+            z = z0_val + vz0_val * t + 0.5 * az0_val * t * t
+            return -x, z
+
+        c_side, c_h = _pos_at(commit_t)
+        p_side, p_h = _pos_at(t_total)
+        return (c_side, c_h), (p_side, p_h), t_total
+
+    def _commit_plate_ivb(rel_h, rel_s, loc_h, loc_s, ivb, hb, velo_mph, ext):
+        """Compute commit/plate positions using IVB/HB constant-accel model."""
+        ext = ext if not pd.isna(ext) else 6.0
+        actual_dist = MOUND_DIST - ext
+        velo_fps = velo_mph * 5280.0 / 3600.0
+        if velo_fps < 50:
+            velo_fps = 50.0
+        t_total = actual_dist / velo_fps
+        T = t_total
+        ivb_ft = ivb / 12.0
+        hb_ft = hb / 12.0
+        a_ivb = 2.0 * ivb_ft / (t_total ** 2) if t_total > 0 else 0
+        a_hb = 2.0 * hb_ft / (t_total ** 2) if t_total > 0 else 0
+        vy0 = (loc_h - rel_h + 0.5 * GRAVITY * T**2 - 0.5 * a_ivb * T**2) / T if T > 0 else 0
+        vx0 = (loc_s - rel_s - 0.5 * a_hb * T**2) / T if T > 0 else 0
+
+        def _pos_at(t):
+            x = rel_s + vx0 * t + 0.5 * a_hb * t * t
+            y = rel_h + vy0 * t - 0.5 * GRAVITY * t * t + 0.5 * a_ivb * t * t
+            return x, y
+
+        commit_t = max(0, t_total - COMMIT_TIME)
+        c_side, c_h = _pos_at(commit_t)
+        p_side, p_h = _pos_at(t_total)
+        return (c_side, c_h), (p_side, p_h), t_total
+
+    # ── Method 3: Gravity-only trajectory (no break data) ──
+    def _commit_plate_gravity(rel_h, rel_s, loc_h, loc_s, velo_mph, ext):
+        """Gravity-only fallback (IVB=HB=0)."""
+        return _commit_plate_ivb(rel_h, rel_s, loc_h, loc_s, 0.0, 0.0, velo_mph, ext)
+
+    # ── Unified trajectory dispatcher ──
+    def _compute_commit_plate(row_data):
+        """Choose best available physics model and return commit/plate positions."""
+        ivb_val = row_data.get("ivb", np.nan) if not isinstance(row_data, pd.Series) else row_data.get("ivb", np.nan)
+        hb_val = row_data.get("hb", np.nan) if not isinstance(row_data, pd.Series) else row_data.get("hb", np.nan)
+        # For individual pitches (Series), use column names directly
+        if isinstance(row_data, pd.Series):
+            ivb_val = row_data.get("InducedVertBreak", np.nan)
+            hb_val = row_data.get("HorzBreak", np.nan)
+
+        rel_h = row_data.get("rel_h", row_data.get("RelHeight", np.nan))
+        rel_s = row_data.get("rel_s", row_data.get("RelSide", np.nan))
+        loc_h = row_data.get("loc_h", row_data.get("PlateLocHeight", np.nan))
+        loc_s = row_data.get("loc_s", row_data.get("PlateLocSide", np.nan))
+        velo = row_data.get("velo", row_data.get("RelSpeed", np.nan))
+        ext = row_data.get("ext", row_data.get("Extension", 6.0))
+
+        if pd.isna(rel_h) or pd.isna(velo) or pd.isna(loc_h):
+            return None
+
+        # Method 1: 9-param model (most physically accurate when available)
+        if isinstance(row_data, pd.Series):
+            x0_v = row_data.get("x0", np.nan)
+            y0_v = row_data.get("y0", np.nan)
+            z0_v = row_data.get("z0", np.nan)
+            vx0_v = row_data.get("vx0", np.nan)
+            vy0_v = row_data.get("vy0", np.nan)
+            vz0_v = row_data.get("vz0", np.nan)
+            ax0_v = row_data.get("ax0", np.nan)
+            ay0_v = row_data.get("ay0", np.nan)
+            az0_v = row_data.get("az0", np.nan)
+        else:
+            x0_v = row_data.get("x0", np.nan)
+            y0_v = row_data.get("y0", np.nan)
+            z0_v = row_data.get("z0", np.nan)
+            vx0_v = row_data.get("vx0", np.nan)
+            vy0_v = row_data.get("vy0", np.nan)
+            vz0_v = row_data.get("vz0", np.nan)
+            ax0_v = row_data.get("ax0", np.nan)
+            ay0_v = row_data.get("ay0", np.nan)
+            az0_v = row_data.get("az0", np.nan)
+        if not pd.isna(x0_v) and not pd.isna(y0_v) and not pd.isna(vx0_v) and not pd.isna(vy0_v):
+            result = _commit_plate_9param(x0_v, y0_v, z0_v, vx0_v, vy0_v, vz0_v,
+                                          ax0_v, ay0_v, az0_v)
+            if result is not None:
+                return result
+
+        # Method 2: IVB/HB model (fallback when 9-param missing)
+        if not pd.isna(ivb_val) and not pd.isna(hb_val):
+            return _commit_plate_ivb(rel_h, rel_s, loc_h, loc_s, ivb_val, hb_val, velo, ext)
+
+        # Method 3: Gravity-only
+        if not pd.isna(rel_h) and not pd.isna(loc_h):
+            return _commit_plate_gravity(rel_h, rel_s, loc_h, loc_s, velo, ext)
+
+        # Method 4: Data too broken
+        return None
+
+    # ── Build pitch-by-pitch pair data (Improvement #4) ──
+    pair_scores = {}  # (typeA, typeB) -> list of (row_a, row_b) pairs
+    has_pbp = "PitchofPA" in pdf.columns and "Batter" in pdf.columns
+    if has_pbp:
+        pbp_req = ["TaggedPitchType", "RelHeight", "RelSide", "PlateLocHeight",
+                    "PlateLocSide", "RelSpeed"]
+        pbp = pdf.dropna(subset=pbp_req).copy()
+        if "Extension" not in pbp.columns:
+            pbp["Extension"] = 6.0
+        else:
+            pbp["Extension"] = pbp["Extension"].fillna(6.0)
+        # Sort by batter and pitch order within PA
+        sort_cols = ["Batter"]
+        if "Date" in pbp.columns:
+            sort_cols.append("Date")
+        if "Inning" in pbp.columns:
+            sort_cols.append("Inning")
+        sort_cols.append("PitchofPA")
+        valid_sort = [c for c in sort_cols if c in pbp.columns]
+        if valid_sort:
+            pbp = pbp.sort_values(valid_sort)
+        # Build consecutive pairs within each PA
+        if "PitchofPA" in pbp.columns:
+            prev = pbp.shift(1)
+            same_batter = pbp["Batter"] == prev["Batter"]
+            if "Date" in pbp.columns:
+                same_batter = same_batter & (pbp["Date"] == prev["Date"])
+            diff_type = pbp["TaggedPitchType"] != prev["TaggedPitchType"]
+            pair_mask = same_batter & diff_type
+            pair_idx = pbp.index[pair_mask]
+            for pidx in pair_idx:
+                crow = pbp.loc[pidx]
+                prow = prev.loc[pidx]
+                tA = prow["TaggedPitchType"]
+                tB = crow["TaggedPitchType"]
+                if pd.isna(tA) or pd.isna(tB):
+                    continue
+                key = tuple(sorted([tA, tB]))
+                if key not in pair_scores:
+                    pair_scores[key] = []
+                pair_scores[key].append((prow, crow))
+
+    # ── Score each pitch-type pair ──
+    def _score_single_pair_from_rows(row_a, row_b):
+        """Compute raw tunnel metrics for a single pitch pair using dispatcher.
+        row_a, row_b: dict-like (pd.Series or agg row) with pitch columns."""
+        result_a = _compute_commit_plate(row_a)
+        result_b = _compute_commit_plate(row_b)
+        if result_a is None or result_b is None:
+            return None
+        (cax, cay), (pax, pay), _ = result_a
+        (cbx, cby), (pbx, pby), _ = result_b
+        commit_sep = np.sqrt((cay - cby)**2 + (cax - cbx)**2) * 12  # inches
+
+        # Release separation
+        rel_h_a = row_a.get("rel_h", row_a.get("RelHeight", np.nan))
+        rel_s_a = row_a.get("rel_s", row_a.get("RelSide", np.nan))
+        rel_h_b = row_b.get("rel_h", row_b.get("RelHeight", np.nan))
+        rel_s_b = row_b.get("rel_s", row_b.get("RelSide", np.nan))
+        rel_sep = np.sqrt((rel_h_a - rel_h_b)**2 + (rel_s_a - rel_s_b)**2) * 12
+
+        # Plate separation
+        plate_sep = np.sqrt((pay - pby)**2 + (pax - pbx)**2) * 12
+
+        # Movement divergence
+        ivb_a = row_a.get("ivb", row_a.get("InducedVertBreak", 0))
+        hb_a = row_a.get("hb", row_a.get("HorzBreak", 0))
+        ivb_b = row_b.get("ivb", row_b.get("InducedVertBreak", 0))
+        hb_b = row_b.get("hb", row_b.get("HorzBreak", 0))
+        # Treat NaN break as 0 for movement divergence calc
+        ivb_a = 0 if pd.isna(ivb_a) else ivb_a
+        hb_a = 0 if pd.isna(hb_a) else hb_a
+        ivb_b = 0 if pd.isna(ivb_b) else ivb_b
+        hb_b = 0 if pd.isna(hb_b) else hb_b
+        move_div = np.sqrt((ivb_a - ivb_b)**2 + (hb_a - hb_b)**2)
+        velo_a = row_a.get("velo", row_a.get("RelSpeed", 0))
+        velo_b = row_b.get("velo", row_b.get("RelSpeed", 0))
+        velo_gap = abs(velo_a - velo_b)
+
+        # Release angle separation (degrees)
+        vra_a = row_a.get("vert_rel_angle", row_a.get("VertRelAngle", np.nan))
+        hra_a = row_a.get("horz_rel_angle", row_a.get("HorzRelAngle", np.nan))
+        vra_b = row_b.get("vert_rel_angle", row_b.get("VertRelAngle", np.nan))
+        hra_b = row_b.get("horz_rel_angle", row_b.get("HorzRelAngle", np.nan))
+        if pd.notna(vra_a) and pd.notna(vra_b) and pd.notna(hra_a) and pd.notna(hra_b):
+            rel_angle_sep = np.sqrt((vra_a - vra_b)**2 + (hra_a - hra_b)**2)
+        else:
+            rel_angle_sep = np.nan
+
+        return commit_sep, rel_sep, plate_sep, move_div, velo_gap, rel_angle_sep
+
+    rows = []
+    types = list(agg.index)
+    for i in range(len(types)):
+        for j in range(i + 1, len(types)):
+            a, b = agg.loc[types[i]], agg.loc[types[j]]
+            pair_key = tuple(sorted([types[i], types[j]]))
+
+            # Try pitch-by-pitch pairing first (#4)
+            pbp_pairs = pair_scores.get(pair_key, [])
+            if len(pbp_pairs) >= 8:
+                # Aggregate per-pair metrics
+                metrics = []
+                whiff_flags = []
+                for prow, crow in pbp_pairs:
+                    try:
+                        m = _score_single_pair_from_rows(prow, crow)
+                        if m is not None:
+                            metrics.append(m)
+                            whiff_flags.append(crow.get("PitchCall") == "StrikeSwinging")
+                    except Exception:
+                        continue
+                if len(metrics) >= 5:
+                    arr = np.array(metrics)
+                    commit_sep = float(np.median(arr[:, 0]))
+                    rel_sep = float(np.median(arr[:, 1]))
+                    plate_sep = float(np.median(arr[:, 2]))
+                    move_div = float(np.median(arr[:, 3]))
+                    velo_gap = float(np.median(arr[:, 4]))
+                    rel_angle_sep = float(np.nanmedian(arr[:, 5]))
+                    pair_whiff = float(np.mean(whiff_flags)) * 100 if whiff_flags else np.nan
+                else:
+                    result = _score_single_pair_from_rows(a, b)
+                    if result is None:
+                        continue
+                    commit_sep, rel_sep, plate_sep, move_div, velo_gap, rel_angle_sep = result
+                    pair_whiff = np.nan
+            else:
+                result = _score_single_pair_from_rows(a, b)
+                if result is None:
+                    continue
+                commit_sep, rel_sep, plate_sep, move_div, velo_gap, rel_angle_sep = result
+                pair_whiff = np.nan
+
+            # Release-point variance penalty (#2)
+            combined_rel_std = np.sqrt(
+                (a.rel_h_std**2 + b.rel_h_std**2) / 2 +
+                (a.rel_s_std**2 + b.rel_s_std**2) / 2
+            ) * 12  # inches
+            effective_rel_sep = rel_sep + 0.5 * combined_rel_std
+
+    # DATA-FIT TUNNEL SCORE (v6)
+    # Percentile grading vs same pair type, regression-weighted composite.
+    # Weights are fit on actual consecutive pairs in the parquet and cached.
+
+            # Look up pair-type benchmark for percentile context
+            type_a_norm = types[i]; type_b_norm = types[j]
+            pair_label = '/'.join(sorted([type_a_norm, type_b_norm]))
+            bm = PAIR_BENCHMARKS.get(pair_label, DEFAULT_BENCHMARK)
+            bm_p10, bm_p25, bm_p50, bm_p75, bm_p90, bm_mean, bm_std = bm
+
+            # 1. COMMIT PERCENTILE (55% weight)
+            # Lower commit_sep → higher percentile (better tunnel)
+            # Empirical percentile mapping using actual p10/p25/p50/p75/p90
+            # benchmarks — avoids Gaussian compression from large stds.
+            _anchors = [
+                (bm_p90, 10), (bm_p75, 25), (bm_p50, 50),
+                (bm_p25, 75), (bm_p10, 90),
+            ]  # lower commit_sep → higher percentile (reversed)
+            if commit_sep >= bm_p90:
+                commit_pct = max(0, 10 * (1 - (commit_sep - bm_p90) / max(bm_p90, 1)))
+            elif commit_sep <= bm_p10:
+                commit_pct = min(100, 90 + 10 * (bm_p10 - commit_sep) / max(bm_p10, 1))
+            else:
+                # Linear interpolation between anchors
+                commit_pct = 50.0
+                for k in range(len(_anchors) - 1):
+                    sep_hi, pct_lo = _anchors[k]      # worse end
+                    sep_lo, pct_hi = _anchors[k + 1]   # better end
+                    if sep_lo <= commit_sep <= sep_hi:
+                        frac = (sep_hi - commit_sep) / (sep_hi - sep_lo) if sep_hi != sep_lo else 0.5
+                        commit_pct = pct_lo + frac * (pct_hi - pct_lo)
+                        break
+
+            # 2. PLATE SEPARATION (19% weight)
+            # Higher plate_sep → better (more divergence at plate)
+            # Normalise: 0" → 0, 30" → 100
+            plate_pct = min(100, plate_sep / 30.0 * 100)
+
+            # 3. RELEASE CONSISTENCY (10% weight)
+            # Lower effective_rel_sep → better
+            rel_pct = max(0, 100 - effective_rel_sep * 12)
+
+            # 4. RELEASE ANGLE SEPARATION (8% weight)
+            # Lower rel_angle_sep → better (similar launch angles = harder to read)
+            # Normalise: 0° → 100, 5° → 0. Fallback to 50 (neutral) if data missing.
+            if pd.notna(rel_angle_sep):
+                rel_angle_pct = max(0, min(100, (1 - rel_angle_sep / 5.0) * 100))
+            else:
+                rel_angle_pct = 50
+
+            # 5. MOVEMENT DIVERGENCE (6% weight)
+            # Higher move_div → better
+            move_pct = min(100, move_div / 30.0 * 100)
+
+            # 6. VELO GAP (2% weight) — slight bonus for speed differential
+            velo_pct = min(100, velo_gap / 15.0 * 100)
+
+            # Weighted composite (regression-derived weights)
+            w_blob = _load_tunnel_weights() or {}
+            w_global = w_blob.get("global") or {
+                "commit": 0.55,
+                "plate": 0.19,
+                "rel": 0.10,
+                "rel_angle": 0.08,
+                "move": 0.06,
+                "velo": 0.02,
+            }
+            w_pair = w_blob.get("pairs", {}).get(pair_label)
+            weights = w_pair or w_global
+            raw_tunnel = round(
+                commit_pct * weights["commit"] +
+                plate_pct * weights["plate"] +
+                rel_pct * weights["rel"] +
+                rel_angle_pct * weights["rel_angle"] +
+                move_pct * weights["move"] +
+                velo_pct * weights["velo"], 2)
+
+            # Percentile grading vs all pitchers in the database
+            if tunnel_pop is not None and pair_label in tunnel_pop:
+                tunnel = round(percentileofscore(tunnel_pop[pair_label], raw_tunnel, kind='rank'), 1)
+            else:
+                # No population data — return raw composite (used during population building)
+                tunnel = round(raw_tunnel, 1)
+
+            # Letter grades based on percentile rank among all college tunnels
+            if tunnel >= 80:
+                grade = "A"
+            elif tunnel >= 60:
+                grade = "B"
+            elif tunnel >= 40:
+                grade = "C"
+            elif tunnel >= 20:
+                grade = "D"
+            else:
+                grade = "F"
+
+            # Contextual diagnosis using pair-type benchmarks
+            issues = []
+            fixes = []
+            vs_median = commit_sep - bm_p50
+
+            if effective_rel_sep > 4:
+                if combined_rel_std > 1.5:
+                    issues.append(f"release points {rel_sep:.0f}\" apart (+ {combined_rel_std:.1f}\" scatter)")
+                    fixes.append("Tighten arm slot consistency — release variance hurts deception")
+                else:
+                    issues.append(f"release points {rel_sep:.0f}\" apart")
+                    fixes.append("Work on consistent arm slot across both pitches")
+            if commit_sep > bm_p75:
+                issues.append(f"{commit_sep:.0f}\" commit sep ({vs_median:+.1f}\" vs {pair_label} median)")
+                if velo_gap > 8:
+                    fixes.append(f"Reduce {velo_gap:.0f} mph velo gap — pitches separate too early")
+                else:
+                    fixes.append("Pitch trajectories diverge too early — hitter can read them")
+            elif commit_sep > bm_p50:
+                issues.append(f"commit sep slightly above average for {pair_label} ({vs_median:+.1f}\")")
+            if plate_sep < 6:
+                issues.append(f"only {plate_sep:.0f}\" apart at plate")
+                fixes.append("Pitches end up too close together — need more movement contrast")
+            if move_div < 5:
+                issues.append(f"only {move_div:.0f}\" movement difference")
+                fixes.append("Increase break differential — pitches move too similarly")
+            if pd.notna(rel_angle_sep) and rel_angle_sep > 3:
+                issues.append(f"{rel_angle_sep:.1f}° release angle divergence")
+                fixes.append("Release angles differ too much — hitter can distinguish pitch type at release")
+            if not issues:
+                if tunnel >= 75:
+                    diagnosis = f"Elite tunnel — {tunnel:.0f}th percentile for {pair_label}"
+                elif tunnel >= 50:
+                    diagnosis = f"Above-average tunnel — {tunnel:.0f}th percentile for {pair_label}"
+                elif tunnel >= 25:
+                    diagnosis = f"Below-average tunnel — {tunnel:.0f}th percentile for {pair_label}"
+                else:
+                    diagnosis = f"Poor tunnel — bottom {tunnel:.0f}% for {pair_label}"
+            else:
+                diagnosis = "; ".join(issues)
+
+            n_pairs_used = len(metrics) if len(pbp_pairs) >= 8 and len(metrics) >= 5 else 0
+
+            rows.append({
+                "Pitch A": types[i], "Pitch B": types[j],
+                "Grade": grade, "Tunnel Score": tunnel,
+                "Release Sep (in)": round(rel_sep, 1),
+                "Commit Sep (in)": round(commit_sep, 1),
+                "Plate Sep (in)": round(plate_sep, 1),
+                "Velo Gap (mph)": round(velo_gap, 1),
+                "Move Diff (in)": round(move_div, 1),
+                "Rel Angle Sep (°)": round(rel_angle_sep, 1) if pd.notna(rel_angle_sep) else None,
+                "Pairs Used": n_pairs_used if n_pairs_used > 0 else "avg",
+                "Pair Whiff%": round(pair_whiff, 1) if not pd.isna(pair_whiff) else None,
+                "Diagnosis": diagnosis,
+                "Fix": "; ".join(fixes) if fixes else "No changes needed",
+            })
+    return pd.DataFrame(rows).sort_values("Tunnel Score", ascending=False).reset_index(drop=True)

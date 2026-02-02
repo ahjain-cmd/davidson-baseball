@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+.git/
+.cache/
+.DS_Store
+*.parquet
+*.duckdb
+app_monolith.py
+all_trackman_old.parquet
+true media*
+truemedia*
+*.zip
+*.xlsx
+*.csv
+v3/
+Archive*/
+30/
+.ipynb_checkpoints/

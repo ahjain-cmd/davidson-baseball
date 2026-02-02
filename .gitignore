@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.DS_Store
+.cache/
+*.parquet
+*.duckdb
+app_monolith.py
+v3/
+Archive*/
+30/
+.ipynb_checkpoints/
