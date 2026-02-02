@@ -3535,21 +3535,31 @@ def page_hitting(data):
         return
 
     all_batter_stats = compute_batter_stats_pop(season_filter=season_filter)
-    if all_batter_stats.empty or batter not in all_batter_stats["Batter"].values:
-        st.info("Not enough data for this player.")
-        return
-    pr = all_batter_stats[all_batter_stats["Batter"] == batter].iloc[0]
+    pr = None
+    if all_batter_stats.empty:
+        st.info("Population stats unavailable — showing team data only.")
+        all_batter_stats = pd.DataFrame()
+    else:
+        if batter in all_batter_stats["Batter"].values:
+            pr = all_batter_stats[all_batter_stats["Batter"] == batter].iloc[0]
 
     batted = bdf[bdf["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
+
+    if pr is None:
+        pr_local = compute_batter_stats(bdf, season_filter=None)
+        if not pr_local.empty:
+            pr = pr_local.iloc[0]
 
     # Player header
     jersey = JERSEY.get(batter, "")
     pos = POSITION.get(batter, "")
     side = safe_mode(bdf["BatterSide"], "")
     bats = {"Right": "R", "Left": "L", "Switch": "S"}.get(side, side)
+    pa_val = int(pr["PA"]) if pr is not None and "PA" in pr else 0
+    bbe_val = int(pr["BBE"]) if pr is not None and "BBE" in pr else 0
     player_header(batter, jersey, pos,
                   f"{pos}  |  Bats: {bats}  |  Davidson Wildcats",
-                  f"{int(pr['PA'])} PA  |  {int(pr['BBE'])} Batted Balls  |  "
+                  f"{pa_val} PA  |  {bbe_val} Batted Balls  |  "
                   f"Seasons: {', '.join(str(int(s)) for s in sorted(season_filter))}")
 
     tab_card, tab_sdl = st.tabs(["Hitter Card", "Swing Decision Lab"])
