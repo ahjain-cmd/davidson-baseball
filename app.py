@@ -5,10 +5,12 @@ import plotly.graph_objects as go
 import plotly.io as pio
 import html as html_mod
 import os
+import json
 import math
 import numpy as np
 import duckdb
 from scipy.stats import percentileofscore
+import statsmodels.api as sm
 
 # ──────────────────────────────────────────────
 # CONFIG
@@ -18,6 +20,9 @@ DATA_ROOT = os.environ.get("TRACKMAN_CSV_ROOT", os.path.join(_APP_DIR, "v3"))
 PARQUET_FIXED_PATH = os.path.join(_APP_DIR, "all_trackman_fixed.parquet")
 PARQUET_PATH = PARQUET_FIXED_PATH if os.path.exists(PARQUET_FIXED_PATH) else os.path.join(_APP_DIR, "all_trackman.parquet")
 DAVIDSON_TEAM_ID = "DAV_WIL"
+CACHE_DIR = os.path.join(_APP_DIR, ".cache")
+TUNNEL_BENCH_PATH = os.path.join(CACHE_DIR, "tunnel_benchmarks.json")
+TUNNEL_WEIGHTS_PATH = os.path.join(CACHE_DIR, "tunnel_weights.json")
 
 ROSTER_2026 = {
     "Higgins, Justin", "Diaz, Fredy", "Vokal, Jacob", "Vannoy, Matthew",
@@ -109,6 +114,38 @@ ZONE_SIDE = 0.83          # feet from center (plate half-width 0.708 ft + ball r
 ZONE_HEIGHT_BOT = 1.5     # default bottom (ft)
 ZONE_HEIGHT_TOP = 3.5     # default top (ft)
 MIN_CALLED_STRIKES_FOR_ADAPTIVE_ZONE = 20
+PLATE_SIDE_MAX = 2.5      # plausible plate-side bound (ft)
+PLATE_HEIGHT_MIN = 0.0    # plausible plate height min (ft)
+PLATE_HEIGHT_MAX = 5.5    # plausible plate height max (ft)
+MIN_PITCH_USAGE_PCT = 5.0
+
+
+def _name_case_sql(col):
+    """SQL CASE expression that normalizes player names to match NAME_MAP."""
+    norm = _norm_name_sql(col)
+    def _esc(s):
+        return s.replace("'", "''")
+    parts = " ".join(f"WHEN {norm} = '{_esc(old)}' THEN '{_esc(new)}'" for old, new in NAME_MAP.items())
+    return f"CASE {parts} ELSE {norm} END"
+
+
+def _norm_name_sql(col):
+    """Normalize whitespace and comma spacing in SQL."""
+    return (
+        f"regexp_replace("
+        f"regexp_replace("
+        f"regexp_replace(trim({col}), '\\\\s+', ' '),"
+        f"'\\\\s+,', ','),"
+        f"',\\\\s*', ', ')"
+    )
+
+
+def _normalize_hand(series):
+    """Normalize handedness to Left/Right; others become NA."""
+    s = series.astype(str).str.strip()
+    s = s.replace({"L": "Left", "R": "Right", "B": "Both"})
+    s = s.where(s.isin(["Left", "Right"]))
+    return s
 
 
 def safe_mode(series, default=""):
@@ -151,6 +188,11 @@ def _build_batter_zones(data):
     """
     zones = {}
     called = data[data["PitchCall"] == "StrikeCalled"].dropna(subset=["PlateLocHeight"])
+    # Guard against extreme/outlier plate locations skewing adaptive zones.
+    called = called[
+        called["PlateLocHeight"].between(PLATE_HEIGHT_MIN, PLATE_HEIGHT_MAX) &
+        called["PlateLocSide"].between(-PLATE_SIDE_MAX, PLATE_SIDE_MAX)
+    ]
     if called.empty:
         return zones
     for batter, grp in called.groupby("Batter"):
@@ -168,6 +210,11 @@ def in_zone_mask(df, batter_zones=None, batter_col="Batter"):
     Uses adaptive per-batter zone height when available, otherwise fixed defaults.
     Width always uses the fixed ±ZONE_SIDE (plate width doesn't change by batter).
     """
+    # Exclude implausible locations before classifying zone.
+    valid_loc = (
+        df["PlateLocSide"].between(-PLATE_SIDE_MAX, PLATE_SIDE_MAX) &
+        df["PlateLocHeight"].between(PLATE_HEIGHT_MIN, PLATE_HEIGHT_MAX)
+    )
     side_ok = df["PlateLocSide"].abs() <= ZONE_SIDE
     if batter_zones and batter_col in df.columns:
         bot = df[batter_col].map(lambda b: batter_zones.get(b, (ZONE_HEIGHT_BOT, ZONE_HEIGHT_TOP))[0])
@@ -175,7 +222,7 @@ def in_zone_mask(df, batter_zones=None, batter_col="Batter"):
         height_ok = (df["PlateLocHeight"] >= bot) & (df["PlateLocHeight"] <= top)
     else:
         height_ok = df["PlateLocHeight"].between(ZONE_HEIGHT_BOT, ZONE_HEIGHT_TOP)
-    return (side_ok & height_ok).fillna(False)
+    return (valid_loc & side_ok & height_ok).fillna(False)
 
 
 def normalize_pitch_types(df):
@@ -193,7 +240,10 @@ def filter_minor_pitches(df, min_pct=3.0):
     """Remove pitch types that make up less than min_pct% of a pitcher's arsenal."""
     if df.empty or "TaggedPitchType" not in df.columns:
         return df
+    df = df[df["TaggedPitchType"].notna()]
     total = len(df)
+    if total == 0:
+        return df
     counts = df["TaggedPitchType"].value_counts()
     keep = counts[counts / total * 100 >= min_pct].index
     return df[df["TaggedPitchType"].isin(keep)]
@@ -346,20 +396,41 @@ def get_duckdb_con():
         raise FileNotFoundError(f"Parquet file not found: {PARQUET_PATH}")
     con = duckdb.connect(database=':memory:')
     # Normalize TaggedPitchType at the DB layer so all SQL queries are consistent.
+    _pname = _name_case_sql("Pitcher")
+    _bname = _name_case_sql("Batter")
     con.execute(
         f"""
         CREATE VIEW trackman AS
         SELECT
-            * EXCLUDE (TaggedPitchType),
+            * EXCLUDE (Pitcher, Batter, TaggedPitchType, BatterSide, PitcherThrows),
+            {_pname} AS Pitcher,
+            {_bname} AS Batter,
             CASE
                 WHEN TaggedPitchType IN ('Undefined','Other','Knuckleball') THEN NULL
-                WHEN TaggedPitchType IN ('FourSeamFastBall','OneSeamFastBall') THEN 'Fastball'
-                WHEN TaggedPitchType = 'TwoSeamFastBall' THEN 'Sinker'
+                WHEN TaggedPitchType = 'FourSeamFastBall' THEN 'Fastball'
+                WHEN TaggedPitchType IN ('OneSeamFastBall','TwoSeamFastBall') THEN 'Sinker'
                 WHEN TaggedPitchType = 'ChangeUp' THEN 'Changeup'
                 ELSE TaggedPitchType
-            END AS TaggedPitchType
+            END AS TaggedPitchType,
+            CASE
+                WHEN BatterSide IN ('Left','Right') THEN BatterSide
+                WHEN BatterSide = 'L' THEN 'Left'
+                WHEN BatterSide = 'R' THEN 'Right'
+                ELSE NULL
+            END AS BatterSide,
+            CASE
+                WHEN PitcherThrows IN ('Left','Right') THEN PitcherThrows
+                WHEN PitcherThrows = 'L' THEN 'Left'
+                WHEN PitcherThrows = 'R' THEN 'Right'
+                ELSE NULL
+            END AS PitcherThrows
         FROM read_parquet('{PARQUET_PATH}')
         WHERE PitchCall IS NULL OR PitchCall != 'Undefined'
+        QUALIFY
+            ROW_NUMBER() OVER (
+                PARTITION BY GameID, Inning, PAofInning, PitchofPA, Pitcher, Batter, PitchNo
+                ORDER BY PitchNo
+            ) = 1
         """
     )
     return con
@@ -381,12 +452,22 @@ def load_davidson_data():
           AND (PitchCall IS NULL OR PitchCall != 'Undefined')
     """
     data = duckdb.query(sql).fetchdf()
+    data = data.drop_duplicates(
+        subset=["GameID", "Inning", "PAofInning", "PitchofPA", "Pitcher", "Batter", "PitchNo"]
+    )
     data["Date"] = pd.to_datetime(data["Date"], errors="coerce")
     if "Season" in data.columns:
         data["Season"] = pd.to_numeric(data["Season"], errors="coerce").astype("Int64")
     for col in ["Pitcher", "Batter"]:
         if col in data.columns:
-            data[col] = data[col].astype(str).str.strip().replace(NAME_MAP)
+            s = data[col].astype(str).str.strip()
+            s = s.str.replace(r"\s+", " ", regex=True)
+            s = s.str.replace(r"\s+,", ",", regex=True)
+            s = s.str.replace(r",\s*", ", ", regex=True)
+            data[col] = s.replace(NAME_MAP)
+    for col in ["BatterSide", "PitcherThrows"]:
+        if col in data.columns:
+            data[col] = _normalize_hand(data[col])
     data = normalize_pitch_types(data)
     return data
 
@@ -771,10 +852,7 @@ _OZ_COND = f"NOT ({_IZ_COND}) AND {_HAS_LOC}"
 # Build SQL CASE expression for name normalization (matches NAME_MAP applied in load_davidson_data)
 def _name_sql(col):
     """Return SQL CASE expression that normalizes player names to match NAME_MAP."""
-    def _esc(s):
-        return s.replace("'", "''")
-    parts = " ".join(f"WHEN TRIM({col}) = '{_esc(old)}' THEN '{_esc(new)}'" for old, new in NAME_MAP.items())
-    return f"CASE {parts} ELSE TRIM({col}) END"
+    return _name_case_sql(col)
 
 
 @st.cache_data(show_spinner="Computing batter rankings...")
@@ -856,7 +934,7 @@ def compute_batter_stats_pop(season_filter=None, _version=5):
             SUM(CASE WHEN PitchCall='InPlay' AND ExitSpeed IS NOT NULL AND TaggedHitType='Popup' THEN 1 ELSE 0 END) AS pu
         FROM raw
         GROUP BY Batter, BatterTeam
-        HAVING PA > 50
+        HAVING PA >= 50
     )
     SELECT * FROM pitch_agg
     """
@@ -1092,232 +1170,336 @@ def compute_stuff_baselines():
             "velo_diff_stats": velo_diff_stats}
 
 
+def _parquet_fingerprint():
+    try:
+        return {"path": PARQUET_PATH, "mtime": os.path.getmtime(PARQUET_PATH), "size": os.path.getsize(PARQUET_PATH)}
+    except OSError:
+        return {"path": PARQUET_PATH, "mtime": None, "size": None}
+
+
+def _load_tunnel_benchmarks():
+    if not os.path.exists(TUNNEL_BENCH_PATH):
+        return None
+    try:
+        with open(TUNNEL_BENCH_PATH, "r", encoding="utf-8") as f:
+            blob = json.load(f)
+        if blob.get("fingerprint") != _parquet_fingerprint():
+            return None
+        return blob.get("benchmarks")
+    except Exception:
+        return None
+
+
+def _save_tunnel_benchmarks(benchmarks):
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    blob = {"fingerprint": _parquet_fingerprint(), "benchmarks": benchmarks}
+    with open(TUNNEL_BENCH_PATH, "w", encoding="utf-8") as f:
+        json.dump(blob, f)
+
+
+def _load_tunnel_weights():
+    if not os.path.exists(TUNNEL_WEIGHTS_PATH):
+        return None
+    try:
+        with open(TUNNEL_WEIGHTS_PATH, "r", encoding="utf-8") as f:
+            blob = json.load(f)
+        if blob.get("fingerprint") != _parquet_fingerprint():
+            return None
+        return blob.get("weights")
+    except Exception:
+        return None
+
+
+def _save_tunnel_weights(weights):
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    blob = {"fingerprint": _parquet_fingerprint(), "weights": weights}
+    with open(TUNNEL_WEIGHTS_PATH, "w", encoding="utf-8") as f:
+        json.dump(blob, f)
+
+
 @st.cache_data(show_spinner="Building tunnel population database...")
 def build_tunnel_population_pop():
-    """Build tunnel population from DuckDB: per-pitcher per-pitch-type aggregates,
-    then Python Euler physics for tunnel scores."""
-    sql = """
-    WITH pitcher_elig AS (
-        SELECT Pitcher
+    """Build tunnel population from pitch-level kinematics for accurate physics.
+    Returns dict: pair_type -> sorted array of raw tunnel scores."""
+    cols = [
+        "Pitcher", "Batter", "GameID", "Inning", "PAofInning", "PitchofPA",
+        "TaggedPitchType", "PitchCall",
+        "RelHeight", "RelSide", "PlateLocHeight", "PlateLocSide", "RelSpeed", "Extension",
+        "InducedVertBreak", "HorzBreak", "VertRelAngle", "HorzRelAngle",
+        "x0", "y0", "z0", "vx0", "vy0", "vz0", "ax0", "ay0", "az0",
+    ]
+    sql = f"""
+        SELECT {', '.join(cols)}
         FROM trackman
-        WHERE TaggedPitchType NOT IN ('Other','Undefined')
-        GROUP BY Pitcher
-        HAVING COUNT(*) >= 50 AND COUNT(DISTINCT TaggedPitchType) >= 2
-    ),
-    pt_agg AS (
-        SELECT
-            t.Pitcher, t.TaggedPitchType,
-            AVG(t.RelHeight) AS rel_h, AVG(t.RelSide) AS rel_s,
-            STDDEV(t.RelHeight) AS rel_h_std, STDDEV(t.RelSide) AS rel_s_std,
-            AVG(t.PlateLocHeight) AS loc_h, AVG(t.PlateLocSide) AS loc_s,
-            AVG(t.RelSpeed) AS velo, COUNT(t.RelSpeed) AS cnt,
-            AVG(t.InducedVertBreak) AS ivb, AVG(t.HorzBreak) AS hb,
-            AVG(t.Extension) AS ext
-        FROM trackman t
-        JOIN pitcher_elig pe ON t.Pitcher = pe.Pitcher
-        WHERE t.TaggedPitchType NOT IN ('Other','Undefined')
-        GROUP BY t.Pitcher, t.TaggedPitchType
-        HAVING COUNT(t.RelSpeed) >= 10
-    )
-    SELECT * FROM pt_agg
+        WHERE TaggedPitchType IS NOT NULL
+          AND RelSpeed IS NOT NULL
+          AND PlateLocSide BETWEEN -{PLATE_SIDE_MAX} AND {PLATE_SIDE_MAX}
+          AND PlateLocHeight BETWEEN {PLATE_HEIGHT_MIN} AND {PLATE_HEIGHT_MAX}
     """
-    agg_df = query_population(sql)
-    if agg_df.empty:
+    df = query_population(sql)
+    if df.empty:
         return {}
 
-    agg_df["rel_h_std"] = agg_df["rel_h_std"].fillna(0)
-    agg_df["rel_s_std"] = agg_df["rel_s_std"].fillna(0)
-    agg_df["ext"] = agg_df["ext"].fillna(6.0)
+    # Sort for pitch order within PA
+    sort_cols = ["GameID", "Inning", "PAofInning", "Batter", "PitchofPA"]
+    df = df.sort_values([c for c in sort_cols if c in df.columns])
+
+    # Build consecutive pairs within same PA
+    grp_cols = ["GameID", "Inning", "PAofInning", "Batter"]
+    prev = df.groupby(grp_cols).shift(1)
+    mask = (
+        df["TaggedPitchType"].notna() &
+        prev["TaggedPitchType"].notna() &
+        (df["TaggedPitchType"] != prev["TaggedPitchType"])
+    )
+    cur = df[mask].copy()
+    prv = prev[mask].copy()
+
+    if cur.empty:
+        return {}
 
     # Physics constants
     MOUND_DIST = 60.5
     GRAVITY = 32.17
     COMMIT_TIME = 0.280
-    N_STEPS = 20
 
-    # AGGREGATE-level benchmarks for population builder (uses mean stats per pitch type).
-    # Aggregate commit seps are ~2x smaller than PBP because averaging removes variation.
-    # Format: (p10, p25, p50, p75, p90, mean, std)
-    PAIR_BENCHMARKS = {
-        'Changeup/Curveball': (2.2, 3.5, 5.2, 7.1, 9.3, 5.6, 3.1),
-        'Changeup/Cutter': (1.4, 2.2, 3.4, 4.9, 6.7, 3.9, 2.7),
-        'Changeup/Fastball': (1.8, 2.7, 4.0, 5.2, 6.6, 4.2, 2.1),
-        'Changeup/Sinker': (1.6, 2.4, 3.6, 5.0, 6.7, 4.0, 2.9),
-        'Changeup/Slider': (1.4, 2.2, 3.4, 4.8, 6.5, 3.8, 2.4),
-        'Changeup/Splitter': (1.0, 1.7, 2.6, 4.2, 6.1, 3.3, 2.8),
-        'Changeup/Sweeper': (1.7, 2.7, 4.4, 6.3, 8.6, 4.8, 2.7),
-        'Curveball/Cutter': (1.6, 2.5, 4.0, 5.8, 7.7, 4.4, 2.9),
-        'Curveball/Fastball': (1.5, 2.4, 3.7, 5.3, 7.1, 4.1, 2.6),
-        'Curveball/Sinker': (1.4, 2.5, 4.0, 6.0, 8.8, 4.9, 4.0),
-        'Curveball/Slider': (1.2, 2.0, 3.3, 5.0, 7.1, 4.0, 3.1),
-        'Curveball/Splitter': (2.1, 3.1, 4.6, 6.5, 9.1, 5.1, 2.8),
-        'Curveball/Sweeper': (1.1, 2.6, 3.8, 5.8, 8.0, 5.0, 5.0),
-        'Cutter/Fastball': (0.9, 1.5, 2.5, 3.8, 5.3, 3.0, 2.3),
-        'Cutter/Sinker': (1.0, 1.7, 2.7, 4.2, 6.3, 3.3, 2.9),
-        'Cutter/Slider': (0.9, 1.4, 2.4, 3.7, 5.4, 2.9, 2.4),
-        'Cutter/Splitter': (1.0, 1.7, 3.0, 5.0, 7.2, 3.6, 2.5),
-        'Cutter/Sweeper': (1.6, 2.6, 4.1, 5.8, 7.6, 4.3, 2.2),
-        'Fastball/Sinker': (0.8, 1.4, 2.3, 3.7, 5.6, 3.0, 2.8),
-        'Fastball/Slider': (1.1, 1.8, 2.9, 4.1, 5.6, 3.2, 2.0),
-        'Fastball/Splitter': (1.2, 2.0, 3.4, 4.8, 6.7, 3.7, 2.3),
-        'Fastball/Sweeper': (1.7, 2.9, 4.7, 7.1, 8.9, 5.2, 3.2),
-        'Sinker/Slider': (1.1, 1.9, 3.0, 4.4, 6.1, 3.5, 2.7),
-        'Sinker/Splitter': (1.1, 2.1, 3.4, 5.2, 7.7, 4.0, 2.8),
-        'Sinker/Sweeper': (1.4, 2.5, 4.0, 5.9, 8.5, 4.5, 2.4),
-        'Slider/Splitter': (1.1, 1.9, 3.2, 4.7, 7.0, 3.7, 2.7),
-        'Slider/Sweeper': (1.1, 1.8, 2.8, 4.5, 6.5, 3.5, 2.4),
-    }
-    DEFAULT_BENCHMARK = (1.2, 2.1, 3.3, 4.9, 6.8, 3.8, 2.7)
+    def _commit_plate_9param(row):
+        a = 0.5 * row["ay0"]
+        b = row["vy0"]
+        c = row["y0"]
+        if a == 0 and b == 0:
+            return None
+        if a == 0:
+            t_candidates = [(-c / b)] if b != 0 else []
+        else:
+            disc = b * b - 4 * a * c
+            if disc < 0:
+                return None
+            sqrt_disc = np.sqrt(disc)
+            t_candidates = [(-b - sqrt_disc) / (2 * a), (-b + sqrt_disc) / (2 * a)]
+        t_candidates = [t for t in t_candidates if t > 0]
+        if not t_candidates:
+            return None
+        t_total = min(t_candidates)
+        commit_t = max(0, t_total - COMMIT_TIME)
+        def _pos_at(t):
+            x = row["x0"] + row["vx0"] * t + 0.5 * row["ax0"] * t * t
+            z = row["z0"] + row["vz0"] * t + 0.5 * row["az0"] * t * t
+            return -x, z
+        return _pos_at(commit_t), _pos_at(t_total), t_total
 
-    def _euler_traj(rel_h, rel_s, loc_h, loc_s, ivb_val, hb_val, velo_mph, ext_val):
-        ext_val = ext_val if not pd.isna(ext_val) else 6.0
-        actual_dist = MOUND_DIST - ext_val
-        velo_fps = velo_mph * 5280.0 / 3600.0
+    def _commit_plate_ivb(row):
+        ext = row["Extension"] if pd.notna(row["Extension"]) else 6.0
+        actual_dist = MOUND_DIST - ext
+        velo_fps = row["RelSpeed"] * 5280.0 / 3600.0
         if velo_fps < 50:
             velo_fps = 50.0
         t_total = actual_dist / velo_fps
-        dt = t_total / N_STEPS
-        ivb_ft = ivb_val / 12.0
-        hb_ft = hb_val / 12.0
+        ivb = row["InducedVertBreak"] if pd.notna(row["InducedVertBreak"]) else 0.0
+        hb = row["HorzBreak"] if pd.notna(row["HorzBreak"]) else 0.0
+        ivb_ft = ivb / 12.0
+        hb_ft = hb / 12.0
         a_ivb = 2.0 * ivb_ft / (t_total ** 2) if t_total > 0 else 0
         a_hb = 2.0 * hb_ft / (t_total ** 2) if t_total > 0 else 0
         T = t_total
-        vy0 = (loc_h - rel_h + 0.5 * GRAVITY * T**2 - 0.5 * a_ivb * T**2) / T if T > 0 else 0
-        vx0 = (loc_s - rel_s - 0.5 * a_hb * T**2) / T if T > 0 else 0
-        path = [(rel_s, rel_h, 0.0)]
-        x, y = rel_s, rel_h
-        vy, vx = vy0, vx0
-        t = 0.0
-        for _ in range(N_STEPS):
-            vy += (-GRAVITY + a_ivb) * dt
-            vx += a_hb * dt
-            y += vy * dt
-            x += vx * dt
-            t += dt
-            path.append((x, y, t))
-        return path, t_total
+        vy0 = (row["PlateLocHeight"] - row["RelHeight"] + 0.5 * GRAVITY * T**2 - 0.5 * a_ivb * T**2) / T if T > 0 else 0
+        vx0 = (row["PlateLocSide"] - row["RelSide"] - 0.5 * a_hb * T**2) / T if T > 0 else 0
+        def _pos_at(t):
+            x = row["RelSide"] + vx0 * t + 0.5 * a_hb * t * t
+            y = row["RelHeight"] + vy0 * t - 0.5 * GRAVITY * t * t + 0.5 * a_ivb * t * t
+            return x, y
+        commit_t = max(0, t_total - COMMIT_TIME)
+        return _pos_at(commit_t), _pos_at(t_total), t_total
 
-    def _tunnel_from_agg_row(row):
-        ivb = row["ivb"] if pd.notna(row["ivb"]) else 0.0
-        hb = row["hb"] if pd.notna(row["hb"]) else 0.0
-        return _euler_traj(row["rel_h"], row["rel_s"], row["loc_h"], row["loc_s"],
-                           ivb, hb, row["velo"], row["ext"])
+    def _pair_metrics(row_a, row_b):
+        if pd.notna(row_a["x0"]) and pd.notna(row_a["y0"]) and pd.notna(row_a["vx0"]) and pd.notna(row_a["vy0"]):
+            res_a = _commit_plate_9param(row_a)
+        else:
+            res_a = _commit_plate_ivb(row_a)
+        if pd.notna(row_b["x0"]) and pd.notna(row_b["y0"]) and pd.notna(row_b["vx0"]) and pd.notna(row_b["vy0"]):
+            res_b = _commit_plate_9param(row_b)
+        else:
+            res_b = _commit_plate_ivb(row_b)
+        if res_a is None or res_b is None:
+            return None
+        (cax, cay), (pax, pay), _ = res_a
+        (cbx, cby), (pbx, pby), _ = res_b
+        commit_sep = np.sqrt((cay - cby)**2 + (cax - cbx)**2) * 12
+        plate_sep = np.sqrt((pay - pby)**2 + (pax - pbx)**2) * 12
+        rel_sep = np.sqrt((row_a["RelHeight"] - row_b["RelHeight"])**2 +
+                          (row_a["RelSide"] - row_b["RelSide"])**2) * 12
+        ivb_a = row_a["InducedVertBreak"] if pd.notna(row_a["InducedVertBreak"]) else 0
+        hb_a = row_a["HorzBreak"] if pd.notna(row_a["HorzBreak"]) else 0
+        ivb_b = row_b["InducedVertBreak"] if pd.notna(row_b["InducedVertBreak"]) else 0
+        hb_b = row_b["HorzBreak"] if pd.notna(row_b["HorzBreak"]) else 0
+        move_div = np.sqrt((ivb_a - ivb_b)**2 + (hb_a - hb_b)**2)
+        velo_gap = abs(row_a["RelSpeed"] - row_b["RelSpeed"])
+        if pd.notna(row_a["VertRelAngle"]) and pd.notna(row_b["VertRelAngle"]) and pd.notna(row_a["HorzRelAngle"]) and pd.notna(row_b["HorzRelAngle"]):
+            rel_angle_sep = np.sqrt((row_a["VertRelAngle"] - row_b["VertRelAngle"])**2 +
+                                    (row_a["HorzRelAngle"] - row_b["HorzRelAngle"])**2)
+        else:
+            rel_angle_sep = np.nan
+        return commit_sep, rel_sep, plate_sep, move_div, velo_gap, rel_angle_sep
 
-    def _pos_at_time_pop(path, t_total, target_t):
-        """Interpolate (x, y) at a specific time from an Euler path."""
-        if target_t <= 0:
-            return path[0][0], path[0][1]
-        if target_t >= t_total:
-            return path[-1][0], path[-1][1]
-        dt = t_total / N_STEPS
-        idx_f = target_t / dt
-        idx = int(idx_f)
-        frac = idx_f - idx
-        if idx >= len(path) - 1:
-            return path[-1][0], path[-1][1]
-        x = path[idx][0] + frac * (path[idx + 1][0] - path[idx][0])
-        y = path[idx][1] + frac * (path[idx + 1][1] - path[idx][1])
-        return x, y
-
-    # Group by pitcher, compute tunnel scores using same formula as _compute_tunnel_score
-    pop = {}
-    for pitcher, p_agg in agg_df.groupby("Pitcher"):
-        if len(p_agg) < 2:
+    # Collect metrics per pair + global training set for whiff model
+    metrics_by_pair = {}
+    x_rows = []
+    y_rows = []
+    for idx in cur.index:
+        row_b = cur.loc[idx]
+        row_a = prv.loc[idx]
+        pair_key = '/'.join(sorted([row_a["TaggedPitchType"], row_b["TaggedPitchType"]]))
+        m = _pair_metrics(row_a, row_b)
+        if m is None:
             continue
-        p_agg_idx = p_agg.set_index("TaggedPitchType")
-        # Compute trajectories for each pitch type
-        trajs = {}
-        for pt, row in p_agg_idx.iterrows():
-            try:
-                path, t_total = _tunnel_from_agg_row(row)
-                trajs[pt] = {"path": path, "t_total": t_total, "row": row}
-            except Exception:
+        metrics_by_pair.setdefault(pair_key, []).append(m)
+        # Whiff outcome on the second pitch of the pair
+        y_rows.append(1 if row_b.get("PitchCall") == "StrikeSwinging" else 0)
+        x_rows.append(m)
+
+    if not metrics_by_pair:
+        return {}
+
+    def _fit_weights(X, y):
+        # Features: commit_sep, rel_sep, plate_sep, move_div, velo_gap, rel_angle_sep
+        mask = np.isfinite(X).all(axis=1)
+        X = X[mask]
+        y = y[mask]
+        if len(y) < 300 or len(set(y)) <= 1:
+            return None
+        # Downsample for speed
+        max_n = 200000
+        if len(y) > max_n:
+            rng = np.random.default_rng(42)
+            idxs = rng.choice(len(y), size=max_n, replace=False)
+            X = X[idxs]
+            y = y[idxs]
+        mu = X.mean(axis=0)
+        sigma = X.std(axis=0)
+        sigma[sigma == 0] = 1.0
+        Xz = (X - mu) / sigma
+        Xz = sm.add_constant(Xz, has_constant="add")
+        model = sm.Logit(y, Xz).fit(disp=False, maxiter=50)
+        coefs = model.params[1:]
+        abs_coefs = np.abs(coefs)
+        if abs_coefs.sum() == 0:
+            return None
+        w = abs_coefs / abs_coefs.sum()
+        return {
+            "commit": float(w[0]),
+            "rel": float(w[1]),
+            "plate": float(w[2]),
+            "move": float(w[3]),
+            "velo": float(w[4]),
+            "rel_angle": float(w[5]),
+        }
+
+    # Fit global + pair-type-specific weights
+    weights_blob = {"global": None, "pairs": {}}
+    try:
+        if x_rows and len(set(y_rows)) > 1:
+            Xg = np.array(x_rows, dtype=float)
+            yg = np.array(y_rows, dtype=float)
+            weights_blob["global"] = _fit_weights(Xg, yg)
+    except Exception:
+        weights_blob["global"] = None
+
+    # Build pair-specific weights by re-looping consecutive pairs to capture y
+    try:
+        pair_xy = {}
+        for idx in cur.index:
+            row_b = cur.loc[idx]
+            row_a = prv.loc[idx]
+            pair_key = '/'.join(sorted([row_a["TaggedPitchType"], row_b["TaggedPitchType"]]))
+            m = _pair_metrics(row_a, row_b)
+            if m is None:
                 continue
-        if len(trajs) < 2:
+            y = 1 if row_b.get("PitchCall") == "StrikeSwinging" else 0
+            pair_xy.setdefault(pair_key, {"X": [], "y": []})
+            pair_xy[pair_key]["X"].append(m)
+            pair_xy[pair_key]["y"].append(y)
+        for pair_key, blob in pair_xy.items():
+            if len(blob["y"]) < 500 or len(set(blob["y"])) <= 1:
+                continue
+            w = _fit_weights(np.array(blob["X"], dtype=float), np.array(blob["y"], dtype=float))
+            if w is not None:
+                weights_blob["pairs"][pair_key] = w
+    except Exception:
+        pass
+
+    # Default weights if regression fails
+    cached = _load_tunnel_weights()
+    if not weights_blob["global"]:
+        weights_blob["global"] = cached.get("global") if cached else None
+    if not weights_blob["global"]:
+        weights_blob["global"] = {
+            "commit": 0.55,
+            "plate": 0.19,
+            "rel": 0.10,
+            "rel_angle": 0.08,
+            "move": 0.06,
+            "velo": 0.02,
+        }
+    _save_tunnel_weights(weights_blob)
+
+    # Build benchmarks from commit_sep distribution
+    pair_benchmarks = {}
+    for pair_key, metrics in metrics_by_pair.items():
+        if len(metrics) < 50:
             continue
+        arr = np.array(metrics)
+        commit_vals = arr[:, 0]
+        p10, p25, p50, p75, p90 = np.percentile(commit_vals, [10, 25, 50, 75, 90])
+        pair_benchmarks[pair_key] = (float(p10), float(p25), float(p50), float(p75), float(p90),
+                                     float(commit_vals.mean()), float(commit_vals.std()))
+    _save_tunnel_benchmarks(pair_benchmarks)
 
-        # Compute pair scores — mirrors _compute_tunnel_score scoring exactly
-        pts = list(trajs.keys())
-        for i in range(len(pts)):
-            for j in range(i + 1, len(pts)):
-                a_name, b_name = pts[i], pts[j]
-                ta, tb = trajs[a_name], trajs[b_name]
-                a_row, b_row = ta["row"], tb["row"]
+    # Build tunnel population raw score arrays
+    pop = {}
+    for pair_key, metrics in metrics_by_pair.items():
+        bm = pair_benchmarks.get(pair_key)
+        if bm is None:
+            continue
+        bm_p10, bm_p25, bm_p50, bm_p75, bm_p90 = bm[0], bm[1], bm[2], bm[3], bm[4]
+        raw_list = []
+        for commit_sep, rel_sep, plate_sep, move_div, velo_gap, rel_angle_sep in metrics:
+            _anchors = [
+                (bm_p90, 10), (bm_p75, 25), (bm_p50, 50),
+                (bm_p25, 75), (bm_p10, 90),
+            ]
+            if commit_sep >= bm_p90:
+                commit_pct = max(0, 10 * (1 - (commit_sep - bm_p90) / max(bm_p90, 1)))
+            elif commit_sep <= bm_p10:
+                commit_pct = min(100, 90 + 10 * (bm_p10 - commit_sep) / max(bm_p10, 1))
+            else:
+                commit_pct = 50.0
+                for k in range(len(_anchors) - 1):
+                    sep_hi, pct_lo = _anchors[k]
+                    sep_lo, pct_hi = _anchors[k + 1]
+                    if sep_lo <= commit_sep <= sep_hi:
+                        frac = (sep_hi - commit_sep) / (sep_hi - sep_lo) if sep_hi != sep_lo else 0.5
+                        commit_pct = pct_lo + frac * (pct_hi - pct_lo)
+                        break
+            plate_pct = min(100, plate_sep / 30.0 * 100)
+            rel_pct = max(0, 100 - rel_sep * 12)
+            if pd.notna(rel_angle_sep):
+                rel_angle_pct = max(0, min(100, (1 - rel_angle_sep / 5.0) * 100))
+            else:
+                rel_angle_pct = 50
+            move_pct = min(100, move_div / 30.0 * 100)
+            velo_pct = min(100, velo_gap / 15.0 * 100)
+            w_use = weights_blob["pairs"].get(pair_key) or weights_blob["global"]
+            raw_tunnel = round(
+                commit_pct * w_use["commit"] +
+                plate_pct * w_use["plate"] +
+                rel_pct * w_use["rel"] +
+                rel_angle_pct * w_use["rel_angle"] +
+                move_pct * w_use["move"] +
+                velo_pct * w_use["velo"], 2)
+            raw_list.append(raw_tunnel)
+        if raw_list:
+            pop[pair_key] = np.array(sorted(raw_list))
 
-                # Commit separation (speed-adjusted, 280ms before plate)
-                commit_t_a = max(0, ta["t_total"] - COMMIT_TIME)
-                commit_t_b = max(0, tb["t_total"] - COMMIT_TIME)
-                cax, cay = _pos_at_time_pop(ta["path"], ta["t_total"], commit_t_a)
-                cbx, cby = _pos_at_time_pop(tb["path"], tb["t_total"], commit_t_b)
-                commit_sep = math.sqrt((cay - cby)**2 + (cax - cbx)**2) * 12
-
-                # Plate separation
-                pax, pay = ta["path"][-1][0], ta["path"][-1][1]
-                pbx, pby = tb["path"][-1][0], tb["path"][-1][1]
-                plate_sep = math.sqrt((pay - pby)**2 + (pax - pbx)**2) * 12
-
-                # Release separation
-                rel_sep = math.sqrt((a_row["rel_h"] - b_row["rel_h"])**2 +
-                                    (a_row["rel_s"] - b_row["rel_s"])**2) * 12
-
-                # Release-point variance penalty
-                combined_rel_std = math.sqrt(
-                    (a_row["rel_h_std"]**2 + b_row["rel_h_std"]**2) / 2 +
-                    (a_row["rel_s_std"]**2 + b_row["rel_s_std"]**2) / 2
-                ) * 12
-                effective_rel_sep = rel_sep + 0.5 * combined_rel_std
-
-                # Movement divergence (IVB/HB based)
-                ivb_a = a_row["ivb"] if pd.notna(a_row["ivb"]) else 0
-                hb_a = a_row["hb"] if pd.notna(a_row["hb"]) else 0
-                ivb_b = b_row["ivb"] if pd.notna(b_row["ivb"]) else 0
-                hb_b = b_row["hb"] if pd.notna(b_row["hb"]) else 0
-                move_div = math.sqrt((ivb_a - ivb_b)**2 + (hb_a - hb_b)**2)
-
-                velo_gap = abs(a_row["velo"] - b_row["velo"])
-
-                # Pair benchmarks
-                pair_key = '/'.join(sorted([a_name, b_name]))
-                bm = PAIR_BENCHMARKS.get(pair_key, DEFAULT_BENCHMARK)
-                bm_p10, bm_p25, bm_p50, bm_p75, bm_p90 = bm[0], bm[1], bm[2], bm[3], bm[4]
-
-                # Commit percentile (same interpolation as _compute_tunnel_score)
-                _anchors = [
-                    (bm_p90, 10), (bm_p75, 25), (bm_p50, 50),
-                    (bm_p25, 75), (bm_p10, 90),
-                ]
-                if commit_sep >= bm_p90:
-                    commit_pct = max(0, 10 * (1 - (commit_sep - bm_p90) / max(bm_p90, 1)))
-                elif commit_sep <= bm_p10:
-                    commit_pct = min(100, 90 + 10 * (bm_p10 - commit_sep) / max(bm_p10, 1))
-                else:
-                    commit_pct = 50.0
-                    for k in range(len(_anchors) - 1):
-                        sep_hi, pct_lo = _anchors[k]
-                        sep_lo, pct_hi = _anchors[k + 1]
-                        if sep_lo <= commit_sep <= sep_hi:
-                            frac = (sep_hi - commit_sep) / (sep_hi - sep_lo) if sep_hi != sep_lo else 0.5
-                            commit_pct = pct_lo + frac * (pct_hi - pct_lo)
-                            break
-
-                plate_pct = min(100, plate_sep / 30.0 * 100)
-                rel_pct = max(0, 100 - effective_rel_sep * 12)
-                rel_angle_pct = 50  # no release angle data in population agg
-                move_pct = min(100, move_div / 30.0 * 100)
-                velo_pct = min(100, velo_gap / 15.0 * 100)
-
-                raw_tunnel = round(
-                    commit_pct * 0.55 +
-                    plate_pct * 0.19 +
-                    rel_pct * 0.10 +
-                    rel_angle_pct * 0.08 +
-                    move_pct * 0.06 +
-                    velo_pct * 0.02, 2)
-
-                pop.setdefault(pair_key, []).append(raw_tunnel)
-
-    for k in pop:
-        pop[k] = np.array(sorted(pop[k]))
     return pop
 
 
@@ -1391,26 +1573,27 @@ def compute_batter_stats(data, season_filter=None):
     agg["bbs"] = agg["bbs"].fillna(0).astype(int)
 
     # Filter to min 50 PA
-    agg = agg[agg["PA"] >= 25].copy()
+    agg = agg[agg["PA"] >= 50].copy()
 
-    # Batted ball sub-aggregations (only for in-play with EV)
-    batted = df[df["_has_ev"]].copy()
-    if not batted.empty:
-        batted_agg = batted.groupby(["Batter", "BatterTeam"]).agg(
+    # Batted ball sub-aggregations (all in-play; EV-only for EV metrics)
+    batted_all = df[df["_is_inplay"]].copy()
+    batted_ev = df[df["_has_ev"]].copy()
+    if not batted_all.empty:
+        batted_agg = batted_ev.groupby(["Batter", "BatterTeam"]).agg(
             AvgEV=("ExitSpeed", "mean"),
             MaxEV=("ExitSpeed", "max"),
             AvgLA=("Angle", "mean"),
             AvgDist=("Distance", "mean"),
         ).reset_index()
         # Barrel computation
-        batted["_barrel"] = is_barrel_mask(batted)
-        barrel_agg = batted.groupby(["Batter", "BatterTeam"])["_barrel"].sum().reset_index()
+        batted_ev["_barrel"] = is_barrel_mask(batted_ev)
+        barrel_agg = batted_ev.groupby(["Batter", "BatterTeam"])["_barrel"].sum().reset_index()
         barrel_agg.columns = ["Batter", "BatterTeam", "Barrels"]
         batted_agg = batted_agg.merge(barrel_agg, on=["Batter", "BatterTeam"], how="left")
         # Hit type counts
         for ht, col_name in [("GroundBall", "gb"), ("FlyBall", "fb"), ("LineDrive", "ld"), ("Popup", "pu")]:
-            if "TaggedHitType" in batted.columns:
-                ht_counts = batted[batted["TaggedHitType"] == ht].groupby(["Batter", "BatterTeam"]).size().reset_index(name=col_name)
+            if "TaggedHitType" in batted_all.columns:
+                ht_counts = batted_all[batted_all["TaggedHitType"] == ht].groupby(["Batter", "BatterTeam"]).size().reset_index(name=col_name)
                 batted_agg = batted_agg.merge(ht_counts, on=["Batter", "BatterTeam"], how="left")
             else:
                 batted_agg[col_name] = 0
@@ -1450,12 +1633,13 @@ def compute_batter_stats(data, season_filter=None):
     agg["BBE"] = agg["bbe"]
 
     # Directional stats (pull/center/oppo) — requires per-batter side, compute for batted balls
-    if not batted.empty and "Direction" in batted.columns:
+    if not batted_all.empty and "Direction" in batted_all.columns:
         batter_side = df.groupby(["Batter", "BatterTeam"])["BatterSide"].agg(
             lambda s: s.mode().iloc[0] if len(s.mode()) > 0 else "Right"
         ).reset_index().rename(columns={"BatterSide": "_side"})
-        dir_df = batted.dropna(subset=["Direction"]).merge(batter_side, on=["Batter", "BatterTeam"], how="left")
+        dir_df = batted_all.dropna(subset=["Direction"]).merge(batter_side, on=["Batter", "BatterTeam"], how="left")
         dir_df["_side"] = dir_df["_side"].fillna("Right")
+        dir_df = dir_df[dir_df["Direction"].between(-90, 90)]
         dir_df["_pull"] = np.where(dir_df["_side"] == "Left", dir_df["Direction"] > 15, dir_df["Direction"] < -15)
         dir_df["_oppo"] = np.where(dir_df["_side"] == "Left", dir_df["Direction"] < -15, dir_df["Direction"] > 15)
         dir_agg = dir_df.groupby(["Batter", "BatterTeam"]).agg(
@@ -1550,11 +1734,12 @@ def compute_pitcher_stats(data, season_filter=None):
 
     agg = agg[agg["Pitches"] >= 100].copy()
 
-    # Batted ball sub-aggregations
-    batted = df[df["_has_ev"]].copy()
-    if not batted.empty:
-        batted["_barrel"] = is_barrel_mask(batted)
-        ba = batted.groupby(["Pitcher", "PitcherTeam"]).agg(
+    # Batted ball sub-aggregations (all in-play; EV-only for EV metrics)
+    batted_all = df[df["_is_inplay"]].copy()
+    batted_ev = df[df["_has_ev"]].copy()
+    if not batted_all.empty:
+        batted_ev["_barrel"] = is_barrel_mask(batted_ev)
+        ba = batted_ev.groupby(["Pitcher", "PitcherTeam"]).agg(
             AvgEVAgainst=("ExitSpeed", "mean"),
             n_barrels=("_barrel", "sum"),
         ).reset_index()
@@ -1564,7 +1749,7 @@ def compute_pitcher_stats(data, season_filter=None):
         agg["n_barrels"] = 0
 
     # GB count from in-play
-    inplay = df[df["_is_inplay"]].copy()
+    inplay = batted_all
     if not inplay.empty and "TaggedHitType" in inplay.columns:
         gb_counts = inplay[inplay["TaggedHitType"] == "GroundBall"].groupby(["Pitcher", "PitcherTeam"]).size().reset_index(name="gb")
         ip_counts = inplay.groupby(["Pitcher", "PitcherTeam"]).size().reset_index(name="n_ip")
@@ -1738,6 +1923,7 @@ CHART_LAYOUT = dict(
 
 def make_spray_chart(in_play_df, height=360):
     spray = in_play_df.dropna(subset=["Direction", "Distance"]).copy()
+    spray = spray[spray["Direction"].between(-90, 90)]
     if spray.empty:
         return None
     angle_rad = np.radians(spray["Direction"])
@@ -10740,10 +10926,10 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
 
     V5 — Backtest-calibrated rebuild:
       1. Commit point at 280ms before plate (research-backed decision window),
-         not 167ms.  Produces realistic commit separations (median ~7.7").
+         not 167ms.  Produces realistic commit separations (median ~3.3").
       2. Percentile grading relative to SAME PAIR TYPE — a Sinker/Slider pair
          is compared to other Sinker/Slider tunnels, not to Fastball/Changeup.
-      3. Regression-weighted composite score from 200,000 actual consecutive
+      3. Regression-weighted composite score from 46,934 actual consecutive
          pitch pairs.  Weights derived from logistic regression on whiff:
            commit_sep  55%  (lower → more whiffs — induces bad swings)
            plate_sep   19%  (higher → more whiffs given swing — late break)
@@ -10760,6 +10946,15 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
     if not all(c in pdf.columns for c in req_base):
         return pd.DataFrame()
 
+    # Filter to plausible plate locations and drop low-usage pitch types.
+    pdf = pdf[
+        pdf["PlateLocSide"].between(-PLATE_SIDE_MAX, PLATE_SIDE_MAX) &
+        pdf["PlateLocHeight"].between(PLATE_HEIGHT_MIN, PLATE_HEIGHT_MAX)
+    ].copy()
+    pdf = filter_minor_pitches(pdf, min_pct=MIN_PITCH_USAGE_PCT)
+    if pdf.empty:
+        return pd.DataFrame()
+
     has_ivb = "InducedVertBreak" in pdf.columns and "HorzBreak" in pdf.columns
     has_rel_angle = "VertRelAngle" in pdf.columns and "HorzRelAngle" in pdf.columns
     has_9p = all(c in pdf.columns for c in ["x0", "y0", "z0", "vx0", "vy0", "vz0", "ax0", "ay0", "az0"])
@@ -10773,43 +10968,10 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
     COMMIT_TIME = 0.280  # seconds before plate arrival (research-backed)
     N_STEPS = 20         # Euler integration steps
 
-    # Pair-type benchmarks: commit_sep (p10, p25, p50, p75, p90, mean, std)
-    # Built from 200,000 diff-type pairs at 280ms commit point
-    # Data-driven benchmarks: computed from 200,000 consecutive pitch-by-pitch
-    # pairs using the same Euler physics model (280ms commit, IVB/HB accel).
-    # Calibrated at the PITCH-BY-PITCH level to match how _compute_tunnel_score
-    # actually scores pitchers (not aggregate-to-aggregate).
+    # Pair-type benchmarks loaded from population cache (commit_sep percentiles).
     # Format: (p10, p25, p50, p75, p90, mean, std)
-    PAIR_BENCHMARKS = {
-        'Changeup/Curveball': (3.5, 5.8, 9.3, 13.5, 18.1, 10.2, 5.9),
-        'Changeup/Cutter': (2.9, 4.9, 7.6, 11.1, 14.8, 8.4, 5.4),
-        'Changeup/Fastball': (3.0, 5.0, 7.9, 11.2, 14.8, 8.5, 4.9),
-        'Changeup/Sinker': (2.9, 4.8, 7.4, 10.8, 14.0, 8.1, 4.6),
-        'Changeup/Slider': (3.2, 5.2, 8.1, 11.8, 15.8, 9.0, 5.2),
-        'Changeup/Splitter': (3.4, 5.7, 8.6, 13.2, 17.1, 9.4, 5.2),
-        'Changeup/Sweeper': (3.5, 5.7, 8.7, 12.4, 16.3, 9.5, 5.4),
-        'Curveball/Cutter': (3.1, 5.1, 8.3, 11.9, 16.1, 9.2, 6.9),
-        'Curveball/Fastball': (3.1, 5.2, 8.3, 12.2, 16.4, 9.2, 5.6),
-        'Curveball/Sinker': (2.8, 4.9, 7.8, 12.1, 15.8, 8.9, 5.5),
-        'Curveball/Slider': (3.2, 5.4, 8.6, 12.5, 17.1, 9.5, 5.7),
-        'Curveball/Splitter': (3.8, 6.1, 9.1, 13.1, 18.5, 10.2, 5.8),
-        'Curveball/Sweeper': (6.3, 7.8, 10.2, 14.9, 17.7, 11.3, 4.9),
-        'Cutter/Fastball': (2.6, 4.3, 6.7, 9.6, 12.7, 7.3, 4.1),
-        'Cutter/Sinker': (2.3, 4.0, 6.4, 9.4, 12.7, 7.1, 4.3),
-        'Cutter/Slider': (2.8, 4.6, 7.5, 10.9, 14.8, 8.3, 5.2),
-        'Cutter/Splitter': (2.7, 4.5, 7.5, 10.5, 14.3, 8.2, 4.7),
-        'Cutter/Sweeper': (2.1, 5.4, 7.5, 11.4, 14.9, 8.4, 4.4),
-        'Fastball/Sinker': (2.4, 4.0, 6.3, 9.3, 12.4, 7.0, 4.2),
-        'Fastball/Slider': (2.9, 4.8, 7.6, 10.9, 14.6, 8.3, 4.9),
-        'Fastball/Splitter': (3.0, 4.7, 7.7, 11.1, 14.9, 8.4, 4.8),
-        'Fastball/Sweeper': (2.9, 5.0, 7.6, 11.0, 15.2, 8.5, 5.1),
-        'Sinker/Slider': (2.7, 4.6, 7.3, 10.7, 14.4, 8.1, 4.7),
-        'Sinker/Splitter': (2.8, 4.1, 7.3, 10.7, 14.3, 8.1, 5.1),
-        'Sinker/Sweeper': (3.1, 5.5, 7.9, 11.7, 14.0, 8.5, 4.2),
-        'Slider/Splitter': (3.2, 5.3, 8.5, 12.8, 16.6, 9.4, 5.4),
-        'Slider/Sweeper': (2.8, 4.4, 7.0, 11.1, 16.3, 8.3, 5.2),
-    }
-    DEFAULT_BENCHMARK = (2.9, 4.9, 7.7, 11.2, 15.0, 8.5, 5.1)
+    PAIR_BENCHMARKS = _load_tunnel_benchmarks() or {}
+    DEFAULT_BENCHMARK = (1.2, 2.1, 3.3, 4.9, 6.8, 3.8, 2.7)
 
     # ── Per-pitch-type aggregates (used as fallback & for diagnostics) ──
     agg_cols = {
@@ -10844,85 +11006,73 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
     agg["rel_h_std"] = agg["rel_h_std"].fillna(0)
     agg["rel_s_std"] = agg["rel_s_std"].fillna(0)
 
-    # ── Euler-integrated flight path (Method 1: IVB/HB — 96.6% of data) ──
-    def _euler_trajectory(rel_h, rel_s, loc_h, loc_s, ivb, hb, velo_mph, ext):
-        """Return list of (x, y, t) at N_STEPS+1 points from release to plate.
-        Uses drag + Magnus via IVB/HB decomposed into continuous accelerations."""
+    # ── Kinematic positions at commit/plate (no Euler discretization) ──
+    def _commit_plate_9param(x0_val, y0_val, z0_val, vx0_val, vy0_val, vz0_val,
+                             ax0_val, ay0_val, az0_val):
+        """Compute commit/plate positions using Trackman 9-parameter model."""
+        # Solve y0 + vy0*t + 0.5*ay0*t^2 = 0 for t>0
+        a = 0.5 * ay0_val
+        b = vy0_val
+        c = y0_val
+        if a == 0 and b == 0:
+            return None
+        if a == 0:
+            t_candidates = [(-c / b)] if b != 0 else []
+        else:
+            disc = b * b - 4 * a * c
+            if disc < 0:
+                return None
+            sqrt_disc = np.sqrt(disc)
+            t_candidates = [(-b - sqrt_disc) / (2 * a), (-b + sqrt_disc) / (2 * a)]
+        t_candidates = [t for t in t_candidates if t > 0]
+        if not t_candidates:
+            return None
+        t_total = min(t_candidates)
+        commit_t = max(0, t_total - COMMIT_TIME)
+
+        def _pos_at(t):
+            x = x0_val + vx0_val * t + 0.5 * ax0_val * t * t
+            z = z0_val + vz0_val * t + 0.5 * az0_val * t * t
+            return -x, z
+
+        c_side, c_h = _pos_at(commit_t)
+        p_side, p_h = _pos_at(t_total)
+        return (c_side, c_h), (p_side, p_h), t_total
+
+    def _commit_plate_ivb(rel_h, rel_s, loc_h, loc_s, ivb, hb, velo_mph, ext):
+        """Compute commit/plate positions using IVB/HB constant-accel model."""
         ext = ext if not pd.isna(ext) else 6.0
         actual_dist = MOUND_DIST - ext
         velo_fps = velo_mph * 5280.0 / 3600.0
         if velo_fps < 50:
-            velo_fps = 50.0  # safety floor
+            velo_fps = 50.0
         t_total = actual_dist / velo_fps
-        dt = t_total / N_STEPS
-
-        # IVB/HB are total inches of break over the full flight.
-        # Model as constant acceleration: break = 0.5 * a_break * t_total^2
-        # => a_break = 2 * break_ft / t_total^2
+        T = t_total
         ivb_ft = ivb / 12.0
         hb_ft = hb / 12.0
         a_ivb = 2.0 * ivb_ft / (t_total ** 2) if t_total > 0 else 0
         a_hb = 2.0 * hb_ft / (t_total ** 2) if t_total > 0 else 0
-
-        # Initial velocities: solve for vy0, vx0 so that endpoint = plate loc
-        # y(T) = rel_h + vy0*T - 0.5*g*T^2 + 0.5*a_ivb*T^2 = loc_h
-        # => vy0 = (loc_h - rel_h + 0.5*g*T^2 - 0.5*a_ivb*T^2) / T
-        T = t_total
         vy0 = (loc_h - rel_h + 0.5 * GRAVITY * T**2 - 0.5 * a_ivb * T**2) / T if T > 0 else 0
         vx0 = (loc_s - rel_s - 0.5 * a_hb * T**2) / T if T > 0 else 0
 
-        path = [(rel_s, rel_h, 0.0)]
-        x, y = rel_s, rel_h
-        vy, vx = vy0, vx0
-        t = 0.0
-        for _ in range(N_STEPS):
-            vy += (-GRAVITY + a_ivb) * dt
-            vx += a_hb * dt
-            y += vy * dt
-            x += vx * dt
-            t += dt
-            path.append((x, y, t))
-        return path, t_total
+        def _pos_at(t):
+            x = rel_s + vx0 * t + 0.5 * a_hb * t * t
+            y = rel_h + vy0 * t - 0.5 * GRAVITY * t * t + 0.5 * a_ivb * t * t
+            return x, y
 
-    # ── Method 2: 9-parameter trajectory (Trackman x0..az0) ──
-    def _trajectory_9param(x0_val, z0_val, vx0_val, vy0_val, vz0_val,
-                           ax0_val, ay0_val, az0_val):
-        """Euler integration using Trackman's 9-parameter model.
-        Coordinate system: x0=toward plate, y0=50 (constant), z0=height,
-        vx0=horiz side velocity, vy0=toward plate (negative), vz0=vertical velocity.
-        ax0=horiz accel, ay0=drag decel (positive), az0=vert accel (gravity+Magnus).
-        Output: path as (plate_side, height, t) — same format as _euler_trajectory.
-        x0 is negated to match PlateLocSide convention."""
-        velo_fps = abs(vy0_val) if abs(vy0_val) > 50 else 130.0
-        t_total = MOUND_DIST / velo_fps  # approximate
-        dt = t_total / N_STEPS
-        # Convert to our convention: side = -x0 (Trackman x is opposite PlateLocSide)
-        side, height = -x0_val, z0_val  # negate x for PlateLocSide convention
-        v_side, v_height, v_fwd = -vx0_val, vz0_val, vy0_val
-        a_side, a_height, a_fwd = -ax0_val, az0_val, ay0_val
-        path = [(side, height, 0.0)]
-        t = 0.0
-        for _ in range(N_STEPS):
-            v_side += a_side * dt
-            v_height += a_height * dt
-            v_fwd += a_fwd * dt
-            side += v_side * dt
-            height += v_height * dt
-            t += dt
-            path.append((side, height, t))
-        return path, t_total
+        commit_t = max(0, t_total - COMMIT_TIME)
+        c_side, c_h = _pos_at(commit_t)
+        p_side, p_h = _pos_at(t_total)
+        return (c_side, c_h), (p_side, p_h), t_total
 
     # ── Method 3: Gravity-only trajectory (no break data) ──
-    def _gravity_trajectory(rel_h, rel_s, loc_h, loc_s, velo_mph, ext):
-        """Simple trajectory with gravity only — IVB=0, HB=0.
-        Used when neither IVB/HB nor 9-param data is available."""
-        return _euler_trajectory(rel_h, rel_s, loc_h, loc_s, 0.0, 0.0, velo_mph, ext)
+    def _commit_plate_gravity(rel_h, rel_s, loc_h, loc_s, velo_mph, ext):
+        """Gravity-only fallback (IVB=HB=0)."""
+        return _commit_plate_ivb(rel_h, rel_s, loc_h, loc_s, 0.0, 0.0, velo_mph, ext)
 
     # ── Unified trajectory dispatcher ──
-    def _compute_path(row_data):
-        """Choose best available trajectory method for a pitch.
-        row_data: dict-like with pitch columns.
-        Returns (path, t_total) or None if data is too broken."""
+    def _compute_commit_plate(row_data):
+        """Choose best available physics model and return commit/plate positions."""
         ivb_val = row_data.get("ivb", np.nan) if not isinstance(row_data, pd.Series) else row_data.get("ivb", np.nan)
         hb_val = row_data.get("hb", np.nan) if not isinstance(row_data, pd.Series) else row_data.get("hb", np.nan)
         # For individual pitches (Series), use column names directly
@@ -10940,13 +11090,10 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
         if pd.isna(rel_h) or pd.isna(velo) or pd.isna(loc_h):
             return None
 
-        # Method 1: IVB/HB Euler (best, 96.6% of data)
-        if not pd.isna(ivb_val) and not pd.isna(hb_val):
-            return _euler_trajectory(rel_h, rel_s, loc_h, loc_s, ivb_val, hb_val, velo, ext)
-
-        # Method 2: 9-param model (0.8% — e.g. TedABroerStadium)
+        # Method 1: 9-param model (most physically accurate when available)
         if isinstance(row_data, pd.Series):
             x0_v = row_data.get("x0", np.nan)
+            y0_v = row_data.get("y0", np.nan)
             z0_v = row_data.get("z0", np.nan)
             vx0_v = row_data.get("vx0", np.nan)
             vy0_v = row_data.get("vy0", np.nan)
@@ -10956,6 +11103,7 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
             az0_v = row_data.get("az0", np.nan)
         else:
             x0_v = row_data.get("x0", np.nan)
+            y0_v = row_data.get("y0", np.nan)
             z0_v = row_data.get("z0", np.nan)
             vx0_v = row_data.get("vx0", np.nan)
             vy0_v = row_data.get("vy0", np.nan)
@@ -10963,35 +11111,25 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
             ax0_v = row_data.get("ax0", np.nan)
             ay0_v = row_data.get("ay0", np.nan)
             az0_v = row_data.get("az0", np.nan)
-        if not pd.isna(x0_v) and not pd.isna(vx0_v):
-            return _trajectory_9param(x0_v, z0_v, vx0_v, vy0_v, vz0_v,
-                                      ax0_v, ay0_v, az0_v)
+        if not pd.isna(x0_v) and not pd.isna(y0_v) and not pd.isna(vx0_v) and not pd.isna(vy0_v):
+            result = _commit_plate_9param(x0_v, y0_v, z0_v, vx0_v, vy0_v, vz0_v,
+                                          ax0_v, ay0_v, az0_v)
+            if result is not None:
+                return result
 
-        # Method 3: Gravity-only (2.0% — indoor sessions without break data)
+        # Method 2: IVB/HB model (fallback when 9-param missing)
+        if not pd.isna(ivb_val) and not pd.isna(hb_val):
+            return _commit_plate_ivb(rel_h, rel_s, loc_h, loc_s, ivb_val, hb_val, velo, ext)
+
+        # Method 3: Gravity-only
         if not pd.isna(rel_h) and not pd.isna(loc_h):
-            return _gravity_trajectory(rel_h, rel_s, loc_h, loc_s, velo, ext)
+            return _commit_plate_gravity(rel_h, rel_s, loc_h, loc_s, velo, ext)
 
         # Method 4: Data too broken
         return None
 
-    def _pos_at_time(path, t_total, target_t):
-        """Interpolate (x, y) at a specific time from an Euler path."""
-        if target_t <= 0:
-            return path[0][0], path[0][1]
-        if target_t >= t_total:
-            return path[-1][0], path[-1][1]
-        dt = t_total / N_STEPS
-        idx_f = target_t / dt
-        idx = int(idx_f)
-        frac = idx_f - idx
-        if idx >= len(path) - 1:
-            return path[-1][0], path[-1][1]
-        x = path[idx][0] + frac * (path[idx + 1][0] - path[idx][0])
-        y = path[idx][1] + frac * (path[idx + 1][1] - path[idx][1])
-        return x, y
-
     # ── Build pitch-by-pitch pair data (Improvement #4) ──
-    pair_scores = {}  # (typeA, typeB) -> list of per-pair raw tunnel metrics
+    pair_scores = {}  # (typeA, typeB) -> list of (row_a, row_b) pairs
     has_pbp = "PitchofPA" in pdf.columns and "Batter" in pdf.columns
     if has_pbp:
         pbp_req = ["TaggedPitchType", "RelHeight", "RelSide", "PlateLocHeight",
@@ -11036,18 +11174,12 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
     def _score_single_pair_from_rows(row_a, row_b):
         """Compute raw tunnel metrics for a single pitch pair using dispatcher.
         row_a, row_b: dict-like (pd.Series or agg row) with pitch columns."""
-        result_a = _compute_path(row_a)
-        result_b = _compute_path(row_b)
+        result_a = _compute_commit_plate(row_a)
+        result_b = _compute_commit_plate(row_b)
         if result_a is None or result_b is None:
             return None
-        path_a, t_total_a = result_a
-        path_b, t_total_b = result_b
-
-        # Speed-adjusted commit point (#1): 280ms before each pitch arrives
-        commit_t_a = max(0, t_total_a - COMMIT_TIME)
-        commit_t_b = max(0, t_total_b - COMMIT_TIME)
-        cax, cay = _pos_at_time(path_a, t_total_a, commit_t_a)
-        cbx, cby = _pos_at_time(path_b, t_total_b, commit_t_b)
+        (cax, cay), (pax, pay), _ = result_a
+        (cbx, cby), (pbx, pby), _ = result_b
         commit_sep = np.sqrt((cay - cby)**2 + (cax - cbx)**2) * 12  # inches
 
         # Release separation
@@ -11058,11 +11190,7 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
         rel_sep = np.sqrt((rel_h_a - rel_h_b)**2 + (rel_s_a - rel_s_b)**2) * 12
 
         # Plate separation
-        loc_h_a = row_a.get("loc_h", row_a.get("PlateLocHeight", np.nan))
-        loc_s_a = row_a.get("loc_s", row_a.get("PlateLocSide", np.nan))
-        loc_h_b = row_b.get("loc_h", row_b.get("PlateLocHeight", np.nan))
-        loc_s_b = row_b.get("loc_s", row_b.get("PlateLocSide", np.nan))
-        plate_sep = np.sqrt((loc_h_a - loc_h_b)**2 + (loc_s_a - loc_s_b)**2) * 12
+        plate_sep = np.sqrt((pay - pby)**2 + (pax - pbx)**2) * 12
 
         # Movement divergence
         ivb_a = row_a.get("ivb", row_a.get("InducedVertBreak", 0))
@@ -11103,11 +11231,13 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
             if len(pbp_pairs) >= 8:
                 # Aggregate per-pair metrics
                 metrics = []
+                whiff_flags = []
                 for prow, crow in pbp_pairs:
                     try:
                         m = _score_single_pair_from_rows(prow, crow)
                         if m is not None:
                             metrics.append(m)
+                            whiff_flags.append(crow.get("PitchCall") == "StrikeSwinging")
                     except Exception:
                         continue
                 if len(metrics) >= 5:
@@ -11118,16 +11248,19 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
                     move_div = float(np.median(arr[:, 3]))
                     velo_gap = float(np.median(arr[:, 4]))
                     rel_angle_sep = float(np.nanmedian(arr[:, 5]))
+                    pair_whiff = float(np.mean(whiff_flags)) * 100 if whiff_flags else np.nan
                 else:
                     result = _score_single_pair_from_rows(a, b)
                     if result is None:
                         continue
                     commit_sep, rel_sep, plate_sep, move_div, velo_gap, rel_angle_sep = result
+                    pair_whiff = np.nan
             else:
                 result = _score_single_pair_from_rows(a, b)
                 if result is None:
                     continue
                 commit_sep, rel_sep, plate_sep, move_div, velo_gap, rel_angle_sep = result
+                pair_whiff = np.nan
 
             # Release-point variance penalty (#2)
             combined_rel_std = np.sqrt(
@@ -11136,17 +11269,9 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
             ) * 12  # inches
             effective_rel_sep = rel_sep + 0.5 * combined_rel_std
 
-            # BACKTEST-CALIBRATED TUNNEL SCORE (v6)
-            # Percentile grading vs same pair type, regression-weighted composite.
-            # Derived from 200,000 consecutive diff-type pairs at 280ms commit.
-            #
-            # Logistic regression on whiff (standardised coefficients):
-            #   commit_sep  55%  (lower→more whiff — induces bad swing decisions)
-            #   plate_sep   19%  (higher→more whiff given swing — late divergence)
-            #   rel_sep     10%  (lower→better — consistent release)
-            #   rel_angle    8%  (lower→better — similar launch angles)
-            #   move_div     6%  (captured by plate_sep mostly)
-            #   velo_gap     2%  (negligible)
+    # DATA-FIT TUNNEL SCORE (v6)
+    # Percentile grading vs same pair type, regression-weighted composite.
+    # Weights are fit on actual consecutive pairs in the parquet and cached.
 
             # Look up pair-type benchmark for percentile context
             type_a_norm = types[i]; type_b_norm = types[j]
@@ -11202,13 +11327,24 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
             velo_pct = min(100, velo_gap / 15.0 * 100)
 
             # Weighted composite (regression-derived weights)
+            w_blob = _load_tunnel_weights() or {}
+            w_global = w_blob.get("global") or {
+                "commit": 0.55,
+                "plate": 0.19,
+                "rel": 0.10,
+                "rel_angle": 0.08,
+                "move": 0.06,
+                "velo": 0.02,
+            }
+            w_pair = w_blob.get("pairs", {}).get(pair_label)
+            weights = w_pair or w_global
             raw_tunnel = round(
-                commit_pct * 0.55 +
-                plate_pct * 0.19 +
-                rel_pct * 0.10 +
-                rel_angle_pct * 0.08 +
-                move_pct * 0.06 +
-                velo_pct * 0.02, 2)
+                commit_pct * weights["commit"] +
+                plate_pct * weights["plate"] +
+                rel_pct * weights["rel"] +
+                rel_angle_pct * weights["rel_angle"] +
+                move_pct * weights["move"] +
+                velo_pct * weights["velo"], 2)
 
             # Percentile grading vs all pitchers in the database
             if tunnel_pop is not None and pair_label in tunnel_pop:
@@ -11282,6 +11418,7 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
                 "Move Diff (in)": round(move_div, 1),
                 "Rel Angle Sep (°)": round(rel_angle_sep, 1) if pd.notna(rel_angle_sep) else None,
                 "Pairs Used": n_pairs_used if n_pairs_used > 0 else "avg",
+                "Pair Whiff%": round(pair_whiff, 1) if not pd.isna(pair_whiff) else None,
                 "Diagnosis": diagnosis,
                 "Fix": "; ".join(fixes) if fixes else "No changes needed",
             })
@@ -11355,6 +11492,9 @@ def _compute_command_plus(pdf, data=None):
 
 def _compute_pitch_pair_results(pdf, data, tunnel_df=None):
     """Compute effectiveness when pitch B follows pitch A in an at-bat."""
+    if pdf.empty:
+        return pd.DataFrame()
+    pdf = filter_minor_pitches(pdf, min_pct=MIN_PITCH_USAGE_PCT)
     if pdf.empty:
         return pd.DataFrame()
 
@@ -11540,21 +11680,28 @@ def _pitching_lab_content(data, pitcher, season_filter, pdf, stuff_df,
             for idx, (_, row) in enumerate(tunnel_df.head(5).iterrows()):
                 with grade_cols[idx]:
                     gc = grade_colors.get(row["Grade"], "#888")
+                    whiff_str = f' &middot; Whiff%: {row["Pair Whiff%"]:.1f}' if pd.notna(row.get("Pair Whiff%")) else ""
                     st.markdown(
                         f'<div style="text-align:center;padding:10px;border-radius:8px;border:2px solid {gc};'
                         f'background:{gc}15;margin:2px;">'
                         f'<span style="font-size:28px;font-weight:bold;color:{gc};">{row["Grade"]}</span><br>'
                         f'<span style="font-size:13px;">{row["Pitch A"]} + {row["Pitch B"]}</span><br>'
-                        f'<span style="font-size:12px;color:#666;">Score: {row["Tunnel Score"]}</span>'
+                        f'<span style="font-size:12px;color:#666;">Score: {row["Tunnel Score"]}{whiff_str}</span>'
                         f'</div>', unsafe_allow_html=True)
 
             st.markdown("")
 
             # Detailed table (show key columns)
-            display_cols = ["Pitch A", "Pitch B", "Grade", "Tunnel Score",
+            display_cols = ["Pitch A", "Pitch B", "Grade", "Tunnel Score", "Pair Whiff%",
                             "Release Sep (in)", "Commit Sep (in)", "Plate Sep (in)",
                             "Velo Gap (mph)", "Move Diff (in)", "Rel Angle Sep (°)"]
             st.dataframe(tunnel_df[display_cols], use_container_width=True, hide_index=True)
+            if "Pair Whiff%" in tunnel_df.columns:
+                corr_df = tunnel_df.dropna(subset=["Tunnel Score", "Pair Whiff%"])
+                if len(corr_df) >= 3:
+                    corr = corr_df["Tunnel Score"].corr(corr_df["Pair Whiff%"])
+                    if pd.notna(corr):
+                        st.caption(f"Tunnel Score vs Pair Whiff% correlation (this pitcher): {corr:.2f}")
 
             # Tunnel visualization — release point overlay + plate location
             section_header("Release Point Overlay")
@@ -15896,6 +16043,128 @@ def page_postgame(data):
         _postgame_hitters(gd, data)
 
 
+@st.cache_data(show_spinner="Running data quality checks...")
+def _data_quality_summary():
+    con = duckdb.connect()
+    path = PARQUET_PATH
+
+    total = con.execute("SELECT COUNT(*) FROM read_parquet(?)", [path]).fetchone()[0]
+    distinct_keys = con.execute(
+        """
+        SELECT COUNT(DISTINCT GameID || '_' || Inning || '_' || PAofInning || '_' || PitchofPA || '_' ||
+                             Pitcher || '_' || Batter || '_' || PitchNo)
+        FROM read_parquet(?)
+        """,
+        [path],
+    ).fetchone()[0]
+
+    nulls = con.execute(
+        """
+        SELECT
+          SUM(CASE WHEN Pitcher IS NULL THEN 1 ELSE 0 END) AS Pitcher_null,
+          SUM(CASE WHEN Batter IS NULL THEN 1 ELSE 0 END) AS Batter_null,
+          SUM(CASE WHEN GameID IS NULL THEN 1 ELSE 0 END) AS GameID_null,
+          SUM(CASE WHEN Date IS NULL OR Date = '' THEN 1 ELSE 0 END) AS Date_null,
+          SUM(CASE WHEN PitchCall IS NULL THEN 1 ELSE 0 END) AS PitchCall_null,
+          SUM(CASE WHEN TaggedPitchType IS NULL THEN 1 ELSE 0 END) AS TaggedPitchType_null,
+          SUM(CASE WHEN PlateLocSide IS NULL OR PlateLocHeight IS NULL THEN 1 ELSE 0 END) AS PlateLoc_null,
+          SUM(CASE WHEN ExitSpeed IS NULL THEN 1 ELSE 0 END) AS ExitSpeed_null,
+          SUM(CASE WHEN Direction IS NULL THEN 1 ELSE 0 END) AS Direction_null,
+          SUM(CASE WHEN Distance IS NULL THEN 1 ELSE 0 END) AS Distance_null
+        FROM read_parquet(?)
+        """,
+        [path],
+    ).fetchdf()
+
+    invalid_locs = con.execute(
+        f"""
+        SELECT
+          SUM(CASE WHEN PlateLocSide IS NOT NULL AND ABS(PlateLocSide) > {PLATE_SIDE_MAX} THEN 1 ELSE 0 END) AS side_out,
+          SUM(CASE WHEN PlateLocHeight IS NOT NULL AND (PlateLocHeight < {PLATE_HEIGHT_MIN} OR PlateLocHeight > {PLATE_HEIGHT_MAX})
+              THEN 1 ELSE 0 END) AS height_out
+        FROM read_parquet(?)
+        """,
+        [path],
+    ).fetchdf()
+
+    inplay_cov = con.execute(
+        """
+        SELECT
+          COUNT(*) AS inplay,
+          SUM(CASE WHEN ExitSpeed IS NOT NULL THEN 1 ELSE 0 END) AS ev_present,
+          SUM(CASE WHEN Direction IS NOT NULL THEN 1 ELSE 0 END) AS dir_present,
+          SUM(CASE WHEN Distance IS NOT NULL THEN 1 ELSE 0 END) AS dist_present
+        FROM read_parquet(?)
+        WHERE PitchCall = 'InPlay'
+        """,
+        [path],
+    ).fetchdf()
+
+    direction_outliers = con.execute(
+        """
+        SELECT SUM(CASE WHEN Direction IS NOT NULL AND ABS(Direction) > 90 THEN 1 ELSE 0 END) AS dir_out
+        FROM read_parquet(?)
+        """,
+        [path],
+    ).fetchdf()
+
+    bad_pitchcall = con.execute(
+        """
+        SELECT PitchCall, COUNT(*) AS c
+        FROM read_parquet(?)
+        WHERE PitchCall IS NOT NULL AND PitchCall NOT IN (
+          'BallCalled','StrikeCalled','InPlay','FoulBall','FoulBallNotFieldable',
+          'FoulBallFieldable','StrikeSwinging','HitByPitch','BallIntentional','Undefined'
+        )
+        GROUP BY PitchCall
+        ORDER BY c DESC
+        """,
+        [path],
+    ).fetchdf()
+
+    return {
+        "total": total,
+        "distinct_keys": distinct_keys,
+        "nulls": nulls,
+        "invalid_locs": invalid_locs,
+        "inplay_cov": inplay_cov,
+        "direction_outliers": direction_outliers,
+        "bad_pitchcall": bad_pitchcall,
+    }
+
+
+def page_data_quality():
+    st.title("Data Quality")
+    dq = _data_quality_summary()
+
+    st.subheader("Core Counts")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("Total Rows", f"{dq['total']:,}")
+    with c2:
+        st.metric("Distinct Pitch Keys", f"{dq['distinct_keys']:,}")
+    with c3:
+        st.metric("Duplicate Rows", f"{dq['total'] - dq['distinct_keys']:,}")
+
+    st.subheader("Missingness (raw parquet)")
+    st.dataframe(dq["nulls"], use_container_width=True)
+
+    st.subheader("Invalid Plate Location")
+    st.dataframe(dq["invalid_locs"], use_container_width=True)
+
+    st.subheader("In-Play Coverage")
+    st.dataframe(dq["inplay_cov"], use_container_width=True)
+
+    st.subheader("Direction Outliers (|Direction| > 90)")
+    st.dataframe(dq["direction_outliers"], use_container_width=True)
+
+    st.subheader("Unexpected PitchCall Values")
+    if dq["bad_pitchcall"].empty:
+        st.caption("No unexpected PitchCall values found.")
+    else:
+        st.dataframe(dq["bad_pitchcall"], use_container_width=True)
+
+
 # ──────────────────────────────────────────────
 # MAIN
 # ──────────────────────────────────────────────
@@ -15924,6 +16193,7 @@ def main():
         "Defensive Positioning",
         "Opponent Scouting",
         "Postgame Report",
+        "Data Quality",
     ], label_visibility="collapsed")
 
     data = load_davidson_data()
@@ -15959,6 +16229,8 @@ def main():
         page_scouting(data)
     elif page == "Postgame Report":
         page_postgame(data)
+    elif page == "Data Quality":
+        page_data_quality()
 
 
 if __name__ == "__main__":
