@@ -1135,41 +1135,39 @@ def build_tunnel_population_pop():
     COMMIT_TIME = 0.280
     N_STEPS = 20
 
-    # Data-driven benchmarks: computed from 200,000 consecutive pitch-by-pitch
-    # pairs using the same Euler physics model (280ms commit, IVB/HB accel).
-    # Calibrated at the PITCH-BY-PITCH level to match how _compute_tunnel_score
-    # actually scores pitchers (not aggregate-to-aggregate).
+    # AGGREGATE-level benchmarks for population builder (uses mean stats per pitch type).
+    # Aggregate commit seps are ~2x smaller than PBP because averaging removes variation.
     # Format: (p10, p25, p50, p75, p90, mean, std)
     PAIR_BENCHMARKS = {
-        'Changeup/Curveball': (3.5, 5.8, 9.3, 13.5, 18.1, 10.2, 5.9),
-        'Changeup/Cutter': (2.9, 4.9, 7.6, 11.1, 14.8, 8.4, 5.4),
-        'Changeup/Fastball': (3.0, 5.0, 7.9, 11.2, 14.8, 8.5, 4.9),
-        'Changeup/Sinker': (2.9, 4.8, 7.4, 10.8, 14.0, 8.1, 4.6),
-        'Changeup/Slider': (3.2, 5.2, 8.1, 11.8, 15.8, 9.0, 5.2),
-        'Changeup/Splitter': (3.4, 5.7, 8.6, 13.2, 17.1, 9.4, 5.2),
-        'Changeup/Sweeper': (3.5, 5.7, 8.7, 12.4, 16.3, 9.5, 5.4),
-        'Curveball/Cutter': (3.1, 5.1, 8.3, 11.9, 16.1, 9.2, 6.9),
-        'Curveball/Fastball': (3.1, 5.2, 8.3, 12.2, 16.4, 9.2, 5.6),
-        'Curveball/Sinker': (2.8, 4.9, 7.8, 12.1, 15.8, 8.9, 5.5),
-        'Curveball/Slider': (3.2, 5.4, 8.6, 12.5, 17.1, 9.5, 5.7),
-        'Curveball/Splitter': (3.8, 6.1, 9.1, 13.1, 18.5, 10.2, 5.8),
-        'Curveball/Sweeper': (6.3, 7.8, 10.2, 14.9, 17.7, 11.3, 4.9),
-        'Cutter/Fastball': (2.6, 4.3, 6.7, 9.6, 12.7, 7.3, 4.1),
-        'Cutter/Sinker': (2.3, 4.0, 6.4, 9.4, 12.7, 7.1, 4.3),
-        'Cutter/Slider': (2.8, 4.6, 7.5, 10.9, 14.8, 8.3, 5.2),
-        'Cutter/Splitter': (2.7, 4.5, 7.5, 10.5, 14.3, 8.2, 4.7),
-        'Cutter/Sweeper': (2.1, 5.4, 7.5, 11.4, 14.9, 8.4, 4.4),
-        'Fastball/Sinker': (2.4, 4.0, 6.3, 9.3, 12.4, 7.0, 4.2),
-        'Fastball/Slider': (2.9, 4.8, 7.6, 10.9, 14.6, 8.3, 4.9),
-        'Fastball/Splitter': (3.0, 4.7, 7.7, 11.1, 14.9, 8.4, 4.8),
-        'Fastball/Sweeper': (2.9, 5.0, 7.6, 11.0, 15.2, 8.5, 5.1),
-        'Sinker/Slider': (2.7, 4.6, 7.3, 10.7, 14.4, 8.1, 4.7),
-        'Sinker/Splitter': (2.8, 4.1, 7.3, 10.7, 14.3, 8.1, 5.1),
-        'Sinker/Sweeper': (3.1, 5.5, 7.9, 11.7, 14.0, 8.5, 4.2),
-        'Slider/Splitter': (3.2, 5.3, 8.5, 12.8, 16.6, 9.4, 5.4),
-        'Slider/Sweeper': (2.8, 4.4, 7.0, 11.1, 16.3, 8.3, 5.2),
+        'Changeup/Curveball': (2.2, 3.5, 5.2, 7.1, 9.3, 5.6, 3.1),
+        'Changeup/Cutter': (1.4, 2.2, 3.4, 4.9, 6.7, 3.9, 2.7),
+        'Changeup/Fastball': (1.8, 2.7, 4.0, 5.2, 6.6, 4.2, 2.1),
+        'Changeup/Sinker': (1.6, 2.4, 3.6, 5.0, 6.7, 4.0, 2.9),
+        'Changeup/Slider': (1.4, 2.2, 3.4, 4.8, 6.5, 3.8, 2.4),
+        'Changeup/Splitter': (1.0, 1.7, 2.6, 4.2, 6.1, 3.3, 2.8),
+        'Changeup/Sweeper': (1.7, 2.7, 4.4, 6.3, 8.6, 4.8, 2.7),
+        'Curveball/Cutter': (1.6, 2.5, 4.0, 5.8, 7.7, 4.4, 2.9),
+        'Curveball/Fastball': (1.5, 2.4, 3.7, 5.3, 7.1, 4.1, 2.6),
+        'Curveball/Sinker': (1.4, 2.5, 4.0, 6.0, 8.8, 4.9, 4.0),
+        'Curveball/Slider': (1.2, 2.0, 3.3, 5.0, 7.1, 4.0, 3.1),
+        'Curveball/Splitter': (2.1, 3.1, 4.6, 6.5, 9.1, 5.1, 2.8),
+        'Curveball/Sweeper': (1.1, 2.6, 3.8, 5.8, 8.0, 5.0, 5.0),
+        'Cutter/Fastball': (0.9, 1.5, 2.5, 3.8, 5.3, 3.0, 2.3),
+        'Cutter/Sinker': (1.0, 1.7, 2.7, 4.2, 6.3, 3.3, 2.9),
+        'Cutter/Slider': (0.9, 1.4, 2.4, 3.7, 5.4, 2.9, 2.4),
+        'Cutter/Splitter': (1.0, 1.7, 3.0, 5.0, 7.2, 3.6, 2.5),
+        'Cutter/Sweeper': (1.6, 2.6, 4.1, 5.8, 7.6, 4.3, 2.2),
+        'Fastball/Sinker': (0.8, 1.4, 2.3, 3.7, 5.6, 3.0, 2.8),
+        'Fastball/Slider': (1.1, 1.8, 2.9, 4.1, 5.6, 3.2, 2.0),
+        'Fastball/Splitter': (1.2, 2.0, 3.4, 4.8, 6.7, 3.7, 2.3),
+        'Fastball/Sweeper': (1.7, 2.9, 4.7, 7.1, 8.9, 5.2, 3.2),
+        'Sinker/Slider': (1.1, 1.9, 3.0, 4.4, 6.1, 3.5, 2.7),
+        'Sinker/Splitter': (1.1, 2.1, 3.4, 5.2, 7.7, 4.0, 2.8),
+        'Sinker/Sweeper': (1.4, 2.5, 4.0, 5.9, 8.5, 4.5, 2.4),
+        'Slider/Splitter': (1.1, 1.9, 3.2, 4.7, 7.0, 3.7, 2.7),
+        'Slider/Sweeper': (1.1, 1.8, 2.8, 4.5, 6.5, 3.5, 2.4),
     }
-    DEFAULT_BENCHMARK = (2.9, 4.9, 7.7, 11.2, 15.0, 8.5, 5.1)
+    DEFAULT_BENCHMARK = (1.2, 2.1, 3.3, 4.9, 6.8, 3.8, 2.7)
 
     def _euler_traj(rel_h, rel_s, loc_h, loc_s, ivb_val, hb_val, velo_mph, ext_val):
         ext_val = ext_val if not pd.isna(ext_val) else 6.0
