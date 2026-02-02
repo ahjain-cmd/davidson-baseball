@@ -5094,7 +5094,8 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
                     labels=dict(x="Next Pitch", y="Current Pitch", color="%"),
                     aspect="auto",
                 )
-                fig_matrix.update_layout(height=350, **CHART_LAYOUT)
+                fig_matrix.update_layout(height=350, **CHART_LAYOUT,
+                                        margin=dict(l=80, r=10, t=30, b=60))
                 st.plotly_chart(fig_matrix, use_container_width=True, key="plab_trans")
 
             with tcol2:
@@ -5109,15 +5110,17 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
                             labels=dict(x="Follow-Up Pitch", y="Setup Pitch", color="Whiff%"),
                             aspect="auto",
                         )
-                        fig_whiff.update_layout(height=350, **CHART_LAYOUT)
+                        fig_whiff.update_layout(height=350, **CHART_LAYOUT,
+                                               margin=dict(l=80, r=10, t=30, b=60))
                         st.plotly_chart(fig_whiff, use_container_width=True, key="plab_whiff_hm")
 
     # Count-state pitch selection
     st.markdown("**Count-State Pitch Selection**")
     counts_of_interest = [("0", "0"), ("0", "2"), ("1", "2"), ("2", "0"), ("3", "1"), ("3", "2")]
     count_rows = []
+    pdf_cs = pdf.dropna(subset=["Balls", "Strikes"]).copy() if "Balls" in pdf.columns and "Strikes" in pdf.columns else pd.DataFrame()
     for b, s in counts_of_interest:
-        count_data = pdf[(pdf["Balls"].astype(str) == b) & (pdf["Strikes"].astype(str) == s)]
+        count_data = pdf_cs[(pdf_cs["Balls"].astype(int).astype(str) == b) & (pdf_cs["Strikes"].astype(int).astype(str) == s)] if not pdf_cs.empty else pd.DataFrame()
         if len(count_data) >= 3:
             usage = count_data["TaggedPitchType"].value_counts(normalize=True) * 100
             for pt_name, pct in usage.items():
@@ -5221,9 +5224,10 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
                     ))
                     add_strike_zone(fig_loc)
                     fig_loc.update_layout(
-                        xaxis=dict(range=[-2.5, 2.5], title="", showticklabels=False),
+                        xaxis=dict(range=[-2, 2], title="", showticklabels=False,
+                                   scaleanchor="y", scaleratio=1),
                         yaxis=dict(range=[0, 5], title="", showticklabels=False),
-                        height=200, margin=dict(l=5, r=5, t=5, b=5),
+                        height=250, margin=dict(l=5, r=5, t=5, b=5),
                         plot_bgcolor="white", paper_bgcolor="white",
                     )
                     st.plotly_chart(fig_loc, use_container_width=True,
@@ -5292,8 +5296,9 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
     # ── Get Back in the Count: best pitches at 1-0 and 2-0 ──
     st.markdown("**Get Back in the Count (1-0, 2-0)**")
     st.caption("Best pitches to throw when behind — ranked by CSW% at that count.")
+    pdf_gbc = pdf.dropna(subset=["Balls", "Strikes"]).copy() if "Balls" in pdf.columns and "Strikes" in pdf.columns else pd.DataFrame()
     for count_label, b_str, s_str in [("1-0", "1", "0"), ("2-0", "2", "0")]:
-        count_d = pdf[(pdf["Balls"].astype(str) == b_str) & (pdf["Strikes"].astype(str) == s_str)]
+        count_d = pdf_gbc[(pdf_gbc["Balls"].astype(int).astype(str) == b_str) & (pdf_gbc["Strikes"].astype(int).astype(str) == s_str)] if not pdf_gbc.empty else pd.DataFrame()
         if len(count_d) < 5:
             st.info(f"Not enough data at {count_label}.")
             continue
