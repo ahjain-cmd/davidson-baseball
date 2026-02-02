@@ -363,6 +363,20 @@ st.markdown("""<style>
         color: #1a1a2e !important;
     }
 
+    /* Make selectboxes/multiselects white instead of grey */
+    [data-testid="stSelectbox"] div[data-baseweb="select"] > div,
+    [data-testid="stMultiSelect"] div[data-baseweb="select"] > div,
+    .stSelectbox div[data-baseweb="select"] > div,
+    .stMultiSelect div[data-baseweb="select"] > div {
+        background-color: #ffffff !important;
+        border: 1px solid #d0d0d0 !important;
+        color: #1a1a2e !important;
+    }
+    [data-testid="stSelectbox"] div[data-baseweb="select"] span,
+    [data-testid="stMultiSelect"] div[data-baseweb="select"] span {
+        color: #1a1a2e !important;
+    }
+
     /* Chart containers */
     [data-testid="stAppViewContainer"] .stPlotlyChart {
         background-color: #ffffff !important;
@@ -1240,6 +1254,16 @@ def build_tunnel_population_pop():
     if df.empty:
         return {}
 
+    # Drop low-usage pitch types per pitcher
+    pt_counts = df.groupby(["Pitcher", "TaggedPitchType"]).size().rename("pt_n").reset_index()
+    tot_counts = df.groupby("Pitcher").size().rename("tot_n").reset_index()
+    usage = pt_counts.merge(tot_counts, on="Pitcher", how="left")
+    usage["pct"] = usage["pt_n"] / usage["tot_n"] * 100
+    keep = usage[usage["pct"] >= MIN_PITCH_USAGE_PCT][["Pitcher", "TaggedPitchType"]]
+    df = df.merge(keep, on=["Pitcher", "TaggedPitchType"], how="inner")
+    if df.empty:
+        return {}
+
     # Sort for pitch order within PA
     sort_cols = ["GameID", "Inning", "PAofInning", "Batter", "PitchofPA"]
     df = df.sort_values([c for c in sort_cols if c in df.columns])
@@ -2107,6 +2131,8 @@ def _hitter_card_content(data, batter, season_filter, bdf, batted, pr, all_batte
                                    xaxis=dict(range=[-1.8, 1.8], title="Horizontal", scaleanchor="y"),
                                    yaxis=dict(range=[0.5, 4.5], title="Vertical"),
                                    legend=dict(orientation="h", y=1.08, x=0.5, xanchor="center", font=dict(size=10)))
+            fig_dmg.update_xaxes(tickfont=dict(color="#1a1a2e"), titlefont=dict(color="#1a1a2e"))
+            fig_dmg.update_yaxes(tickfont=dict(color="#1a1a2e"), titlefont=dict(color="#1a1a2e"))
             st.plotly_chart(fig_dmg, use_container_width=True, key="hc_damage")
         else:
             st.caption("Not enough batted ball data")
@@ -2127,6 +2153,8 @@ def _hitter_card_content(data, batter, season_filter, bdf, batted, pr, all_batte
             ))
             _add_grid_zone_outline(fig_wz)
             fig_wz.update_layout(**CHART_LAYOUT, height=350)
+            fig_wz.update_xaxes(tickfont=dict(color="#1a1a2e"), titlefont=dict(color="#1a1a2e"))
+            fig_wz.update_yaxes(tickfont=dict(color="#1a1a2e"), titlefont=dict(color="#1a1a2e"))
             st.plotly_chart(fig_wz, use_container_width=True, key="hc_whiff_zone")
         else:
             st.caption("Not enough swing data for whiff zones")
@@ -2152,6 +2180,8 @@ def _hitter_card_content(data, batter, season_filter, bdf, batted, pr, all_batte
             fig_prob.update_layout(**CHART_LAYOUT, height=350,
                                     xaxis=dict(range=[-1.8, 1.8], title="Horizontal", scaleanchor="y"),
                                     yaxis=dict(range=[0.5, 4.5], title="Vertical"))
+            fig_prob.update_xaxes(tickfont=dict(color="#1a1a2e"), titlefont=dict(color="#1a1a2e"))
+            fig_prob.update_yaxes(tickfont=dict(color="#1a1a2e"), titlefont=dict(color="#1a1a2e"))
             st.plotly_chart(fig_prob, use_container_width=True, key="hc_swing_prob")
         else:
             st.caption("Not enough pitch data")
@@ -4170,20 +4200,23 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
     # ── Percentile Rankings + Arsenal Table side by side ──
     pc_col1, pc_col2 = st.columns([1, 1], gap="medium")
     with pc_col1:
-        p_metrics = [
-            ("FB Velo", pr["AvgFBVelo"], get_percentile(pr["AvgFBVelo"], all_stats["AvgFBVelo"]), ".1f", True),
-            ("Avg EV Against", pr["AvgEVAgainst"], get_percentile(pr["AvgEVAgainst"], all_stats["AvgEVAgainst"]), ".1f", False),
-            ("Chase %", pr["ChasePct"], get_percentile(pr["ChasePct"], all_stats["ChasePct"]), ".1f", True),
-            ("Whiff %", pr["WhiffPct"], get_percentile(pr["WhiffPct"], all_stats["WhiffPct"]), ".1f", True),
-            ("K %", pr["KPct"], get_percentile(pr["KPct"], all_stats["KPct"]), ".1f", True),
-            ("BB %", pr["BBPct"], get_percentile(pr["BBPct"], all_stats["BBPct"]), ".1f", False),
-            ("Barrel %", pr["BarrelPctAgainst"], get_percentile(pr["BarrelPctAgainst"], all_stats["BarrelPctAgainst"]), ".1f", False),
-            ("Hard Hit %", pr["HardHitAgainst"], get_percentile(pr["HardHitAgainst"], all_stats["HardHitAgainst"]), ".1f", False),
-            ("GB %", pr["GBPct"], get_percentile(pr["GBPct"], all_stats["GBPct"]), ".1f", True),
-            ("Extension", pr["Extension"], get_percentile(pr["Extension"], all_stats["Extension"]), ".1f", True),
-        ]
-        render_savant_percentile_section(p_metrics, "Percentile Rankings")
-        st.caption(f"vs. {len(all_stats)} pitchers in database (min 100 pitches)")
+        if pr is None or all_stats is None or all_stats.empty:
+            st.info("Population percentiles unavailable for this pitcher.")
+        else:
+            p_metrics = [
+                ("FB Velo", pr["AvgFBVelo"], get_percentile(pr["AvgFBVelo"], all_stats["AvgFBVelo"]), ".1f", True),
+                ("Avg EV Against", pr["AvgEVAgainst"], get_percentile(pr["AvgEVAgainst"], all_stats["AvgEVAgainst"]), ".1f", False),
+                ("Chase %", pr["ChasePct"], get_percentile(pr["ChasePct"], all_stats["ChasePct"]), ".1f", True),
+                ("Whiff %", pr["WhiffPct"], get_percentile(pr["WhiffPct"], all_stats["WhiffPct"]), ".1f", True),
+                ("K %", pr["KPct"], get_percentile(pr["KPct"], all_stats["KPct"]), ".1f", True),
+                ("BB %", pr["BBPct"], get_percentile(pr["BBPct"], all_stats["BBPct"]), ".1f", False),
+                ("Barrel %", pr["BarrelPctAgainst"], get_percentile(pr["BarrelPctAgainst"], all_stats["BarrelPctAgainst"]), ".1f", False),
+                ("Hard Hit %", pr["HardHitAgainst"], get_percentile(pr["HardHitAgainst"], all_stats["HardHitAgainst"]), ".1f", False),
+                ("GB %", pr["GBPct"], get_percentile(pr["GBPct"], all_stats["GBPct"]), ".1f", True),
+                ("Extension", pr["Extension"], get_percentile(pr["Extension"], all_stats["Extension"]), ".1f", True),
+            ]
+            render_savant_percentile_section(p_metrics, "Percentile Rankings")
+            st.caption(f"vs. {len(all_stats)} pitchers in database (min 100 pitches)")
 
     with pc_col2:
         section_header("Movement Profile (Induced Break)")
@@ -4673,6 +4706,8 @@ def _compute_pitch_recommendations(pdf, data, tunnel_df):
 
             # Cross-reference with tunnel partners
             tunnel_benefit = ""
+            tunnel_partner = ""
+            tunnel_grade = ""
             partners = tunnel_partners.get(pt, [])
             if partners:
                 # Find a partner where improving this metric would help
@@ -4687,6 +4722,8 @@ def _compute_pitch_recommendations(pdf, data, tunnel_df):
                         elif m == "VertApprAngle":
                             tunnel_benefit = f"Helps deception against {partner_pt} (currently grade {tgrade})"
                         if tunnel_benefit:
+                            tunnel_partner = partner_pt
+                            tunnel_grade = tgrade
                             break
 
             recommendations.append({
@@ -4700,6 +4737,8 @@ def _compute_pitch_recommendations(pdf, data, tunnel_df):
                 "unit": unit,
                 "good_pctl": round(g["good_pctl"], 0),
                 "tunnel_benefit": tunnel_benefit,
+                "tunnel_partner": tunnel_partner,
+                "tunnel_grade": tunnel_grade,
             })
 
     return recommendations
@@ -4732,11 +4771,21 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
     for r in recommendations:
         rec_by_pitch.setdefault(r["pitch"], []).append(r)
 
+    # Split toggle for outcomes/targets
+    split_mode = st.radio("Split View", ["All", "vs LHB", "vs RHB"], horizontal=True, key="pl_split_view")
+    if split_mode == "vs LHB":
+        pdf_split = pdf[pdf["BatterSide"] == "Left"].copy()
+    elif split_mode == "vs RHB":
+        pdf_split = pdf[pdf["BatterSide"] == "Right"].copy()
+    else:
+        pdf_split = pdf
+
     for pt in pitch_types:
-        pt_d = pdf[pdf["TaggedPitchType"] == pt]
+        pt_d = pdf_split[pdf_split["TaggedPitchType"] == pt]
         if len(pt_d) < 10:
             continue
         color = PITCH_COLORS.get(pt, "#888")
+        usage_pct = len(pt_d) / max(len(pdf), 1) * 100
 
         # Compute metrics
         velo = pt_d["RelSpeed"].mean()
@@ -4747,11 +4796,20 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
         ext = pt_d["Extension"].mean() if "Extension" in pt_d.columns else np.nan
         stuff_val = stuff_df[stuff_df["TaggedPitchType"] == pt]["StuffPlus"].mean() if has_stuff else np.nan
         cmd_val = cmd_map.get(pt, np.nan)
+        sw = pt_d[pt_d["PitchCall"].isin(SWING_CALLS)]
+        wh = pt_d[pt_d["PitchCall"] == "StrikeSwinging"]
+        csw = pt_d[pt_d["PitchCall"].isin(["StrikeCalled", "StrikeSwinging"])]
+        inplay_ev = pt_d[(pt_d["PitchCall"] == "InPlay") & pt_d["ExitSpeed"].notna()]
+        hard_hit = inplay_ev[inplay_ev["ExitSpeed"] >= 95]
+        whiff_pct = len(wh) / max(len(sw), 1) * 100 if len(sw) > 0 else np.nan
+        csw_pct = len(csw) / max(len(pt_d), 1) * 100 if len(pt_d) > 0 else np.nan
+        hh_pct = len(hard_hit) / max(len(inplay_ev), 1) * 100 if len(inplay_ev) > 0 else np.nan
 
         # Header bar
         stuff_str = f"Stuff+ {stuff_val:.0f}" if not pd.isna(stuff_val) else ""
         cmd_str = f"Cmd+ {cmd_val:.0f}" if not pd.isna(cmd_val) else ""
-        badges = " &middot; ".join(filter(None, [stuff_str, cmd_str]))
+        usage_str = f"Usage {usage_pct:.1f}% · N={len(pt_d)}"
+        badges = " &middot; ".join(filter(None, [stuff_str, cmd_str, usage_str]))
         st.markdown(
             f'<div style="padding:8px 14px;border-radius:8px;border-left:5px solid {color};'
             f'background:{color}12;margin:8px 0 4px 0;">'
@@ -4774,11 +4832,29 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
         _metric_cell(mc5, "VAA", vaa, ".1f", "°")
         _metric_cell(mc6, "Ext", ext, ".1f", " ft")
 
+        # Outcome row
+        oc1, oc2, oc3 = st.columns(3)
+        def _outcome_cell(col, label, val):
+            with col:
+                v_str = f"{val:.1f}%" if not pd.isna(val) else "-"
+                st.markdown(
+                    f'<div style="text-align:center;"><div style="font-size:11px;color:#555;">{label}</div>'
+                    f'<div style="font-size:14px;font-weight:700;color:#111;">{v_str}</div></div>',
+                    unsafe_allow_html=True)
+        _outcome_cell(oc1, "Whiff%", whiff_pct)
+        _outcome_cell(oc2, "CSW%", csw_pct)
+        _outcome_cell(oc3, "HardHit%", hh_pct)
+
         # Recommendations for this pitch
         recs = rec_by_pitch.get(pt, [])
         if recs:
             for rec in recs:
                 pctl_str = f"{rec['good_pctl']:.0f}th pctl"
+                basis_str = f"Target basis: D1 {pctl_str}"
+                proj_grade = ""
+                if rec.get("tunnel_grade"):
+                    next_grade = {"F": "D", "D": "C", "C": "B", "B": "A"}.get(rec["tunnel_grade"], rec["tunnel_grade"])
+                    proj_grade = f"Tunnel impact: {rec['tunnel_grade']} → {next_grade} (heuristic)"
                 tun_str = f" — {rec['tunnel_benefit']}" if rec['tunnel_benefit'] else ""
                 st.markdown(
                     f'<div style="padding:4px 12px;margin:2px 0;font-size:12px;'
@@ -4787,6 +4863,8 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
                     f'currently {rec["current"]} {rec["unit"]} ({pctl_str}), '
                     f'target {rec["target"]} {rec["unit"]} ({rec["delta"]})'
                     f'{tun_str}'
+                    f'<div style="font-size:11px;color:#555;margin-top:2px;">{basis_str}'
+                    f'{(" · " + proj_grade) if proj_grade else ""}</div>'
                     f'</div>', unsafe_allow_html=True)
         else:
             st.markdown(
@@ -5290,10 +5368,10 @@ def page_pitching(data):
         season_filter = st.multiselect("Season", all_seasons, default=all_seasons, key="pitching_season")
 
     all_pitcher_stats = compute_pitcher_stats_pop(season_filter=season_filter)
+    pr = None
     if all_pitcher_stats.empty or pitcher not in all_pitcher_stats["Pitcher"].values:
-        st.info("Not enough data for this pitcher.")
-        return
-
+        st.info("Not enough population data for this pitcher — showing available team data only.")
+    else:
     pr = all_pitcher_stats[all_pitcher_stats["Pitcher"] == pitcher].iloc[0]
     pdf_raw = pitching[(pitching["Pitcher"] == pitcher) & (pitching["Season"].isin(season_filter))]
     pdf = filter_minor_pitches(pdf_raw)
@@ -5301,15 +5379,22 @@ def page_pitching(data):
         st.warning("Not enough pitch data (need 20+).")
         return
 
+    if pr is None:
+        # Fallback to pitcher-local stats if population stats missing
+        pr_local = compute_pitcher_stats(pdf, season_filter=None)
+        if not pr_local.empty:
+            pr = pr_local.iloc[0]
+
     # Player header
     jersey = JERSEY.get(pitcher, "")
     pos = POSITION.get(pitcher, "")
     throws = safe_mode(pdf["PitcherThrows"], "")
     thr = {"Right": "R", "Left": "L"}.get(throws, throws)
     total_pitches = len(pdf)
+    pa_faced = int(pr["PA"]) if pr is not None and "PA" in pr else 0
     player_header(pitcher, jersey, pos,
                   f"{pos}  |  Throws: {thr}  |  Davidson Wildcats",
-                  f"{total_pitches} pitches  |  {int(pr['PA'])} PA faced  |  "
+                  f"{total_pitches} pitches  |  {pa_faced} PA faced  |  "
                   f"Seasons: {', '.join(str(int(s)) for s in sorted(season_filter))}")
 
     # Compute Stuff+ for pitcher card
@@ -11555,9 +11640,12 @@ def _pitching_lab_content(data, pitcher, season_filter, pdf, stuff_df,
             st.error("Could not compute Stuff+ scores. Not enough data for this pitcher.")
         return
 
-    # Pre-compute tunnel data (used by both Tunnel and Sequencing tabs)
+    # Pre-compute tunnel/sequence data with <5% usage removed
+    pdf_tunnel = filter_minor_pitches(pdf, min_pct=MIN_PITCH_USAGE_PCT)
+    if pdf_tunnel.empty:
+        pdf_tunnel = pdf
     tunnel_pop = build_tunnel_population_pop()
-    tunnel_df = _compute_tunnel_score(pdf, tunnel_pop=tunnel_pop)
+    tunnel_df = _compute_tunnel_score(pdf_tunnel, tunnel_pop=tunnel_pop)
 
     # ═══════════════════════════════════════════
     # TAB 1: STUFF+ GRADES
@@ -11786,7 +11874,7 @@ def _pitching_lab_content(data, pitcher, season_filter, pdf, stuff_df,
         st.caption("Shows what happens when Pitch B follows Pitch A in the same at-bat. "
                    "Use this to find your most effective pitch combinations.")
 
-        pair_df = _compute_pitch_pair_results(pdf, data, tunnel_df=tunnel_df)
+        pair_df = _compute_pitch_pair_results(pdf_tunnel, data, tunnel_df=tunnel_df)
         if pair_df.empty:
             st.info("Not enough sequential pitch data.")
         else:
@@ -11796,9 +11884,9 @@ def _pitching_lab_content(data, pitcher, season_filter, pdf, stuff_df,
             # Transition matrix heatmap
             section_header("Pitch Transition Matrix")
             st.caption("How often does each pitch follow another? Heat = frequency")
-            sort_cols = [c for c in ["GameID", "Batter", "PAofInning", "PitchNo"] if c in pdf.columns]
+            sort_cols = [c for c in ["GameID", "Batter", "PAofInning", "PitchNo"] if c in pdf_tunnel.columns]
             if len(sort_cols) >= 2:
-                pdf_s = pdf.sort_values(sort_cols).copy()
+                pdf_s = pdf_tunnel.sort_values(sort_cols).copy()
                 pdf_s["NextPitch"] = pdf_s.groupby(["GameID", "Batter", "PAofInning"])["TaggedPitchType"].shift(-1)
                 trans = pdf_s.dropna(subset=["NextPitch"])
                 if not trans.empty:
