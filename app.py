@@ -2006,7 +2006,7 @@ def _add_grid_zone_outline(fig, color="#333", width=3):
 
 CHART_LAYOUT = dict(
     plot_bgcolor="white", paper_bgcolor="white",
-    font=dict(size=11, color="#1a1a2e", family="Inter, Arial, sans-serif"),
+    font=dict(size=11, color="#000000", family="Inter, Arial, sans-serif"),
     margin=dict(l=45, r=10, t=30, b=40),
 )
 
@@ -2076,9 +2076,9 @@ def make_spray_chart(in_play_df, height=360):
                    scaleanchor="x", fixedrange=True),
         height=height, margin=dict(l=0, r=0, t=5, b=0),
         plot_bgcolor="white", paper_bgcolor="white",
-        font=dict(color="#1a1a2e", family="Inter, Arial, sans-serif"),
+        font=dict(color="#000000", family="Inter, Arial, sans-serif"),
         legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="center", x=0.5,
-                    font=dict(size=10, color="#1a1a2e"), bgcolor="rgba(0,0,0,0)"),
+                    font=dict(size=10, color="#000000"), bgcolor="rgba(0,0,0,0)"),
     )
     return fig
 
@@ -2217,8 +2217,8 @@ def _hitter_card_content(data, batter, season_filter, bdf, batted, pr, all_batte
                                    xaxis=dict(range=[-1.8, 1.8], title="Horizontal", scaleanchor="y"),
                                    yaxis=dict(range=[0.5, 4.5], title="Vertical"),
                                    legend=dict(orientation="h", y=1.08, x=0.5, xanchor="center", font=dict(size=10)))
-            fig_dmg.update_xaxes(tickfont=dict(color="#1a1a2e"), title_font=dict(color="#1a1a2e"))
-            fig_dmg.update_yaxes(tickfont=dict(color="#1a1a2e"), title_font=dict(color="#1a1a2e"))
+            fig_dmg.update_xaxes(tickfont=dict(color="#000000"), title_font=dict(color="#000000"))
+            fig_dmg.update_yaxes(tickfont=dict(color="#000000"), title_font=dict(color="#000000"))
             st.plotly_chart(fig_dmg, use_container_width=True, key="hc_damage")
         else:
             st.caption("Not enough batted ball data")
@@ -2239,8 +2239,8 @@ def _hitter_card_content(data, batter, season_filter, bdf, batted, pr, all_batte
             ))
             _add_grid_zone_outline(fig_wz)
             fig_wz.update_layout(**CHART_LAYOUT, height=350)
-            fig_wz.update_xaxes(tickfont=dict(color="#1a1a2e"), title_font=dict(color="#1a1a2e"))
-            fig_wz.update_yaxes(tickfont=dict(color="#1a1a2e"), title_font=dict(color="#1a1a2e"))
+            fig_wz.update_xaxes(tickfont=dict(color="#000000"), title_font=dict(color="#000000"))
+            fig_wz.update_yaxes(tickfont=dict(color="#000000"), title_font=dict(color="#000000"))
             st.plotly_chart(fig_wz, use_container_width=True, key="hc_whiff_zone")
         else:
             st.caption("Not enough swing data for whiff zones")
@@ -2266,8 +2266,8 @@ def _hitter_card_content(data, batter, season_filter, bdf, batted, pr, all_batte
             fig_prob.update_layout(**CHART_LAYOUT, height=350,
                                     xaxis=dict(range=[-1.8, 1.8], title="Horizontal", scaleanchor="y"),
                                     yaxis=dict(range=[0.5, 4.5], title="Vertical"))
-            fig_prob.update_xaxes(tickfont=dict(color="#1a1a2e"), title_font=dict(color="#1a1a2e"))
-            fig_prob.update_yaxes(tickfont=dict(color="#1a1a2e"), title_font=dict(color="#1a1a2e"))
+            fig_prob.update_xaxes(tickfont=dict(color="#000000"), title_font=dict(color="#000000"))
+            fig_prob.update_yaxes(tickfont=dict(color="#000000"), title_font=dict(color="#000000"))
             st.plotly_chart(fig_prob, use_container_width=True, key="hc_swing_prob")
         else:
             st.caption("Not enough pitch data")
@@ -2351,8 +2351,8 @@ def _hitter_card_content(data, batter, season_filter, bdf, batted, pr, all_batte
             ))
             fig.update_layout(
                 annotations=annotations,
-                xaxis=dict(side="top", tickfont=dict(size=12, color="#1a1a2e")),
-                yaxis=dict(tickfont=dict(size=12, color="#1a1a2e"), autorange="reversed"),
+                xaxis=dict(side="top", tickfont=dict(size=12, color="#000000")),
+                yaxis=dict(tickfont=dict(size=12, color="#000000"), autorange="reversed"),
                 height=250, margin=dict(l=80, r=20, t=40, b=20),
                 plot_bgcolor="white", paper_bgcolor="white",
                 font=dict(family="Inter, Arial, sans-serif"),
@@ -2513,7 +2513,7 @@ def _hitter_card_content(data, batter, season_filter, bdf, batted, pr, all_batte
                                showarrow=False, font=dict(size=9, color="#e63946"))
             fig.update_layout(height=350, showlegend=True,
                               legend=dict(orientation="h", yanchor="bottom", y=1.02,
-                                          font=dict(size=9, color="#1a1a2e")),
+                                          font=dict(size=9, color="#000000")),
                               **CHART_LAYOUT)
             st.plotly_chart(fig, use_container_width=True, key="hc_ev_la")
         else:
@@ -2721,7 +2721,7 @@ def _hitting_overview(data, batter, season_filter, bdf, batted, pr, all_batter_s
                                showarrow=False, font=dict(size=9, color="#e63946"))
             fig.update_layout(height=300, showlegend=True,
                               legend=dict(orientation="h", yanchor="bottom", y=1.02,
-                                          font=dict(size=9, color="#1a1a2e")),
+                                          font=dict(size=9, color="#000000")),
                               **CHART_LAYOUT)
             st.plotly_chart(fig, use_container_width=True, key="hitter_ev_la")
         else:
@@ -2742,7 +2742,7 @@ def _hitting_overview(data, batter, season_filter, bdf, batted, pr, all_batter_s
                 yaxis=dict(range=[0, 5], showticklabels=False, title=""),
                 height=300, margin=dict(l=0, r=0, t=5, b=0),
                 coloraxis_showscale=False, plot_bgcolor="white", paper_bgcolor="white",
-                font=dict(color="#1a1a2e", family="Inter, Arial, sans-serif"),
+                font=dict(color="#000000", family="Inter, Arial, sans-serif"),
             )
             st.plotly_chart(fig, use_container_width=True, key="hitter_swing_hm")
         else:
@@ -2927,8 +2927,8 @@ def _hitting_overview(data, batter, season_filter, bdf, batted, pr, all_batter_s
         ))
         fig.update_layout(
             annotations=annotations,
-            xaxis=dict(side="top", tickfont=dict(size=12, color="#1a1a2e")),
-            yaxis=dict(tickfont=dict(size=12, color="#1a1a2e"), autorange="reversed"),
+            xaxis=dict(side="top", tickfont=dict(size=12, color="#000000")),
+            yaxis=dict(tickfont=dict(size=12, color="#000000"), autorange="reversed"),
             height=250, margin=dict(l=80, r=20, t=40, b=20),
             plot_bgcolor="white", paper_bgcolor="white",
             font=dict(family="Inter, Arial, sans-serif"),
@@ -3726,10 +3726,10 @@ def make_movement_profile(pdf, height=520):
         yaxis=dict(range=[-max_r, max_r], showgrid=False, zeroline=False,
                    showticklabels=False, title="", fixedrange=True),
         height=height, plot_bgcolor="#f0f4f8", paper_bgcolor="white",
-        font=dict(color="#1a1a2e", family="Inter, Arial, sans-serif"),
+        font=dict(color="#000000", family="Inter, Arial, sans-serif"),
         margin=dict(l=10, r=10, t=30, b=10),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5,
-                    font=dict(size=11, color="#1a1a2e")),
+                    font=dict(size=11, color="#000000")),
     )
     return fig
 
@@ -3779,7 +3779,7 @@ def make_pitch_location_heatmap(pitch_data, title, color, height=380):
                    title="", fixedrange=True),
         height=height, margin=dict(l=5, r=5, t=5, b=5),
         plot_bgcolor="white", paper_bgcolor="white",
-        font=dict(color="#1a1a2e", family="Inter, Arial, sans-serif"),
+        font=dict(color="#000000", family="Inter, Arial, sans-serif"),
     )
     return fig
 
@@ -3924,7 +3924,7 @@ def _pitching_overview(data, pitcher, season_filter, pdf, pdf_raw, pr, all_pitch
                 marker_color=[PITCH_COLORS.get(p, "#aaa") for p in usage_df["Pitch"]],
                 text=[f'{v}%' for v in usage_df["Use%"]],
                 textposition="outside",
-                textfont=dict(color="#1a1a2e", size=12, family="Inter"),
+                textfont=dict(color="#000000", size=12, family="Inter"),
             ))
             fig.update_layout(
                 xaxis_title="Usage %", yaxis_title="",
@@ -3961,7 +3961,7 @@ def _pitching_overview(data, pitcher, season_filter, pdf, pdf_raw, pr, all_pitch
                 marker_color=[PITCH_COLORS.get(p, "#aaa") for p in whiff_df["Pitch"]],
                 text=[f'{v}%' for v in whiff_df["Whiff%"]],
                 textposition="outside",
-                textfont=dict(color="#1a1a2e", size=12, family="Inter"),
+                textfont=dict(color="#000000", size=12, family="Inter"),
             ))
             fig.update_layout(
                 yaxis_title="Whiff %", height=350, showlegend=False, **CHART_LAYOUT,
@@ -3981,7 +3981,7 @@ def _pitching_overview(data, pitcher, season_filter, pdf, pdf_raw, pr, all_pitch
         fig.update_layout(
             height=400,
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5,
-                        font=dict(size=11, color="#1a1a2e")),
+                        font=dict(size=11, color="#000000")),
             **CHART_LAYOUT,
         )
         st.plotly_chart(fig, use_container_width=True, key="pitcher_velo_time")
@@ -3997,7 +3997,7 @@ def _pitching_overview(data, pitcher, season_filter, pdf, pdf_raw, pr, all_pitch
         fig.update_layout(
             height=400,
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5,
-                        font=dict(size=11, color="#1a1a2e")),
+                        font=dict(size=11, color="#000000")),
             **CHART_LAYOUT,
         )
         st.plotly_chart(fig, use_container_width=True, key="pitcher_spin_time")
@@ -4033,7 +4033,7 @@ def _pitching_overview(data, pitcher, season_filter, pdf, pdf_raw, pr, all_pitch
                 height=400,
                 xaxis=dict(scaleanchor="y"),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5,
-                            font=dict(size=10, color="#1a1a2e")),
+                            font=dict(size=10, color="#000000")),
                 **CHART_LAYOUT,
             )
             st.plotly_chart(fig, use_container_width=True, key="pitcher_rp")
@@ -4230,7 +4230,7 @@ def _pitching_overview(data, pitcher, season_filter, pdf, pdf_raw, pr, all_pitch
                     labels=fp_usage.index, values=fp_usage.values,
                     marker_colors=[PITCH_COLORS.get(p, "#aaa") for p in fp_usage.index],
                     hole=0.4, textinfo="label+percent",
-                    textfont=dict(size=11, color="#1a1a2e"),
+                    textfont=dict(size=11, color="#000000"),
                 ))
                 fig.update_layout(height=280, margin=dict(l=10, r=10, t=10, b=10),
                                   plot_bgcolor="white", paper_bgcolor="white", showlegend=False)
@@ -4268,7 +4268,7 @@ def _pitching_overview(data, pitcher, season_filter, pdf, pdf_raw, pr, all_pitch
                         labels=ts_usage.index, values=ts_usage.values,
                         marker_colors=[PITCH_COLORS.get(p, "#aaa") for p in ts_usage.index],
                         hole=0.4, textinfo="label+percent",
-                        textfont=dict(size=11, color="#1a1a2e"),
+                        textfont=dict(size=11, color="#000000"),
                     ))
                     fig.update_layout(height=280, margin=dict(l=10, r=10, t=10, b=10),
                                       plot_bgcolor="white", paper_bgcolor="white", showlegend=False)
@@ -4566,7 +4566,7 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
                     aspect="auto",
                 )
                 fig_matrix.update_layout(height=280, plot_bgcolor="white", paper_bgcolor="white",
-                                         font=dict(size=11, color="#1a1a2e", family="Inter, Arial, sans-serif"),
+                                         font=dict(size=11, color="#000000", family="Inter, Arial, sans-serif"),
                                          margin=dict(l=45, r=10, t=10, b=40))
                 st.plotly_chart(fig_matrix, use_container_width=True, key="pc_trans_mini")
 
@@ -5055,7 +5055,7 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
                                 legend=dict(orientation="h", yanchor="bottom", y=1.02,
                                             xanchor="center", x=0.5, font=dict(size=10)),
                                 plot_bgcolor="white", paper_bgcolor="white",
-                                font=dict(size=11, color="#1a1a2e", family="Inter, Arial, sans-serif"),
+                                font=dict(size=11, color="#000000", family="Inter, Arial, sans-serif"),
                                 margin=dict(l=40, r=10, t=40, b=35),
                             )
                             st.plotly_chart(fig_rel, use_container_width=True,
@@ -8580,7 +8580,7 @@ def _hitting_plan_content(tm, team, data, season_filter):
                 y=[r[1] for r in arsenal_rows],
                 marker_color=[PITCH_COLORS.get(r[0], "#888") for r in arsenal_rows],
                 text=[f"{r[1]:.1f}%" for r in arsenal_rows], textposition="outside",
-                textfont=dict(size=11, color="#1a1a2e"),
+                textfont=dict(size=11, color="#000000"),
             ))
             fig.update_layout(**CHART_LAYOUT, height=250, yaxis_title="Usage %", showlegend=False,
                               yaxis=dict(range=[0, max(r[1] for r in arsenal_rows) * 1.3]))
@@ -9661,7 +9661,7 @@ def _scouting_hitter_report(tm, team, trackman_data):
                     fig_spray.add_annotation(
                         x=lbl_r * math.sin(lbl_t), y=lbl_r * math.cos(lbl_t),
                         text=f"<b>{z:.0f}%</b>", showarrow=False,
-                        font=dict(size=12, color="#1a1a2e"), bgcolor="rgba(255,255,255,0.8)",
+                        font=dict(size=12, color="#000000"), bgcolor="rgba(255,255,255,0.8)",
                     )
 
                 # Field labels
@@ -9801,7 +9801,7 @@ def _scouting_hitter_report(tm, team, trackman_data):
                     x=sr_df["Pitch"], y=sr_df["Swing%"],
                     marker_color=sr_df["Color"],
                     text=sr_df["Swing%"].apply(lambda x: f"{x:.1f}%"),
-                    textposition="outside", textfont=dict(size=11, color="#1a1a2e"),
+                    textposition="outside", textfont=dict(size=11, color="#000000"),
                 ))
                 fig_sw.update_layout(
                     **CHART_LAYOUT, height=280,
@@ -9941,7 +9941,7 @@ def _scouting_hitter_report(tm, team, trackman_data):
                     x=aw_df["Matchup"], y=aw_df["Whiff%"],
                     marker_color=aw_df["Color"],
                     text=aw_df["Whiff%"].apply(lambda x: f"{x:.1f}%"),
-                    textposition="outside", textfont=dict(size=11, color="#1a1a2e"),
+                    textposition="outside", textfont=dict(size=11, color="#000000"),
                 ))
                 fig_wh.update_layout(
                     **CHART_LAYOUT, height=280,
@@ -10252,7 +10252,7 @@ def _scouting_pitcher_report(tm, team, trackman_data):
                         y=[r["Usage"] for r in arsenal_rows],
                         marker_color=[PITCH_COLORS.get(r["Pitch"].replace("-", ""), "#888") for r in arsenal_rows],
                         text=[f"{r['Usage']:.1f}%" for r in arsenal_rows], textposition="outside",
-                        textfont=dict(size=11, color="#1a1a2e"),
+                        textfont=dict(size=11, color="#000000"),
                     ))
                     fig.update_layout(**CHART_LAYOUT, height=280, yaxis_title="Usage %", showlegend=False,
                                       yaxis=dict(range=[0, max(r["Usage"] for r in arsenal_rows) * 1.3]))
@@ -10331,7 +10331,7 @@ def _scouting_pitcher_report(tm, team, trackman_data):
                         hovertemplate="Zone: %{y} %{x}<br>Frequency: %{text}<extra></extra>",
                     ))
                     fig_hm.add_shape(type="rect", x0=-0.5, y0=-0.5, x1=2.5, y1=2.5,
-                                     line=dict(color="#1a1a2e", width=3))
+                                     line=dict(color="#000000", width=3))
                     fig_hm.update_layout(
                         **CHART_LAYOUT, height=280,
                         xaxis=dict(side="bottom"), yaxis=dict(autorange="reversed"),
@@ -12321,9 +12321,9 @@ def _pitching_lab_content(data, pitcher, season_filter, pdf, stuff_df,
                         ),
                         margin=dict(l=0, r=0, t=30, b=0),
                         paper_bgcolor="white",
-                        font=dict(size=10, color="#1a1a2e", family="Inter, Arial, sans-serif"),
+                        font=dict(size=10, color="#000000", family="Inter, Arial, sans-serif"),
                         legend=dict(orientation="h", yanchor="bottom", y=1.02,
-                                    font=dict(color="#1a1a2e")),
+                                    font=dict(color="#000000")),
                     )
                     st.plotly_chart(fig_3d, use_container_width=True)
 
@@ -12964,7 +12964,7 @@ def _hitting_lab_content(data, batter, season_filter, bdf, batted, pr, all_batte
                                 hovertemplate="EV: %{marker.color:.1f}<extra></extra>"))
                             add_strike_zone(fig_pt)
                             fig_pt.update_layout(plot_bgcolor="white", paper_bgcolor="white",
-                                                  font=dict(size=11, color="#1a1a2e", family="Inter, Arial, sans-serif"),
+                                                  font=dict(size=11, color="#000000", family="Inter, Arial, sans-serif"),
                                                   height=300,
                                                   xaxis=dict(range=[-2.5, 2.5], showticklabels=False),
                                                   yaxis=dict(range=[0, 5], showticklabels=False),
@@ -13494,7 +13494,7 @@ def _hitting_lab_content(data, batter, season_filter, bdf, batted, pr, all_batte
                         x=hard_hit["Angle"], nbinsx=25,
                         marker_color=swing_color, opacity=0.85, name=f"Hard-Hit (≥{ev_75:.0f} mph)",
                     ))
-                    fig_aa.add_vline(x=attack_angle, line_dash="solid", line_color="#1a1a2e",
+                    fig_aa.add_vline(x=attack_angle, line_dash="solid", line_color="#000000",
                                      annotation_text=f"Attack: {attack_angle:+.1f}°", annotation_position="top right")
                     fig_aa.add_vline(x=avg_la_all, line_dash="dash", line_color="#888",
                                      annotation_text=f"All LA: {avg_la_all:+.1f}°", annotation_position="top left")
@@ -13527,7 +13527,7 @@ def _hitting_lab_content(data, batter, season_filter, bdf, batted, pr, all_batte
                     x_line = np.linspace(hard_hit["PlateLocHeight"].min(), hard_hit["PlateLocHeight"].max(), 50)
                     fig_aa_h.add_trace(go.Scatter(
                         x=x_line, y=v_int + v_slope * x_line, mode="lines",
-                        line=dict(color="#1a1a2e", width=2.5), name="Bat Path Fit",
+                        line=dict(color="#000000", width=2.5), name="Bat Path Fit",
                     ))
                     fig_aa_h.add_hline(y=0, line_dash="dot", line_color="#ccc")
                     fig_aa_h.update_layout(**CHART_LAYOUT, height=300,
@@ -13555,7 +13555,7 @@ def _hitting_lab_content(data, batter, season_filter, bdf, batted, pr, all_batte
                         hx = np.linspace(h_data["PlateLocSide"].min(), h_data["PlateLocSide"].max(), 50)
                         fig_hp.add_trace(go.Scatter(
                             x=hx, y=h_int + h_slope * hx, mode="lines",
-                            line=dict(color="#1a1a2e", width=2.5), name="Trend",
+                            line=dict(color="#000000", width=2.5), name="Trend",
                         ))
                         fig_hp.add_hline(y=0, line_dash="dot", line_color="#ccc", annotation_text="Center Field")
                         fig_hp.update_layout(**CHART_LAYOUT, height=300,
@@ -14085,7 +14085,7 @@ def _game_planning_content(data, pitcher=None, season_filter=None, pdf=None, key
                                     x=labels, y=seps, mode="lines+markers+text",
                                     text=[f"{s:.1f}″" for s in seps],
                                     textposition="top center",
-                                    line=dict(color="#1a1a2e", width=3),
+                                    line=dict(color="#000000", width=3),
                                     marker=dict(size=10, color=[grade_colors.get(best_tn["Grade"], "#aaa")] * len(seps)),
                                     showlegend=False,
                                 ))
@@ -15039,10 +15039,10 @@ def _draw_defensive_field(batted_df, recommended=None, actual_positions=None, he
         for pos_name, (px, py) in actual_positions.items():
             fig.add_trace(go.Scatter(
                 x=[px], y=[py], mode="markers+text",
-                marker=dict(size=14, color="#1a1a2e", symbol="diamond",
+                marker=dict(size=14, color="#000000", symbol="diamond",
                             line=dict(width=2, color="white")),
                 text=[pos_name], textposition="bottom center",
-                textfont=dict(size=9, color="#1a1a2e"),
+                textfont=dict(size=9, color="#000000"),
                 name=f"Actual: {pos_name}", showlegend=False,
                 hovertemplate=f"<b>{pos_name}</b><br>Actual Position<br>({px:.0f}, {py:.0f})<extra></extra>",
             ))
@@ -15053,9 +15053,9 @@ def _draw_defensive_field(batted_df, recommended=None, actual_positions=None, he
                    scaleanchor="x", fixedrange=True),
         height=height, margin=dict(l=0, r=0, t=30, b=0),
         plot_bgcolor="white", paper_bgcolor="white",
-        font=dict(color="#1a1a2e", family="Inter, Arial, sans-serif"),
+        font=dict(color="#000000", family="Inter, Arial, sans-serif"),
         legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="center", x=0.5,
-                    font=dict(size=10, color="#1a1a2e"), bgcolor="rgba(0,0,0,0)"),
+                    font=dict(size=10, color="#000000"), bgcolor="rgba(0,0,0,0)"),
         title=dict(text=title, font=dict(size=14)),
     )
     return fig
@@ -15603,7 +15603,7 @@ def _pg_mini_location_plot(ab_df, key_suffix=""):
         fig.add_trace(go.Scatter(
             x=[row["PlateLocSide"]], y=[row["PlateLocHeight"]],
             mode="markers+text", text=[str(int(row["PitchNum"]))],
-            textposition="top center", textfont=dict(size=9, color="#1a1a2e"),
+            textposition="top center", textfont=dict(size=9, color="#000000"),
             marker=dict(size=10, color=color, line=dict(width=1, color="white")),
             showlegend=False,
             hovertemplate=f"#{int(row['PitchNum'])} {pt}<br>{row.get('PitchCall','')}<extra></extra>",
@@ -15667,7 +15667,7 @@ def _postgame_umpire(gd):
             xaxis=dict(range=[-2.5, 2.5], showgrid=False, zeroline=False, title="", fixedrange=True, scaleanchor="y"),
             yaxis=dict(range=[0, 5], showgrid=False, zeroline=False, title="", fixedrange=True),
             height=420, plot_bgcolor="white", paper_bgcolor="white",
-            font=dict(color="#1a1a2e", family="Inter, Arial, sans-serif"),
+            font=dict(color="#000000", family="Inter, Arial, sans-serif"),
             margin=dict(l=20, r=10, t=30, b=20),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
         )
@@ -15711,7 +15711,7 @@ def _postgame_umpire(gd):
             xaxis=dict(range=[-2.5, 2.5], showgrid=False, zeroline=False, title="", fixedrange=True, scaleanchor="y"),
             yaxis=dict(range=[0, 5], showgrid=False, zeroline=False, title="", fixedrange=True),
             height=380, plot_bgcolor="white", paper_bgcolor="white",
-            font=dict(color="#1a1a2e", family="Inter, Arial, sans-serif"),
+            font=dict(color="#000000", family="Inter, Arial, sans-serif"),
             margin=dict(l=20, r=10, t=30, b=20),
         )
         st.plotly_chart(fig_ez, use_container_width=True, key="pg_ump_eff_zone")
@@ -15792,7 +15792,7 @@ def _postgame_umpire(gd):
                     yaxis=dict(range=[0, 5], showgrid=False, zeroline=False, fixedrange=True),
                     height=280, plot_bgcolor="white", paper_bgcolor="white",
                     margin=dict(l=10, r=10, t=10, b=10),
-                    font=dict(color="#1a1a2e", family="Inter, Arial, sans-serif"),
+                    font=dict(color="#000000", family="Inter, Arial, sans-serif"),
                 )
                 st.plotly_chart(fig_s, use_container_width=True, key=f"pg_ump_side_{side}")
 
@@ -15950,7 +15950,7 @@ def _pg_pitcher_detail(pdf, data, pitcher):
                 xaxis=dict(range=[-2.5, 2.5], showgrid=False, zeroline=False, title="", fixedrange=True, scaleanchor="y"),
                 yaxis=dict(range=[0, 5], showgrid=False, zeroline=False, title="", fixedrange=True),
                 height=380, plot_bgcolor="white", paper_bgcolor="white",
-                font=dict(color="#1a1a2e", family="Inter, Arial, sans-serif"),
+                font=dict(color="#000000", family="Inter, Arial, sans-serif"),
                 margin=dict(l=15, r=10, t=25, b=15),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5, font=dict(size=10)),
             )
@@ -16008,7 +16008,7 @@ def _pg_pitcher_detail(pdf, data, pitcher):
             fig_rel.update_layout(
                 xaxis_title="Release Side (ft)", yaxis_title="Release Height (ft)",
                 height=300, plot_bgcolor="white", paper_bgcolor="white",
-                font=dict(color="#1a1a2e", family="Inter, Arial, sans-serif"),
+                font=dict(color="#000000", family="Inter, Arial, sans-serif"),
                 margin=dict(l=50, r=10, t=25, b=40),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5, font=dict(size=10)),
             )
