@@ -359,7 +359,6 @@ def get_duckdb_con():
                 ELSE TaggedPitchType
             END AS TaggedPitchType
         FROM read_parquet('{PARQUET_PATH}')
-        WHERE PitchCall != 'Undefined'
         """
     )
     return con
@@ -377,8 +376,7 @@ def load_davidson_data():
         return pd.DataFrame()
     sql = f"""
         SELECT * FROM read_parquet('{PARQUET_PATH}')
-        WHERE (PitcherTeam = '{DAVIDSON_TEAM_ID}' OR BatterTeam = '{DAVIDSON_TEAM_ID}')
-          AND PitchCall != 'Undefined'
+        WHERE PitcherTeam = '{DAVIDSON_TEAM_ID}' OR BatterTeam = '{DAVIDSON_TEAM_ID}'
     """
     data = duckdb.query(sql).fetchdf()
     data["Date"] = pd.to_datetime(data["Date"], errors="coerce")
@@ -1135,27 +1133,39 @@ def build_tunnel_population_pop():
     COMMIT_TIME = 0.280
     N_STEPS = 20
 
+    # Data-driven benchmarks: computed from 46,934 pairs across 8,837 pitchers
+    # using the same Euler physics model (280ms commit, IVB/HB accelerations).
+    # Format: (p10, p25, p50, p75, p90, mean, std)
     PAIR_BENCHMARKS = {
-        'Changeup/Curveball': (3.7, 6.2, 10.3, 16.2, 23.0, 12.2, 8.2),
-        'Changeup/Cutter': (2.8, 5.4, 8.5, 13.0, 18.1, 10.1, 6.8),
-        'Changeup/Fastball': (3.3, 5.5, 8.8, 12.8, 17.8, 10.1, 6.9),
-        'Changeup/Sinker': (3.0, 5.0, 8.3, 12.4, 18.1, 10.0, 7.7),
-        'Changeup/Slider': (3.1, 5.4, 9.3, 15.0, 22.2, 11.3, 8.4),
-        'Curveball/Cutter': (4.9, 7.1, 10.1, 13.7, 23.5, 12.2, 8.0),
-        'Curveball/Fastball': (3.3, 5.6, 9.1, 13.6, 19.7, 10.6, 7.3),
-        'Curveball/Sinker': (3.1, 5.6, 9.1, 15.2, 22.9, 11.9, 9.3),
-        'Curveball/Slider': (3.6, 5.9, 9.9, 14.8, 23.4, 11.9, 8.6),
-        'Cutter/Fastball': (3.3, 5.2, 8.3, 12.0, 17.1, 9.4, 6.0),
-        'Cutter/Sinker': (3.6, 5.4, 8.5, 12.1, 16.9, 9.9, 7.2),
-        'Cutter/Slider': (3.1, 5.1, 8.1, 11.9, 17.0, 9.5, 6.7),
-        'Fastball/Sinker': (3.0, 5.3, 8.6, 14.8, 25.9, 11.7, 9.4),
-        'Fastball/Slider': (3.3, 5.4, 8.7, 13.2, 19.1, 10.3, 7.3),
-        'Fastball/Splitter': (3.5, 5.9, 9.6, 13.4, 22.2, 11.1, 7.5),
-        'Fastball/Sweeper': (3.7, 5.7, 8.6, 13.1, 22.4, 10.9, 8.0),
-        'Sinker/Slider': (3.4, 5.6, 8.8, 13.5, 19.5, 10.8, 8.1),
-        'Slider/Splitter': (4.0, 6.3, 9.0, 15.9, 27.5, 12.8, 10.9),
+        'Changeup/Curveball': (2.2, 3.5, 5.2, 7.1, 9.3, 5.6, 3.1),
+        'Changeup/Cutter': (1.4, 2.2, 3.4, 4.9, 6.7, 3.9, 2.7),
+        'Changeup/Fastball': (1.8, 2.7, 4.0, 5.2, 6.6, 4.2, 2.1),
+        'Changeup/Sinker': (1.6, 2.4, 3.6, 5.0, 6.7, 4.0, 2.9),
+        'Changeup/Slider': (1.4, 2.2, 3.4, 4.8, 6.5, 3.8, 2.4),
+        'Changeup/Splitter': (1.0, 1.7, 2.6, 4.2, 6.1, 3.3, 2.8),
+        'Changeup/Sweeper': (1.7, 2.7, 4.4, 6.3, 8.6, 4.8, 2.7),
+        'Curveball/Cutter': (1.6, 2.5, 4.0, 5.8, 7.7, 4.4, 2.9),
+        'Curveball/Fastball': (1.5, 2.4, 3.7, 5.3, 7.1, 4.1, 2.6),
+        'Curveball/Sinker': (1.4, 2.5, 4.0, 6.0, 8.8, 4.9, 4.0),
+        'Curveball/Slider': (1.2, 2.0, 3.3, 5.0, 7.1, 4.0, 3.1),
+        'Curveball/Splitter': (2.1, 3.1, 4.6, 6.5, 9.1, 5.1, 2.8),
+        'Curveball/Sweeper': (1.1, 2.6, 3.8, 5.8, 8.0, 5.0, 5.0),
+        'Cutter/Fastball': (0.9, 1.5, 2.5, 3.8, 5.3, 3.0, 2.3),
+        'Cutter/Sinker': (1.0, 1.7, 2.7, 4.2, 6.3, 3.3, 2.9),
+        'Cutter/Slider': (0.9, 1.4, 2.4, 3.7, 5.4, 2.9, 2.4),
+        'Cutter/Splitter': (1.0, 1.7, 3.0, 5.0, 7.2, 3.6, 2.5),
+        'Cutter/Sweeper': (1.6, 2.6, 4.1, 5.8, 7.6, 4.3, 2.2),
+        'Fastball/Sinker': (0.8, 1.4, 2.3, 3.7, 5.6, 3.0, 2.8),
+        'Fastball/Slider': (1.1, 1.8, 2.9, 4.1, 5.6, 3.2, 2.0),
+        'Fastball/Splitter': (1.2, 2.0, 3.4, 4.8, 6.7, 3.7, 2.3),
+        'Fastball/Sweeper': (1.7, 2.9, 4.7, 7.1, 8.9, 5.2, 3.2),
+        'Sinker/Slider': (1.1, 1.9, 3.0, 4.4, 6.1, 3.5, 2.7),
+        'Sinker/Splitter': (1.1, 2.1, 3.4, 5.2, 7.7, 4.0, 2.8),
+        'Sinker/Sweeper': (1.4, 2.5, 4.0, 5.9, 8.5, 4.5, 2.4),
+        'Slider/Splitter': (1.1, 1.9, 3.2, 4.7, 7.0, 3.7, 2.7),
+        'Slider/Sweeper': (1.1, 1.8, 2.8, 4.5, 6.5, 3.5, 2.4),
     }
-    DEFAULT_BENCHMARK = (3.3, 5.5, 9.0, 14.0, 21.0, 11.0, 7.5)
+    DEFAULT_BENCHMARK = (1.2, 2.1, 3.3, 4.9, 6.8, 3.8, 2.7)
 
     def _euler_traj(rel_h, rel_s, loc_h, loc_s, ivb_val, hb_val, velo_mph, ext_val):
         ext_val = ext_val if not pd.isna(ext_val) else 6.0
@@ -10728,14 +10738,15 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
 
     V5 — Backtest-calibrated rebuild:
       1. Commit point at 280ms before plate (research-backed decision window),
-         not 167ms.  Produces realistic commit separations (median ~8.8").
+         not 167ms.  Produces realistic commit separations (median ~3.3").
       2. Percentile grading relative to SAME PAIR TYPE — a Sinker/Slider pair
          is compared to other Sinker/Slider tunnels, not to Fastball/Changeup.
-      3. Regression-weighted composite score from 26,789 actual consecutive
+      3. Regression-weighted composite score from 46,934 actual consecutive
          pitch pairs.  Weights derived from logistic regression on whiff:
-           commit_sep  59%  (lower → more whiffs — induces bad swings)
+           commit_sep  55%  (lower → more whiffs — induces bad swings)
            plate_sep   19%  (higher → more whiffs given swing — late break)
-           rel_sep     14%  (lower → better — consistent arm slot)
+           rel_sep     10%  (lower → better — consistent arm slot)
+           rel_angle    8%  (lower → better — similar launch angles)
            move_div     6%  (minor — captured by plate_sep)
            velo_gap     2%  (negligible)
       4. Release-point variance penalty, pitch-by-pitch pairing unchanged.
@@ -10761,28 +10772,40 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
     N_STEPS = 20         # Euler integration steps
 
     # Pair-type benchmarks: commit_sep (p10, p25, p50, p75, p90, mean, std)
-    # Built from 26,789 consecutive diff-type pairs at 280ms commit point
+    # Built from 46,934 diff-type pairs at 280ms commit point
+    # Data-driven benchmarks: computed from 46,934 pairs across 8,837 pitchers
+    # using the same Euler physics model (280ms commit, IVB/HB accelerations).
+    # Format: (p10, p25, p50, p75, p90, mean, std)
     PAIR_BENCHMARKS = {
-        'Changeup/Curveball': (3.7, 6.2, 10.3, 16.2, 23.0, 12.2, 8.2),
-        'Changeup/Cutter': (2.8, 5.4, 8.5, 13.0, 18.1, 10.1, 6.8),
-        'Changeup/Fastball': (3.3, 5.5, 8.8, 12.8, 17.8, 10.1, 6.9),
-        'Changeup/Sinker': (3.0, 5.0, 8.3, 12.4, 18.1, 10.0, 7.7),
-        'Changeup/Slider': (3.1, 5.4, 9.3, 15.0, 22.2, 11.3, 8.4),
-        'Curveball/Cutter': (4.9, 7.1, 10.1, 13.7, 23.5, 12.2, 8.0),
-        'Curveball/Fastball': (3.3, 5.6, 9.1, 13.6, 19.7, 10.6, 7.3),
-        'Curveball/Sinker': (3.1, 5.6, 9.1, 15.2, 22.9, 11.9, 9.3),
-        'Curveball/Slider': (3.6, 5.9, 9.9, 14.8, 23.4, 11.9, 8.6),
-        'Cutter/Fastball': (3.3, 5.2, 8.3, 12.0, 17.1, 9.4, 6.0),
-        'Cutter/Sinker': (3.6, 5.4, 8.5, 12.1, 16.9, 9.9, 7.2),
-        'Cutter/Slider': (3.1, 5.1, 8.1, 11.9, 17.0, 9.5, 6.7),
-        'Fastball/Sinker': (3.0, 5.3, 8.6, 14.8, 25.9, 11.7, 9.4),
-        'Fastball/Slider': (3.3, 5.4, 8.7, 13.2, 19.1, 10.3, 7.3),
-        'Fastball/Splitter': (3.5, 5.9, 9.6, 13.4, 22.2, 11.1, 7.5),
-        'Fastball/Sweeper': (3.7, 5.7, 8.6, 13.1, 22.4, 10.9, 8.0),
-        'Sinker/Slider': (3.4, 5.6, 8.8, 13.5, 19.5, 10.8, 8.1),
-        'Slider/Splitter': (4.0, 6.3, 9.0, 15.9, 27.5, 12.8, 10.9),
+        'Changeup/Curveball': (2.2, 3.5, 5.2, 7.1, 9.3, 5.6, 3.1),
+        'Changeup/Cutter': (1.4, 2.2, 3.4, 4.9, 6.7, 3.9, 2.7),
+        'Changeup/Fastball': (1.8, 2.7, 4.0, 5.2, 6.6, 4.2, 2.1),
+        'Changeup/Sinker': (1.6, 2.4, 3.6, 5.0, 6.7, 4.0, 2.9),
+        'Changeup/Slider': (1.4, 2.2, 3.4, 4.8, 6.5, 3.8, 2.4),
+        'Changeup/Splitter': (1.0, 1.7, 2.6, 4.2, 6.1, 3.3, 2.8),
+        'Changeup/Sweeper': (1.7, 2.7, 4.4, 6.3, 8.6, 4.8, 2.7),
+        'Curveball/Cutter': (1.6, 2.5, 4.0, 5.8, 7.7, 4.4, 2.9),
+        'Curveball/Fastball': (1.5, 2.4, 3.7, 5.3, 7.1, 4.1, 2.6),
+        'Curveball/Sinker': (1.4, 2.5, 4.0, 6.0, 8.8, 4.9, 4.0),
+        'Curveball/Slider': (1.2, 2.0, 3.3, 5.0, 7.1, 4.0, 3.1),
+        'Curveball/Splitter': (2.1, 3.1, 4.6, 6.5, 9.1, 5.1, 2.8),
+        'Curveball/Sweeper': (1.1, 2.6, 3.8, 5.8, 8.0, 5.0, 5.0),
+        'Cutter/Fastball': (0.9, 1.5, 2.5, 3.8, 5.3, 3.0, 2.3),
+        'Cutter/Sinker': (1.0, 1.7, 2.7, 4.2, 6.3, 3.3, 2.9),
+        'Cutter/Slider': (0.9, 1.4, 2.4, 3.7, 5.4, 2.9, 2.4),
+        'Cutter/Splitter': (1.0, 1.7, 3.0, 5.0, 7.2, 3.6, 2.5),
+        'Cutter/Sweeper': (1.6, 2.6, 4.1, 5.8, 7.6, 4.3, 2.2),
+        'Fastball/Sinker': (0.8, 1.4, 2.3, 3.7, 5.6, 3.0, 2.8),
+        'Fastball/Slider': (1.1, 1.8, 2.9, 4.1, 5.6, 3.2, 2.0),
+        'Fastball/Splitter': (1.2, 2.0, 3.4, 4.8, 6.7, 3.7, 2.3),
+        'Fastball/Sweeper': (1.7, 2.9, 4.7, 7.1, 8.9, 5.2, 3.2),
+        'Sinker/Slider': (1.1, 1.9, 3.0, 4.4, 6.1, 3.5, 2.7),
+        'Sinker/Splitter': (1.1, 2.1, 3.4, 5.2, 7.7, 4.0, 2.8),
+        'Sinker/Sweeper': (1.4, 2.5, 4.0, 5.9, 8.5, 4.5, 2.4),
+        'Slider/Splitter': (1.1, 1.9, 3.2, 4.7, 7.0, 3.7, 2.7),
+        'Slider/Sweeper': (1.1, 1.8, 2.8, 4.5, 6.5, 3.5, 2.4),
     }
-    DEFAULT_BENCHMARK = (3.3, 5.5, 9.0, 14.0, 21.0, 11.0, 7.5)
+    DEFAULT_BENCHMARK = (1.2, 2.1, 3.3, 4.9, 6.8, 3.8, 2.7)
 
     # ── Per-pitch-type aggregates (used as fallback & for diagnostics) ──
     agg_cols = {
@@ -11111,7 +11134,7 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
 
             # BACKTEST-CALIBRATED TUNNEL SCORE (v6)
             # Percentile grading vs same pair type, regression-weighted composite.
-            # Derived from 26,789 consecutive diff-type pairs at 280ms commit.
+            # Derived from 46,934 consecutive diff-type pairs at 280ms commit.
             #
             # Logistic regression on whiff (standardised coefficients):
             #   commit_sep  55%  (lower→more whiff — induces bad swing decisions)
@@ -11127,7 +11150,7 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
             bm = PAIR_BENCHMARKS.get(pair_label, DEFAULT_BENCHMARK)
             bm_p10, bm_p25, bm_p50, bm_p75, bm_p90, bm_mean, bm_std = bm
 
-            # 1. COMMIT PERCENTILE (59% weight)
+            # 1. COMMIT PERCENTILE (55% weight)
             # Lower commit_sep → higher percentile (better tunnel)
             # Empirical percentile mapping using actual p10/p25/p50/p75/p90
             # benchmarks — avoids Gaussian compression from large stds.
