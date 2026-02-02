@@ -129,6 +129,19 @@ GLOBAL_CSS = """<style>
         background-color: #ffffff !important;
         border-radius: 8px;
     }
+    /* Force ALL plotly text elements dark */
+    .stPlotlyChart text,
+    .stPlotlyChart .xtick text,
+    .stPlotlyChart .ytick text,
+    .stPlotlyChart .gtitle,
+    .stPlotlyChart .g-xtitle text,
+    .stPlotlyChart .g-ytitle text,
+    .stPlotlyChart .cbtitle text,
+    .stPlotlyChart .cbaxis text,
+    .stPlotlyChart .annotation-text {
+        fill: #000000 !important;
+        color: #000000 !important;
+    }
 
     .block-container { padding-top: 1rem; max-width: 1400px; }
 
@@ -150,8 +163,25 @@ CHART_LAYOUT = dict(
     plot_bgcolor="white", paper_bgcolor="white",
     font=dict(size=11, color="#000000", family="Inter, Arial, sans-serif"),
     margin=dict(l=45, r=10, t=30, b=40),
+    xaxis=dict(tickfont=dict(color="#000000"), title_font=dict(color="#000000")),
+    yaxis=dict(tickfont=dict(color="#000000"), title_font=dict(color="#000000")),
+    coloraxis=dict(colorbar=dict(tickfont=dict(color="#000000"), title_font=dict(color="#000000"))),
 )
 
 
 def section_header(text):
     st.markdown(f'<div class="section-header">{text}</div>', unsafe_allow_html=True)
+
+
+def force_dark_fonts(fig):
+    """Force all axis tick/title fonts and colorbar fonts to black on a Plotly figure."""
+    fig.update_layout(
+        font=dict(color="#000000"),
+        xaxis=dict(tickfont=dict(color="#000000"), title_font=dict(color="#000000")),
+        yaxis=dict(tickfont=dict(color="#000000"), title_font=dict(color="#000000")),
+    )
+    if hasattr(fig, 'layout') and hasattr(fig.layout, 'coloraxis'):
+        fig.update_layout(
+            coloraxis=dict(colorbar=dict(tickfont=dict(color="#000000"), title_font=dict(color="#000000")))
+        )
+    return fig

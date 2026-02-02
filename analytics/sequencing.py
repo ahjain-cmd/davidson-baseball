@@ -123,7 +123,7 @@ def _build_3pitch_sequences(sorted_ps, hd, tun_df, seq_df):
                     is_hard_p3 = p3 in _hard_pitches
                     their_2k = hd.get("whiff_2k_hard" if is_hard_p3 else "whiff_2k_os", np.nan)
                     best_path = {
-                        "seq": f"{p1} \\u2192 {p2} \\u2192 {p3}", "p1": p1, "p2": p2, "p3": p3,
+                        "seq": f"{p1} → {p2} → {p3}", "p1": p1, "p2": p2, "p3": p3,
                         "score": round(p3_score * 0.35 + best_path_score * 0.65, 1),
                         "t12": t12, "t23": t23, "sw23": sw23, "their_2k": their_2k,
                         "effv_gap": ev_gap,

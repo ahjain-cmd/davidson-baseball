@@ -814,7 +814,10 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
                 )
                 fig_matrix.update_layout(height=280, plot_bgcolor="white", paper_bgcolor="white",
                                          font=dict(size=11, color="#000000", family="Inter, Arial, sans-serif"),
-                                         margin=dict(l=45, r=10, t=10, b=40))
+                                         margin=dict(l=45, r=10, t=10, b=40),
+                                         xaxis=dict(tickfont=dict(color="#000000"), title_font=dict(color="#000000")),
+                                         yaxis=dict(tickfont=dict(color="#000000"), title_font=dict(color="#000000")),
+                                         coloraxis=dict(colorbar=dict(tickfont=dict(color="#000000"), title_font=dict(color="#000000"))))
                 st.plotly_chart(fig_matrix, use_container_width=True, key="pc_trans_mini")
 
     # ── Section E: Platoon Splits ──
