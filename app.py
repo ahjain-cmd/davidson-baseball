@@ -2131,8 +2131,8 @@ def _hitter_card_content(data, batter, season_filter, bdf, batted, pr, all_batte
                                    xaxis=dict(range=[-1.8, 1.8], title="Horizontal", scaleanchor="y"),
                                    yaxis=dict(range=[0.5, 4.5], title="Vertical"),
                                    legend=dict(orientation="h", y=1.08, x=0.5, xanchor="center", font=dict(size=10)))
-            fig_dmg.update_xaxes(tickfont=dict(color="#1a1a2e"), titlefont=dict(color="#1a1a2e"))
-            fig_dmg.update_yaxes(tickfont=dict(color="#1a1a2e"), titlefont=dict(color="#1a1a2e"))
+            fig_dmg.update_xaxes(tickfont=dict(color="#1a1a2e"), title_font=dict(color="#1a1a2e"))
+            fig_dmg.update_yaxes(tickfont=dict(color="#1a1a2e"), title_font=dict(color="#1a1a2e"))
             st.plotly_chart(fig_dmg, use_container_width=True, key="hc_damage")
         else:
             st.caption("Not enough batted ball data")
@@ -2153,8 +2153,8 @@ def _hitter_card_content(data, batter, season_filter, bdf, batted, pr, all_batte
             ))
             _add_grid_zone_outline(fig_wz)
             fig_wz.update_layout(**CHART_LAYOUT, height=350)
-            fig_wz.update_xaxes(tickfont=dict(color="#1a1a2e"), titlefont=dict(color="#1a1a2e"))
-            fig_wz.update_yaxes(tickfont=dict(color="#1a1a2e"), titlefont=dict(color="#1a1a2e"))
+            fig_wz.update_xaxes(tickfont=dict(color="#1a1a2e"), title_font=dict(color="#1a1a2e"))
+            fig_wz.update_yaxes(tickfont=dict(color="#1a1a2e"), title_font=dict(color="#1a1a2e"))
             st.plotly_chart(fig_wz, use_container_width=True, key="hc_whiff_zone")
         else:
             st.caption("Not enough swing data for whiff zones")
@@ -2180,8 +2180,8 @@ def _hitter_card_content(data, batter, season_filter, bdf, batted, pr, all_batte
             fig_prob.update_layout(**CHART_LAYOUT, height=350,
                                     xaxis=dict(range=[-1.8, 1.8], title="Horizontal", scaleanchor="y"),
                                     yaxis=dict(range=[0.5, 4.5], title="Vertical"))
-            fig_prob.update_xaxes(tickfont=dict(color="#1a1a2e"), titlefont=dict(color="#1a1a2e"))
-            fig_prob.update_yaxes(tickfont=dict(color="#1a1a2e"), titlefont=dict(color="#1a1a2e"))
+            fig_prob.update_xaxes(tickfont=dict(color="#1a1a2e"), title_font=dict(color="#1a1a2e"))
+            fig_prob.update_yaxes(tickfont=dict(color="#1a1a2e"), title_font=dict(color="#1a1a2e"))
             st.plotly_chart(fig_prob, use_container_width=True, key="hc_swing_prob")
         else:
             st.caption("Not enough pitch data")
@@ -4201,7 +4201,7 @@ def _pitching_overview(data, pitcher, season_filter, pdf, pdf_raw, pr, all_pitch
 # ──────────────────────────────────────────────
 # PITCHER CARD — Consolidated Summary Tab
 # ──────────────────────────────────────────────
-def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher_stats):
+def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher_stats, cmd_df=None):
     """Render a single-page Pitcher Card with arsenal, locations, tunnels,
     sequences, and platoon splits."""
     all_stats = all_pitcher_stats
@@ -4277,7 +4277,8 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
             "Usage%": (pt_counts / pt_counts.sum() * 100).round(1),
         }).sort_values("Usage%", ascending=False)
 
-    cmd_df = _compute_command_plus(pdf, data)
+    if cmd_df is None:
+        cmd_df = _compute_command_plus(pdf, data)
     cmd_map = {}
     if not cmd_df.empty:
         cmd_map = dict(zip(cmd_df["Pitch"], cmd_df["Command+"]))
@@ -4287,7 +4288,7 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
 
     # Stuff+ percentile bars
     if has_stuff:
-        all_stuff = _compute_stuff_plus(data)
+        all_stuff = _compute_stuff_plus_all(data)
         if "StuffPlus" in all_stuff.columns:
             stuff_metrics = []
             for pt in pitch_types:
@@ -4754,18 +4755,31 @@ def _compute_pitch_recommendations(pdf, data, tunnel_df):
     return recommendations
 
 
-def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher_stats):
+def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher_stats, cmd_df=None):
     """Render the Pitch Lab tab with arsenal recommendations, tunnel roadmap,
     sequencing playbook, and pitch-specific deep dives."""
+
+    if len(pdf) < 20:
+        st.warning("Not enough pitch data for Pitch Lab (need 20+).")
+        return
 
     has_stuff = stuff_df is not None and "StuffPlus" in stuff_df.columns and not stuff_df.empty
     if not has_stuff:
         st.info("Stuff+ data not available — some sections will be limited.")
 
     # Pre-compute shared data
-    tunnel_pop = build_tunnel_population_pop()
-    tunnel_df = _compute_tunnel_score(pdf, tunnel_pop=tunnel_pop)
-    cmd_df = _compute_command_plus(pdf, data)
+    try:
+        tunnel_pop = build_tunnel_population_pop()
+        tunnel_df = _compute_tunnel_score(pdf, tunnel_pop=tunnel_pop)
+    except Exception as e:
+        st.warning(f"Could not compute tunnel scores: {e}")
+        tunnel_df = pd.DataFrame()
+    if cmd_df is None:
+        try:
+            cmd_df = _compute_command_plus(pdf, data)
+        except Exception as e:
+            st.warning(f"Could not compute Command+: {e}")
+            cmd_df = pd.DataFrame()
     cmd_map = dict(zip(cmd_df["Pitch"], cmd_df["Command+"])) if not cmd_df.empty else {}
 
     pitch_types = sorted(pdf["TaggedPitchType"].unique())
@@ -4776,7 +4790,10 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
     section_header("Arsenal Overview & Improvement Targets")
     st.caption("Current pitch profiles compared to database averages. Recommendations based on Stuff+ weight directions and tunnel partners.")
 
-    recommendations = _compute_pitch_recommendations(pdf, data, tunnel_df)
+    try:
+        recommendations = _compute_pitch_recommendations(pdf, data, tunnel_df)
+    except Exception:
+        recommendations = []
     rec_by_pitch = {}
     for r in recommendations:
         rec_by_pitch.setdefault(r["pitch"], []).append(r)
@@ -5409,14 +5426,15 @@ def page_pitching(data):
                   f"{total_pitches} pitches  |  {pa_faced} PA faced  |  "
                   f"Seasons: {', '.join(str(int(s)) for s in sorted(season_filter))}")
 
-    # Compute Stuff+ for pitcher card
+    # Compute Stuff+ and Command+ once for both tabs
     stuff_df = _compute_stuff_plus(pdf)
+    cmd_df = _compute_command_plus(pdf, data)
 
     tab_card, tab_lab = st.tabs(["Pitcher Card", "Pitch Lab"])
     with tab_card:
-        _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher_stats)
+        _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher_stats, cmd_df=cmd_df)
     with tab_lab:
-        _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher_stats)
+        _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher_stats, cmd_df=cmd_df)
 
 
 # ──────────────────────────────────────────────
@@ -10986,6 +11004,12 @@ def _compute_stuff_plus(data, baseline=None, baselines_dict=None):
     return df
 
 
+@st.cache_data(show_spinner="Computing Stuff+ grades...")
+def _compute_stuff_plus_all(data):
+    """Cached wrapper for _compute_stuff_plus on the full Davidson dataset."""
+    return _compute_stuff_plus(data)
+
+
 @st.cache_data(show_spinner="Building tunnel population database...")
 def _build_tunnel_population(_data):
     """Compute raw tunnel composites for every pitcher in the database.
@@ -11705,7 +11729,7 @@ def _pitching_lab_content(data, pitcher, season_filter, pdf, stuff_df,
         st.dataframe(formatted, use_container_width=True)
 
         # Savant-style percentile bars for Stuff+
-        all_stuff = _compute_stuff_plus(data)
+        all_stuff = _compute_stuff_plus_all(data)
         if "StuffPlus" in all_stuff.columns:
             section_header("Stuff+ Percentile Rankings (vs All Pitchers in Database)")
             metrics = []
