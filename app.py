@@ -403,50 +403,89 @@ st.markdown("""<style>
 # ──────────────────────────────────────────────
 # DATA LOADING
 # ──────────────────────────────────────────────
-@st.cache_resource(show_spinner="Connecting to database...")
+@st.cache_resource(show_spinner="Loading database into memory...")
 def get_duckdb_con():
-    """Return a DuckDB connection with a VIEW over the full parquet file."""
+    """Return a DuckDB connection with an in-memory TABLE for fast queries."""
     if not os.path.exists(PARQUET_PATH):
         raise FileNotFoundError(f"Parquet file not found: {PARQUET_PATH}")
     con = duckdb.connect(database=':memory:')
-    # Normalize TaggedPitchType at the DB layer so all SQL queries are consistent.
+    # Load parquet into an in-memory TABLE (not a VIEW) so subsequent queries
+    # don't re-read and re-parse the parquet file from disk every time.
     _pname = _name_case_sql("Pitcher")
     _bname = _name_case_sql("Batter")
-    con.execute(
-        f"""
-        CREATE VIEW trackman AS
-        SELECT
-            * EXCLUDE (Pitcher, Batter, TaggedPitchType, BatterSide, PitcherThrows),
-            {_pname} AS Pitcher,
-            {_bname} AS Batter,
-            CASE
-                WHEN TaggedPitchType IN ('Undefined','Other','Knuckleball') THEN NULL
-                WHEN TaggedPitchType = 'FourSeamFastBall' THEN 'Fastball'
-                WHEN TaggedPitchType IN ('OneSeamFastBall','TwoSeamFastBall') THEN 'Sinker'
-                WHEN TaggedPitchType = 'ChangeUp' THEN 'Changeup'
-                ELSE TaggedPitchType
-            END AS TaggedPitchType,
-            CASE
-                WHEN BatterSide IN ('Left','Right') THEN BatterSide
-                WHEN BatterSide = 'L' THEN 'Left'
-                WHEN BatterSide = 'R' THEN 'Right'
-                ELSE NULL
-            END AS BatterSide,
-            CASE
-                WHEN PitcherThrows IN ('Left','Right') THEN PitcherThrows
-                WHEN PitcherThrows = 'L' THEN 'Left'
-                WHEN PitcherThrows = 'R' THEN 'Right'
-                ELSE NULL
-            END AS PitcherThrows
-        FROM read_parquet('{PARQUET_PATH}')
-        WHERE PitchCall IS NULL OR PitchCall != 'Undefined'
-        QUALIFY
-            ROW_NUMBER() OVER (
-                PARTITION BY GameID, Inning, PAofInning, PitchofPA, Pitcher, Batter, PitchNo
-                ORDER BY PitchNo
-            ) = 1
-        """
-    )
+    try:
+        con.execute(
+            f"""
+            CREATE TABLE trackman AS
+            SELECT
+                * EXCLUDE (Pitcher, Batter, TaggedPitchType, BatterSide, PitcherThrows),
+                {_pname} AS Pitcher,
+                {_bname} AS Batter,
+                CASE
+                    WHEN TaggedPitchType IN ('Undefined','Other','Knuckleball') THEN NULL
+                    WHEN TaggedPitchType = 'FourSeamFastBall' THEN 'Fastball'
+                    WHEN TaggedPitchType IN ('OneSeamFastBall','TwoSeamFastBall') THEN 'Sinker'
+                    WHEN TaggedPitchType = 'ChangeUp' THEN 'Changeup'
+                    ELSE TaggedPitchType
+                END AS TaggedPitchType,
+                CASE
+                    WHEN BatterSide IN ('Left','Right') THEN BatterSide
+                    WHEN BatterSide = 'L' THEN 'Left'
+                    WHEN BatterSide = 'R' THEN 'Right'
+                    ELSE NULL
+                END AS BatterSide,
+                CASE
+                    WHEN PitcherThrows IN ('Left','Right') THEN PitcherThrows
+                    WHEN PitcherThrows = 'L' THEN 'Left'
+                    WHEN PitcherThrows = 'R' THEN 'Right'
+                    ELSE NULL
+                END AS PitcherThrows
+            FROM read_parquet('{PARQUET_PATH}')
+            WHERE PitchCall IS NULL OR PitchCall != 'Undefined'
+            QUALIFY
+                ROW_NUMBER() OVER (
+                    PARTITION BY GameID, Inning, PAofInning, PitchofPA, Pitcher, Batter, PitchNo
+                    ORDER BY PitchNo
+                ) = 1
+            """
+        )
+    except Exception:
+        # Fallback to VIEW if TABLE creation fails (e.g. memory constraints)
+        con.execute(
+            f"""
+            CREATE VIEW trackman AS
+            SELECT
+                * EXCLUDE (Pitcher, Batter, TaggedPitchType, BatterSide, PitcherThrows),
+                {_pname} AS Pitcher,
+                {_bname} AS Batter,
+                CASE
+                    WHEN TaggedPitchType IN ('Undefined','Other','Knuckleball') THEN NULL
+                    WHEN TaggedPitchType = 'FourSeamFastBall' THEN 'Fastball'
+                    WHEN TaggedPitchType IN ('OneSeamFastBall','TwoSeamFastBall') THEN 'Sinker'
+                    WHEN TaggedPitchType = 'ChangeUp' THEN 'Changeup'
+                    ELSE TaggedPitchType
+                END AS TaggedPitchType,
+                CASE
+                    WHEN BatterSide IN ('Left','Right') THEN BatterSide
+                    WHEN BatterSide = 'L' THEN 'Left'
+                    WHEN BatterSide = 'R' THEN 'Right'
+                    ELSE NULL
+                END AS BatterSide,
+                CASE
+                    WHEN PitcherThrows IN ('Left','Right') THEN PitcherThrows
+                    WHEN PitcherThrows = 'L' THEN 'Left'
+                    WHEN PitcherThrows = 'R' THEN 'Right'
+                    ELSE NULL
+                END AS PitcherThrows
+            FROM read_parquet('{PARQUET_PATH}')
+            WHERE PitchCall IS NULL OR PitchCall != 'Undefined'
+            QUALIFY
+                ROW_NUMBER() OVER (
+                    PARTITION BY GameID, Inning, PAofInning, PitchofPA, Pitcher, Batter, PitchNo
+                    ORDER BY PitchNo
+                ) = 1
+            """
+        )
     return con
 
 
@@ -1287,99 +1326,134 @@ def build_tunnel_population_pop():
     GRAVITY = 32.17
     COMMIT_TIME = 0.280
 
-    def _commit_plate_9param(row):
-        a = 0.5 * row["ay0"]
-        b = row["vy0"]
-        c = row["y0"]
-        if a == 0 and b == 0:
-            return None
-        if a == 0:
-            t_candidates = [(-c / b)] if b != 0 else []
-        else:
+    # ── Vectorized commit/plate position computation ──
+    def _compute_positions_vectorized(frame):
+        """Compute commit-point and plate positions for all rows at once using numpy."""
+        n = len(frame)
+        commit_x = np.full(n, np.nan)
+        commit_y = np.full(n, np.nan)
+        plate_x = np.full(n, np.nan)
+        plate_y = np.full(n, np.nan)
+
+        # 9-param path (preferred)
+        has_9p = (frame["x0"].notna() & frame["y0"].notna() &
+                  frame["vx0"].notna() & frame["vy0"].notna()).values
+        if has_9p.any():
+            idx9 = np.where(has_9p)[0]
+            a = 0.5 * frame["ay0"].values[idx9]
+            b = frame["vy0"].values[idx9]
+            c = frame["y0"].values[idx9]
             disc = b * b - 4 * a * c
-            if disc < 0:
-                return None
-            sqrt_disc = np.sqrt(disc)
-            t_candidates = [(-b - sqrt_disc) / (2 * a), (-b + sqrt_disc) / (2 * a)]
-        t_candidates = [t for t in t_candidates if t > 0]
-        if not t_candidates:
-            return None
-        t_total = min(t_candidates)
-        commit_t = max(0, t_total - COMMIT_TIME)
-        def _pos_at(t):
-            x = row["x0"] + row["vx0"] * t + 0.5 * row["ax0"] * t * t
-            z = row["z0"] + row["vz0"] * t + 0.5 * row["az0"] * t * t
-            return -x, z
-        return _pos_at(commit_t), _pos_at(t_total), t_total
+            # Quadratic case (a != 0)
+            valid_q = (a != 0) & (disc >= 0)
+            # Linear case (a == 0, b != 0)
+            valid_l = (a == 0) & (b != 0)
+            t_total = np.full(len(idx9), np.nan)
+            # Quadratic roots
+            if valid_q.any():
+                sq = np.sqrt(disc[valid_q])
+                t1 = (-b[valid_q] - sq) / (2 * a[valid_q])
+                t2 = (-b[valid_q] + sq) / (2 * a[valid_q])
+                t1 = np.where(t1 > 0, t1, np.inf)
+                t2 = np.where(t2 > 0, t2, np.inf)
+                t_total[valid_q] = np.minimum(t1, t2)
+            # Linear roots
+            if valid_l.any():
+                t_lin = -c[valid_l] / b[valid_l]
+                t_total[valid_l] = np.where(t_lin > 0, t_lin, np.nan)
+            t_total = np.where(np.isinf(t_total), np.nan, t_total)
+            good = np.isfinite(t_total)
+            if good.any():
+                gi = idx9[good]
+                tt = t_total[good]
+                ct = np.maximum(0, tt - COMMIT_TIME)
+                x0v = frame["x0"].values[gi]
+                vx0v = frame["vx0"].values[gi]
+                ax0v = frame["ax0"].values[gi]
+                z0v = frame["z0"].values[gi]
+                vz0v = frame["vz0"].values[gi]
+                az0v = frame["az0"].values[gi]
+                commit_x[gi] = -(x0v + vx0v * ct + 0.5 * ax0v * ct * ct)
+                commit_y[gi] = z0v + vz0v * ct + 0.5 * az0v * ct * ct
+                plate_x[gi] = -(x0v + vx0v * tt + 0.5 * ax0v * tt * tt)
+                plate_y[gi] = z0v + vz0v * tt + 0.5 * az0v * tt * tt
 
-    def _commit_plate_ivb(row):
-        ext = row["Extension"] if pd.notna(row["Extension"]) else 6.0
-        actual_dist = MOUND_DIST - ext
-        velo_fps = row["RelSpeed"] * 5280.0 / 3600.0
-        if velo_fps < 50:
-            velo_fps = 50.0
-        t_total = actual_dist / velo_fps
-        ivb = row["InducedVertBreak"] if pd.notna(row["InducedVertBreak"]) else 0.0
-        hb = row["HorzBreak"] if pd.notna(row["HorzBreak"]) else 0.0
-        ivb_ft = ivb / 12.0
-        hb_ft = hb / 12.0
-        a_ivb = 2.0 * ivb_ft / (t_total ** 2) if t_total > 0 else 0
-        a_hb = 2.0 * hb_ft / (t_total ** 2) if t_total > 0 else 0
-        T = t_total
-        vy0 = (row["PlateLocHeight"] - row["RelHeight"] + 0.5 * GRAVITY * T**2 - 0.5 * a_ivb * T**2) / T if T > 0 else 0
-        vx0 = (row["PlateLocSide"] - row["RelSide"] - 0.5 * a_hb * T**2) / T if T > 0 else 0
-        def _pos_at(t):
-            x = row["RelSide"] + vx0 * t + 0.5 * a_hb * t * t
-            y = row["RelHeight"] + vy0 * t - 0.5 * GRAVITY * t * t + 0.5 * a_ivb * t * t
-            return x, y
-        commit_t = max(0, t_total - COMMIT_TIME)
-        return _pos_at(commit_t), _pos_at(t_total), t_total
+        # IVB fallback for remaining rows
+        needs_ivb = np.isnan(commit_x)
+        if needs_ivb.any():
+            idx_f = np.where(needs_ivb)[0]
+            ext = frame["Extension"].values[idx_f].copy()
+            ext = np.where(np.isnan(ext), 6.0, ext)
+            velo_fps = np.maximum(frame["RelSpeed"].values[idx_f] * 5280.0 / 3600.0, 50.0)
+            tt = (MOUND_DIST - ext) / velo_fps
+            ivb = np.nan_to_num(frame["InducedVertBreak"].values[idx_f]) / 12.0
+            hb = np.nan_to_num(frame["HorzBreak"].values[idx_f]) / 12.0
+            tt2 = tt * tt
+            safe_tt = np.where(tt > 0, tt, 1.0)
+            safe_tt2 = np.where(tt > 0, tt2, 1.0)
+            a_ivb = 2.0 * ivb / safe_tt2
+            a_hb = 2.0 * hb / safe_tt2
+            rel_h = frame["RelHeight"].values[idx_f]
+            rel_s = frame["RelSide"].values[idx_f]
+            ploc_h = frame["PlateLocHeight"].values[idx_f]
+            ploc_s = frame["PlateLocSide"].values[idx_f]
+            vy0 = np.where(tt > 0, (ploc_h - rel_h + 0.5 * GRAVITY * tt2 - 0.5 * a_ivb * tt2) / safe_tt, 0)
+            vx0 = np.where(tt > 0, (ploc_s - rel_s - 0.5 * a_hb * tt2) / safe_tt, 0)
+            ct = np.maximum(0, tt - COMMIT_TIME)
+            ct2 = ct * ct
+            commit_x[idx_f] = rel_s + vx0 * ct + 0.5 * a_hb * ct2
+            commit_y[idx_f] = rel_h + vy0 * ct - 0.5 * GRAVITY * ct2 + 0.5 * a_ivb * ct2
+            plate_x[idx_f] = rel_s + vx0 * tt + 0.5 * a_hb * tt2
+            plate_y[idx_f] = rel_h + vy0 * tt - 0.5 * GRAVITY * tt2 + 0.5 * a_ivb * tt2
 
-    def _pair_metrics(row_a, row_b):
-        if pd.notna(row_a["x0"]) and pd.notna(row_a["y0"]) and pd.notna(row_a["vx0"]) and pd.notna(row_a["vy0"]):
-            res_a = _commit_plate_9param(row_a)
-        else:
-            res_a = _commit_plate_ivb(row_a)
-        if pd.notna(row_b["x0"]) and pd.notna(row_b["y0"]) and pd.notna(row_b["vx0"]) and pd.notna(row_b["vy0"]):
-            res_b = _commit_plate_9param(row_b)
-        else:
-            res_b = _commit_plate_ivb(row_b)
-        if res_a is None or res_b is None:
-            return None
-        (cax, cay), (pax, pay), _ = res_a
-        (cbx, cby), (pbx, pby), _ = res_b
-        commit_sep = np.sqrt((cay - cby)**2 + (cax - cbx)**2) * 12
-        plate_sep = np.sqrt((pay - pby)**2 + (pax - pbx)**2) * 12
-        rel_sep = np.sqrt((row_a["RelHeight"] - row_b["RelHeight"])**2 +
-                          (row_a["RelSide"] - row_b["RelSide"])**2) * 12
-        ivb_a = row_a["InducedVertBreak"] if pd.notna(row_a["InducedVertBreak"]) else 0
-        hb_a = row_a["HorzBreak"] if pd.notna(row_a["HorzBreak"]) else 0
-        ivb_b = row_b["InducedVertBreak"] if pd.notna(row_b["InducedVertBreak"]) else 0
-        hb_b = row_b["HorzBreak"] if pd.notna(row_b["HorzBreak"]) else 0
-        move_div = np.sqrt((ivb_a - ivb_b)**2 + (hb_a - hb_b)**2)
-        velo_gap = abs(row_a["RelSpeed"] - row_b["RelSpeed"])
-        if pd.notna(row_a["VertRelAngle"]) and pd.notna(row_b["VertRelAngle"]) and pd.notna(row_a["HorzRelAngle"]) and pd.notna(row_b["HorzRelAngle"]):
-            rel_angle_sep = np.sqrt((row_a["VertRelAngle"] - row_b["VertRelAngle"])**2 +
-                                    (row_a["HorzRelAngle"] - row_b["HorzRelAngle"])**2)
-        else:
-            rel_angle_sep = np.nan
-        return commit_sep, rel_sep, plate_sep, move_div, velo_gap, rel_angle_sep
+        return commit_x, commit_y, plate_x, plate_y
 
-    # Collect metrics per pair + global training set for whiff model
+    # Compute positions for both current and previous pitch in each pair
+    cur_cx, cur_cy, cur_px, cur_py = _compute_positions_vectorized(cur)
+    prv_cx, prv_cy, prv_px, prv_py = _compute_positions_vectorized(prv)
+
+    # Vectorized pair metrics
+    valid = np.isfinite(cur_cx) & np.isfinite(prv_cx)
+    cur_v = cur[valid].copy()
+    prv_v = prv[valid].copy()
+    ccx, ccy = cur_cx[valid], cur_cy[valid]
+    pcx, pcy = prv_cx[valid], prv_cy[valid]
+    cpx, cpy = cur_px[valid], cur_py[valid]
+    ppx, ppy = prv_px[valid], prv_py[valid]
+
+    commit_sep = np.sqrt((ccy - pcy)**2 + (ccx - pcx)**2) * 12
+    plate_sep = np.sqrt((cpy - ppy)**2 + (cpx - ppx)**2) * 12
+    rel_sep = np.sqrt((cur_v["RelHeight"].values - prv_v["RelHeight"].values)**2 +
+                      (cur_v["RelSide"].values - prv_v["RelSide"].values)**2) * 12
+    ivb_c = np.nan_to_num(cur_v["InducedVertBreak"].values)
+    hb_c = np.nan_to_num(cur_v["HorzBreak"].values)
+    ivb_p = np.nan_to_num(prv_v["InducedVertBreak"].values)
+    hb_p = np.nan_to_num(prv_v["HorzBreak"].values)
+    move_div = np.sqrt((ivb_c - ivb_p)**2 + (hb_c - hb_p)**2)
+    velo_gap = np.abs(cur_v["RelSpeed"].values - prv_v["RelSpeed"].values)
+    # Release angle separation
+    has_ra = (cur_v["VertRelAngle"].notna().values & prv_v["VertRelAngle"].notna().values &
+              cur_v["HorzRelAngle"].notna().values & prv_v["HorzRelAngle"].notna().values)
+    rel_angle_sep = np.full(len(cur_v), np.nan)
+    if has_ra.any():
+        rel_angle_sep[has_ra] = np.sqrt(
+            (cur_v["VertRelAngle"].values[has_ra] - prv_v["VertRelAngle"].values[has_ra])**2 +
+            (cur_v["HorzRelAngle"].values[has_ra] - prv_v["HorzRelAngle"].values[has_ra])**2)
+
+    # Build pair keys and collect metrics
+    pt_a = prv_v["TaggedPitchType"].values.astype(str)
+    pt_b = cur_v["TaggedPitchType"].values.astype(str)
+    pair_keys = np.array(['/'.join(sorted([a, b])) for a, b in zip(pt_a, pt_b)])
+    is_whiff = (cur_v["PitchCall"].values == "StrikeSwinging").astype(float)
+
+    all_metrics = np.column_stack([commit_sep, rel_sep, plate_sep, move_div, velo_gap, rel_angle_sep])
+    x_rows = all_metrics.tolist()
+    y_rows = is_whiff.tolist()
+
     metrics_by_pair = {}
-    x_rows = []
-    y_rows = []
-    for idx in cur.index:
-        row_b = cur.loc[idx]
-        row_a = prv.loc[idx]
-        pair_key = '/'.join(sorted([row_a["TaggedPitchType"], row_b["TaggedPitchType"]]))
-        m = _pair_metrics(row_a, row_b)
-        if m is None:
-            continue
-        metrics_by_pair.setdefault(pair_key, []).append(m)
-        # Whiff outcome on the second pitch of the pair
-        y_rows.append(1 if row_b.get("PitchCall") == "StrikeSwinging" else 0)
-        x_rows.append(m)
+    for pk in np.unique(pair_keys):
+        m = pair_keys == pk
+        metrics_by_pair[pk] = all_metrics[m].tolist()
 
     if not metrics_by_pair:
         return {}
@@ -1428,20 +1502,12 @@ def build_tunnel_population_pop():
     except Exception:
         weights_blob["global"] = None
 
-    # Build pair-specific weights by re-looping consecutive pairs to capture y
+    # Build pair-specific weights using already-computed vectorized metrics
     try:
         pair_xy = {}
-        for idx in cur.index:
-            row_b = cur.loc[idx]
-            row_a = prv.loc[idx]
-            pair_key = '/'.join(sorted([row_a["TaggedPitchType"], row_b["TaggedPitchType"]]))
-            m = _pair_metrics(row_a, row_b)
-            if m is None:
-                continue
-            y = 1 if row_b.get("PitchCall") == "StrikeSwinging" else 0
-            pair_xy.setdefault(pair_key, {"X": [], "y": []})
-            pair_xy[pair_key]["X"].append(m)
-            pair_xy[pair_key]["y"].append(y)
+        for pk in np.unique(pair_keys):
+            m = pair_keys == pk
+            pair_xy[pk] = {"X": all_metrics[m].tolist(), "y": is_whiff[m].tolist()}
         for pair_key, blob in pair_xy.items():
             if len(blob["y"]) < 500 or len(set(blob["y"])) <= 1:
                 continue
@@ -2036,6 +2102,26 @@ def player_header(name, jersey, pos, detail_line, stat_line):
     )
 
 
+def _safe_pr(pr, key):
+    """Safely get a value from a player record Series, returning NaN if missing."""
+    if pr is None:
+        return np.nan
+    try:
+        v = pr[key]
+        return v if pd.notna(v) else np.nan
+    except (KeyError, TypeError, IndexError):
+        return np.nan
+
+
+def _safe_pop(all_stats, key):
+    """Safely get a column from population stats DataFrame for percentile calc."""
+    if all_stats is None or (isinstance(all_stats, pd.DataFrame) and all_stats.empty):
+        return pd.Series(dtype=float)
+    if key in all_stats.columns:
+        return all_stats[key]
+    return pd.Series(dtype=float)
+
+
 def section_header(text):
     st.markdown(f'<div class="section-header">{text}</div>', unsafe_allow_html=True)
 
@@ -2055,16 +2141,16 @@ def _hitter_card_content(data, batter, season_filter, bdf, batted, pr, all_batte
     pc_col1, pc_col2 = st.columns([1, 1], gap="medium")
     with pc_col1:
         batting_metrics = [
-            ("Avg EV", pr["AvgEV"], get_percentile(pr["AvgEV"], all_stats["AvgEV"]), ".1f", True),
-            ("Max EV", pr["MaxEV"], get_percentile(pr["MaxEV"], all_stats["MaxEV"]), ".1f", True),
-            ("Barrel %", pr["BarrelPct"], get_percentile(pr["BarrelPct"], all_stats["BarrelPct"]), ".1f", True),
-            ("Hard Hit %", pr["HardHitPct"], get_percentile(pr["HardHitPct"], all_stats["HardHitPct"]), ".1f", True),
-            ("Sweet Spot %", pr["SweetSpotPct"], get_percentile(pr["SweetSpotPct"], all_stats["SweetSpotPct"]), ".1f", True),
-            ("K %", pr["KPct"], get_percentile(pr["KPct"], all_stats["KPct"]), ".1f", False),
-            ("BB %", pr["BBPct"], get_percentile(pr["BBPct"], all_stats["BBPct"]), ".1f", True),
-            ("Whiff %", pr["WhiffPct"], get_percentile(pr["WhiffPct"], all_stats["WhiffPct"]), ".1f", False),
-            ("Chase %", pr["ChasePct"], get_percentile(pr["ChasePct"], all_stats["ChasePct"]), ".1f", False),
-            ("Z-Contact %", pr["ZoneContactPct"], get_percentile(pr["ZoneContactPct"], all_stats["ZoneContactPct"]), ".1f", True),
+            ("Avg EV", _safe_pr(pr, "AvgEV"), get_percentile(_safe_pr(pr, "AvgEV"), _safe_pop(all_stats, "AvgEV")), ".1f", True),
+            ("Max EV", _safe_pr(pr, "MaxEV"), get_percentile(_safe_pr(pr, "MaxEV"), _safe_pop(all_stats, "MaxEV")), ".1f", True),
+            ("Barrel %", _safe_pr(pr, "BarrelPct"), get_percentile(_safe_pr(pr, "BarrelPct"), _safe_pop(all_stats, "BarrelPct")), ".1f", True),
+            ("Hard Hit %", _safe_pr(pr, "HardHitPct"), get_percentile(_safe_pr(pr, "HardHitPct"), _safe_pop(all_stats, "HardHitPct")), ".1f", True),
+            ("Sweet Spot %", _safe_pr(pr, "SweetSpotPct"), get_percentile(_safe_pr(pr, "SweetSpotPct"), _safe_pop(all_stats, "SweetSpotPct")), ".1f", True),
+            ("K %", _safe_pr(pr, "KPct"), get_percentile(_safe_pr(pr, "KPct"), _safe_pop(all_stats, "KPct")), ".1f", False),
+            ("BB %", _safe_pr(pr, "BBPct"), get_percentile(_safe_pr(pr, "BBPct"), _safe_pop(all_stats, "BBPct")), ".1f", True),
+            ("Whiff %", _safe_pr(pr, "WhiffPct"), get_percentile(_safe_pr(pr, "WhiffPct"), _safe_pop(all_stats, "WhiffPct")), ".1f", False),
+            ("Chase %", _safe_pr(pr, "ChasePct"), get_percentile(_safe_pr(pr, "ChasePct"), _safe_pop(all_stats, "ChasePct")), ".1f", False),
+            ("Z-Contact %", _safe_pr(pr, "ZoneContactPct"), get_percentile(_safe_pr(pr, "ZoneContactPct"), _safe_pop(all_stats, "ZoneContactPct")), ".1f", True),
         ]
         render_savant_percentile_section(batting_metrics, "Percentile Rankings")
         st.caption(f"vs. {len(all_stats)} batters in database (min 50 PA)")
@@ -2488,16 +2574,16 @@ def _hitting_overview(data, batter, season_filter, bdf, batted, pr, all_batter_s
     with col1:
         # ── PERCENTILE RANKINGS (Savant-style) ──
         batting_metrics = [
-            ("Avg EV", pr["AvgEV"], get_percentile(pr["AvgEV"], all_stats["AvgEV"]), ".1f", True),
-            ("Max EV", pr["MaxEV"], get_percentile(pr["MaxEV"], all_stats["MaxEV"]), ".1f", True),
-            ("Barrel %", pr["BarrelPct"], get_percentile(pr["BarrelPct"], all_stats["BarrelPct"]), ".1f", True),
-            ("Hard Hit %", pr["HardHitPct"], get_percentile(pr["HardHitPct"], all_stats["HardHitPct"]), ".1f", True),
-            ("Sweet Spot %", pr["SweetSpotPct"], get_percentile(pr["SweetSpotPct"], all_stats["SweetSpotPct"]), ".1f", True),
-            ("Avg LA", pr["AvgLA"], get_percentile(pr["AvgLA"], all_stats["AvgLA"]), ".1f", True),
-            ("K %", pr["KPct"], get_percentile(pr["KPct"], all_stats["KPct"]), ".1f", False),
-            ("BB %", pr["BBPct"], get_percentile(pr["BBPct"], all_stats["BBPct"]), ".1f", True),
-            ("Whiff %", pr["WhiffPct"], get_percentile(pr["WhiffPct"], all_stats["WhiffPct"]), ".1f", False),
-            ("Chase %", pr["ChasePct"], get_percentile(pr["ChasePct"], all_stats["ChasePct"]), ".1f", False),
+            ("Avg EV", _safe_pr(pr, "AvgEV"), get_percentile(_safe_pr(pr, "AvgEV"), _safe_pop(all_stats, "AvgEV")), ".1f", True),
+            ("Max EV", _safe_pr(pr, "MaxEV"), get_percentile(_safe_pr(pr, "MaxEV"), _safe_pop(all_stats, "MaxEV")), ".1f", True),
+            ("Barrel %", _safe_pr(pr, "BarrelPct"), get_percentile(_safe_pr(pr, "BarrelPct"), _safe_pop(all_stats, "BarrelPct")), ".1f", True),
+            ("Hard Hit %", _safe_pr(pr, "HardHitPct"), get_percentile(_safe_pr(pr, "HardHitPct"), _safe_pop(all_stats, "HardHitPct")), ".1f", True),
+            ("Sweet Spot %", _safe_pr(pr, "SweetSpotPct"), get_percentile(_safe_pr(pr, "SweetSpotPct"), _safe_pop(all_stats, "SweetSpotPct")), ".1f", True),
+            ("Avg LA", _safe_pr(pr, "AvgLA"), get_percentile(_safe_pr(pr, "AvgLA"), _safe_pop(all_stats, "AvgLA")), ".1f", True),
+            ("K %", _safe_pr(pr, "KPct"), get_percentile(_safe_pr(pr, "KPct"), _safe_pop(all_stats, "KPct")), ".1f", False),
+            ("BB %", _safe_pr(pr, "BBPct"), get_percentile(_safe_pr(pr, "BBPct"), _safe_pop(all_stats, "BBPct")), ".1f", True),
+            ("Whiff %", _safe_pr(pr, "WhiffPct"), get_percentile(_safe_pr(pr, "WhiffPct"), _safe_pop(all_stats, "WhiffPct")), ".1f", False),
+            ("Chase %", _safe_pr(pr, "ChasePct"), get_percentile(_safe_pr(pr, "ChasePct"), _safe_pop(all_stats, "ChasePct")), ".1f", False),
         ]
         render_savant_percentile_section(batting_metrics, "Percentile Rankings")
         st.caption(f"vs. {len(all_stats)} batters in database (min 50 PA)")
@@ -2517,32 +2603,32 @@ def _hitting_overview(data, batter, season_filter, bdf, batted, pr, all_batter_s
     with col3:
         section_header("Statcast Batting Statistics")
         stats_df = pd.DataFrame([{
-            "PA": int(pr["PA"]),
-            "BBE": int(pr["BBE"]),
-            "Barrels": int(pr["Barrels"]),
-            "Barrel%": round(pr["BarrelPct"], 1) if not pd.isna(pr["BarrelPct"]) else None,
-            "Brl/PA": round(pr["BarrelPA"], 1) if not pd.isna(pr["BarrelPA"]) else None,
-            "Avg EV": round(pr["AvgEV"], 1) if not pd.isna(pr["AvgEV"]) else None,
-            "Max EV": round(pr["MaxEV"], 1) if not pd.isna(pr["MaxEV"]) else None,
-            "Avg LA": round(pr["AvgLA"], 1) if not pd.isna(pr["AvgLA"]) else None,
-            "Sweet%": round(pr["SweetSpotPct"], 1) if not pd.isna(pr["SweetSpotPct"]) else None,
-            "Hard%": round(pr["HardHitPct"], 1) if not pd.isna(pr["HardHitPct"]) else None,
-            "K%": round(pr["KPct"], 1),
-            "BB%": round(pr["BBPct"], 1),
+            "PA": int(_safe_pr(pr, "PA") or 0),
+            "BBE": int(_safe_pr(pr, "BBE") or 0),
+            "Barrels": int(_safe_pr(pr, "Barrels") or 0),
+            "Barrel%": round(_safe_pr(pr, "BarrelPct"), 1) if not pd.isna(_safe_pr(pr, "BarrelPct")) else None,
+            "Brl/PA": round(_safe_pr(pr, "BarrelPA"), 1) if not pd.isna(_safe_pr(pr, "BarrelPA")) else None,
+            "Avg EV": round(_safe_pr(pr, "AvgEV"), 1) if not pd.isna(_safe_pr(pr, "AvgEV")) else None,
+            "Max EV": round(_safe_pr(pr, "MaxEV"), 1) if not pd.isna(_safe_pr(pr, "MaxEV")) else None,
+            "Avg LA": round(_safe_pr(pr, "AvgLA"), 1) if not pd.isna(_safe_pr(pr, "AvgLA")) else None,
+            "Sweet%": round(_safe_pr(pr, "SweetSpotPct"), 1) if not pd.isna(_safe_pr(pr, "SweetSpotPct")) else None,
+            "Hard%": round(_safe_pr(pr, "HardHitPct"), 1) if not pd.isna(_safe_pr(pr, "HardHitPct")) else None,
+            "K%": round(_safe_pr(pr, "KPct") or 0, 1),
+            "BB%": round(_safe_pr(pr, "BBPct") or 0, 1),
         }])
         st.dataframe(stats_df, use_container_width=True, hide_index=True)
 
         # Batted Ball Profile
         section_header("Batted Ball Profile")
         bb_df = pd.DataFrame([{
-            "GB%": round(pr["GBPct"], 1) if not pd.isna(pr["GBPct"]) else None,
-            "Air%": round(pr["AirPct"], 1) if not pd.isna(pr["AirPct"]) else None,
-            "FB%": round(pr["FBPct"], 1) if not pd.isna(pr["FBPct"]) else None,
-            "LD%": round(pr["LDPct"], 1) if not pd.isna(pr["LDPct"]) else None,
-            "PU%": round(pr["PUPct"], 1) if not pd.isna(pr["PUPct"]) else None,
-            "Pull%": round(pr["PullPct"], 1) if not pd.isna(pr["PullPct"]) else None,
-            "Cent%": round(pr["StraightPct"], 1) if not pd.isna(pr["StraightPct"]) else None,
-            "Oppo%": round(pr["OppoPct"], 1) if not pd.isna(pr["OppoPct"]) else None,
+            "GB%": round(_safe_pr(pr, "GBPct"), 1) if not pd.isna(_safe_pr(pr, "GBPct")) else None,
+            "Air%": round(_safe_pr(pr, "AirPct"), 1) if not pd.isna(_safe_pr(pr, "AirPct")) else None,
+            "FB%": round(_safe_pr(pr, "FBPct"), 1) if not pd.isna(_safe_pr(pr, "FBPct")) else None,
+            "LD%": round(_safe_pr(pr, "LDPct"), 1) if not pd.isna(_safe_pr(pr, "LDPct")) else None,
+            "PU%": round(_safe_pr(pr, "PUPct"), 1) if not pd.isna(_safe_pr(pr, "PUPct")) else None,
+            "Pull%": round(_safe_pr(pr, "PullPct"), 1) if not pd.isna(_safe_pr(pr, "PullPct")) else None,
+            "Cent%": round(_safe_pr(pr, "StraightPct"), 1) if not pd.isna(_safe_pr(pr, "StraightPct")) else None,
+            "Oppo%": round(_safe_pr(pr, "OppoPct"), 1) if not pd.isna(_safe_pr(pr, "OppoPct")) else None,
         }])
         st.dataframe(bb_df, use_container_width=True, hide_index=True)
 
@@ -2550,15 +2636,15 @@ def _hitting_overview(data, batter, season_filter, bdf, batted, pr, all_batter_s
         section_header("Plate Discipline")
         disc_df = pd.DataFrame([{
             "Pitches": len(bdf),
-            "Zone%": round(pr["ZonePct"], 1) if not pd.isna(pr["ZonePct"]) else None,
-            "Z-Swing%": round(pr["ZoneSwingPct"], 1) if not pd.isna(pr["ZoneSwingPct"]) else None,
-            "Z-Contact%": round(pr["ZoneContactPct"], 1) if not pd.isna(pr["ZoneContactPct"]) else None,
-            "Chase%": round(pr["ChasePct"], 1),
-            "Chase Ct%": round(pr["ChaseContact"], 1) if not pd.isna(pr["ChaseContact"]) else None,
-            "Swing%": round(pr["SwingPct"], 1),
-            "Whiff%": round(pr["WhiffPct"], 1),
-            "K%": round(pr["KPct"], 1),
-            "BB%": round(pr["BBPct"], 1),
+            "Zone%": round(_safe_pr(pr, "ZonePct"), 1) if not pd.isna(_safe_pr(pr, "ZonePct")) else None,
+            "Z-Swing%": round(_safe_pr(pr, "ZoneSwingPct"), 1) if not pd.isna(_safe_pr(pr, "ZoneSwingPct")) else None,
+            "Z-Contact%": round(_safe_pr(pr, "ZoneContactPct"), 1) if not pd.isna(_safe_pr(pr, "ZoneContactPct")) else None,
+            "Chase%": round(_safe_pr(pr, "ChasePct") or 0, 1),
+            "Chase Ct%": round(_safe_pr(pr, "ChaseContact"), 1) if not pd.isna(_safe_pr(pr, "ChaseContact")) else None,
+            "Swing%": round(_safe_pr(pr, "SwingPct") or 0, 1),
+            "Whiff%": round(_safe_pr(pr, "WhiffPct") or 0, 1),
+            "K%": round(_safe_pr(pr, "KPct") or 0, 1),
+            "BB%": round(_safe_pr(pr, "BBPct") or 0, 1),
         }])
         st.dataframe(disc_df, use_container_width=True, hide_index=True)
 
@@ -2570,7 +2656,7 @@ def _hitting_overview(data, batter, season_filter, bdf, batted, pr, all_batter_s
             under = len(batted[batted["Angle"] > 40]) / len(batted) * 100 if batted["Angle"].notna().any() else 0
             flare = len(batted[(batted["ExitSpeed"].between(70, 88)) & (batted["Angle"].between(8, 32))]) / len(batted) * 100 if batted["Angle"].notna().any() else 0
             solid = len(batted[(batted["ExitSpeed"].between(89, 97)) & (batted["Angle"].between(8, 32))]) / len(batted) * 100 if batted["Angle"].notna().any() else 0
-            barrel = pr["BarrelPct"] if not pd.isna(pr["BarrelPct"]) else 0
+            barrel = _safe_pr(pr, "BarrelPct") if not pd.isna(_safe_pr(pr, "BarrelPct")) else 0
             qoc_df = pd.DataFrame([{
                 "Weak%": round(weak, 1),
                 "Topped%": round(topped, 1),
@@ -2578,7 +2664,7 @@ def _hitting_overview(data, batter, season_filter, bdf, batted, pr, all_batter_s
                 "Flare%": round(flare, 1),
                 "Solid%": round(solid, 1),
                 "Barrel%": round(barrel, 1),
-                "Brl/PA": round(pr["BarrelPA"], 1) if not pd.isna(pr["BarrelPA"]) else None,
+                "Brl/PA": round(_safe_pr(pr, "BarrelPA"), 1) if not pd.isna(_safe_pr(pr, "BarrelPA")) else None,
             }])
             st.dataframe(qoc_df, use_container_width=True, hide_index=True)
 
@@ -2593,7 +2679,7 @@ def _hitting_overview(data, batter, season_filter, bdf, batted, pr, all_batter_s
             w = min(15, len(batted_sorted))
             batted_sorted = batted_sorted.copy()
             batted_sorted["Roll"] = batted_sorted["ExitSpeed"].rolling(w, min_periods=3).mean()
-            db_avg = all_stats["AvgEV"].mean()
+            db_avg = _safe_pop(all_stats, "AvgEV").mean()
             fig = go.Figure()
             fig.add_trace(go.Scatter(
                 x=list(range(len(batted_sorted))), y=batted_sorted["Roll"],
@@ -3012,20 +3098,20 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
     st.caption("Plate discipline metrics vs. all hitters in the database.")
 
     disc_metrics = [
-        ("Zone Swing%", zone_swing_pct, get_percentile(zone_swing_pct, all_stats["ZoneSwingPct"]), ".1f", True),
-        ("Chase%", chase_pct, get_percentile(chase_pct, all_stats["ChasePct"]), ".1f", False),
-        ("Whiff%", whiff_pct, get_percentile(whiff_pct, all_stats["WhiffPct"]), ".1f", False),
-        ("Z-Contact%", zone_contact_pct, get_percentile(zone_contact_pct, all_stats["ZoneContactPct"]), ".1f", True),
+        ("Zone Swing%", zone_swing_pct, get_percentile(zone_swing_pct, _safe_pop(all_stats, "ZoneSwingPct")), ".1f", True),
+        ("Chase%", chase_pct, get_percentile(chase_pct, _safe_pop(all_stats, "ChasePct")), ".1f", False),
+        ("Whiff%", whiff_pct, get_percentile(whiff_pct, _safe_pop(all_stats, "WhiffPct")), ".1f", False),
+        ("Z-Contact%", zone_contact_pct, get_percentile(zone_contact_pct, _safe_pop(all_stats, "ZoneContactPct")), ".1f", True),
         ("Chase Contact%", chase_contact_pct,
-         get_percentile(chase_contact_pct, all_stats["ChaseContact"]) if not pd.isna(chase_contact_pct) else np.nan,
+         get_percentile(chase_contact_pct, _safe_pop(all_stats, "ChaseContact")) if not pd.isna(chase_contact_pct) else np.nan,
          ".1f", True),
     ]
     render_savant_percentile_section(disc_metrics)
 
     # Decision Score composite
-    zs_pctl = get_percentile(zone_swing_pct, all_stats["ZoneSwingPct"])
-    ch_pctl = get_percentile(chase_pct, all_stats["ChasePct"])
-    zc_pctl = get_percentile(zone_contact_pct, all_stats["ZoneContactPct"]) if not pd.isna(zone_contact_pct) else 50
+    zs_pctl = get_percentile(zone_swing_pct, _safe_pop(all_stats, "ZoneSwingPct"))
+    ch_pctl = get_percentile(chase_pct, _safe_pop(all_stats, "ChasePct"))
+    zc_pctl = get_percentile(zone_contact_pct, _safe_pop(all_stats, "ZoneContactPct")) if not pd.isna(zone_contact_pct) else 50
     # For chase, lower is better → invert percentile
     ch_pctl_good = (100 - ch_pctl) if not pd.isna(ch_pctl) else 50
     zs_pctl_safe = zs_pctl if not pd.isna(zs_pctl) else 50
@@ -3555,8 +3641,8 @@ def page_hitting(data):
     pos = POSITION.get(batter, "")
     side = safe_mode(bdf["BatterSide"], "")
     bats = {"Right": "R", "Left": "L", "Switch": "S"}.get(side, side)
-    pa_val = int(pr["PA"]) if pr is not None and "PA" in pr else 0
-    bbe_val = int(pr["BBE"]) if pr is not None and "BBE" in pr else 0
+    pa_val = int(_safe_pr(pr, "PA") or 0) if pr is not None and "PA" in pr else 0
+    bbe_val = int(_safe_pr(pr, "BBE") or 0) if pr is not None and "BBE" in pr else 0
     player_header(batter, jersey, pos,
                   f"{pos}  |  Bats: {bats}  |  Davidson Wildcats",
                   f"{pa_val} PA  |  {bbe_val} Batted Balls  |  "
@@ -3711,16 +3797,16 @@ def _pitching_overview(data, pitcher, season_filter, pdf, pdf_raw, pr, all_pitch
 
     with col1:
         p_metrics = [
-            ("FB Velo", pr["AvgFBVelo"], get_percentile(pr["AvgFBVelo"], all_stats["AvgFBVelo"]), ".1f", True),
-            ("Avg EV Against", pr["AvgEVAgainst"], get_percentile(pr["AvgEVAgainst"], all_stats["AvgEVAgainst"]), ".1f", False),
-            ("Chase %", pr["ChasePct"], get_percentile(pr["ChasePct"], all_stats["ChasePct"]), ".1f", True),
-            ("Whiff %", pr["WhiffPct"], get_percentile(pr["WhiffPct"], all_stats["WhiffPct"]), ".1f", True),
-            ("K %", pr["KPct"], get_percentile(pr["KPct"], all_stats["KPct"]), ".1f", True),
-            ("BB %", pr["BBPct"], get_percentile(pr["BBPct"], all_stats["BBPct"]), ".1f", False),
-            ("Barrel %", pr["BarrelPctAgainst"], get_percentile(pr["BarrelPctAgainst"], all_stats["BarrelPctAgainst"]), ".1f", False),
-            ("Hard Hit %", pr["HardHitAgainst"], get_percentile(pr["HardHitAgainst"], all_stats["HardHitAgainst"]), ".1f", False),
-            ("GB %", pr["GBPct"], get_percentile(pr["GBPct"], all_stats["GBPct"]), ".1f", True),
-            ("Extension", pr["Extension"], get_percentile(pr["Extension"], all_stats["Extension"]), ".1f", True),
+            ("FB Velo", _safe_pr(pr, "AvgFBVelo"), get_percentile(_safe_pr(pr, "AvgFBVelo"), _safe_pop(all_stats, "AvgFBVelo")), ".1f", True),
+            ("Avg EV Against", _safe_pr(pr, "AvgEVAgainst"), get_percentile(_safe_pr(pr, "AvgEVAgainst"), _safe_pop(all_stats, "AvgEVAgainst")), ".1f", False),
+            ("Chase %", _safe_pr(pr, "ChasePct"), get_percentile(_safe_pr(pr, "ChasePct"), _safe_pop(all_stats, "ChasePct")), ".1f", True),
+            ("Whiff %", _safe_pr(pr, "WhiffPct"), get_percentile(_safe_pr(pr, "WhiffPct"), _safe_pop(all_stats, "WhiffPct")), ".1f", True),
+            ("K %", _safe_pr(pr, "KPct"), get_percentile(_safe_pr(pr, "KPct"), _safe_pop(all_stats, "KPct")), ".1f", True),
+            ("BB %", _safe_pr(pr, "BBPct"), get_percentile(_safe_pr(pr, "BBPct"), _safe_pop(all_stats, "BBPct")), ".1f", False),
+            ("Barrel %", _safe_pr(pr, "BarrelPctAgainst"), get_percentile(_safe_pr(pr, "BarrelPctAgainst"), _safe_pop(all_stats, "BarrelPctAgainst")), ".1f", False),
+            ("Hard Hit %", _safe_pr(pr, "HardHitAgainst"), get_percentile(_safe_pr(pr, "HardHitAgainst"), _safe_pop(all_stats, "HardHitAgainst")), ".1f", False),
+            ("GB %", _safe_pr(pr, "GBPct"), get_percentile(_safe_pr(pr, "GBPct"), _safe_pop(all_stats, "GBPct")), ".1f", True),
+            ("Extension", _safe_pr(pr, "Extension"), get_percentile(_safe_pr(pr, "Extension"), _safe_pop(all_stats, "Extension")), ".1f", True),
         ]
         render_savant_percentile_section(p_metrics, "Percentile Rankings")
         st.caption(f"vs. {len(all_stats)} pitchers in database (min 100 pitches)")
@@ -3854,14 +3940,14 @@ def _pitching_overview(data, pitcher, season_filter, pdf, pdf_raw, pr, all_pitch
     with col5:
         section_header("Plate Discipline")
         disc_df = pd.DataFrame([{
-            "Pitches": int(pr["Pitches"]),
-            "Zone%": round(pr["ZonePct"], 1) if not pd.isna(pr["ZonePct"]) else None,
-            "Chase%": round(pr["ChasePct"], 1) if not pd.isna(pr["ChasePct"]) else None,
-            "Whiff%": round(pr["WhiffPct"], 1),
-            "Z-Contact%": round(pr["ZoneContactPct"], 1) if not pd.isna(pr["ZoneContactPct"]) else None,
-            "Swing%": round(pr["SwingPct"], 1),
-            "K%": round(pr["KPct"], 1),
-            "BB%": round(pr["BBPct"], 1),
+            "Pitches": int(_safe_pr(pr, "Pitches") or 0),
+            "Zone%": round(_safe_pr(pr, "ZonePct"), 1) if not pd.isna(_safe_pr(pr, "ZonePct")) else None,
+            "Chase%": round(_safe_pr(pr, "ChasePct"), 1) if not pd.isna(_safe_pr(pr, "ChasePct")) else None,
+            "Whiff%": round(_safe_pr(pr, "WhiffPct") or 0, 1),
+            "Z-Contact%": round(_safe_pr(pr, "ZoneContactPct"), 1) if not pd.isna(_safe_pr(pr, "ZoneContactPct")) else None,
+            "Swing%": round(_safe_pr(pr, "SwingPct") or 0, 1),
+            "K%": round(_safe_pr(pr, "KPct") or 0, 1),
+            "BB%": round(_safe_pr(pr, "BBPct") or 0, 1),
         }])
         st.dataframe(disc_df, use_container_width=True, hide_index=True)
 
@@ -4214,16 +4300,16 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
             st.info("Population percentiles unavailable for this pitcher.")
         else:
             p_metrics = [
-                ("FB Velo", pr["AvgFBVelo"], get_percentile(pr["AvgFBVelo"], all_stats["AvgFBVelo"]), ".1f", True),
-                ("Avg EV Against", pr["AvgEVAgainst"], get_percentile(pr["AvgEVAgainst"], all_stats["AvgEVAgainst"]), ".1f", False),
-                ("Chase %", pr["ChasePct"], get_percentile(pr["ChasePct"], all_stats["ChasePct"]), ".1f", True),
-                ("Whiff %", pr["WhiffPct"], get_percentile(pr["WhiffPct"], all_stats["WhiffPct"]), ".1f", True),
-                ("K %", pr["KPct"], get_percentile(pr["KPct"], all_stats["KPct"]), ".1f", True),
-                ("BB %", pr["BBPct"], get_percentile(pr["BBPct"], all_stats["BBPct"]), ".1f", False),
-                ("Barrel %", pr["BarrelPctAgainst"], get_percentile(pr["BarrelPctAgainst"], all_stats["BarrelPctAgainst"]), ".1f", False),
-                ("Hard Hit %", pr["HardHitAgainst"], get_percentile(pr["HardHitAgainst"], all_stats["HardHitAgainst"]), ".1f", False),
-                ("GB %", pr["GBPct"], get_percentile(pr["GBPct"], all_stats["GBPct"]), ".1f", True),
-                ("Extension", pr["Extension"], get_percentile(pr["Extension"], all_stats["Extension"]), ".1f", True),
+                ("FB Velo", _safe_pr(pr, "AvgFBVelo"), get_percentile(_safe_pr(pr, "AvgFBVelo"), _safe_pop(all_stats, "AvgFBVelo")), ".1f", True),
+                ("Avg EV Against", _safe_pr(pr, "AvgEVAgainst"), get_percentile(_safe_pr(pr, "AvgEVAgainst"), _safe_pop(all_stats, "AvgEVAgainst")), ".1f", False),
+                ("Chase %", _safe_pr(pr, "ChasePct"), get_percentile(_safe_pr(pr, "ChasePct"), _safe_pop(all_stats, "ChasePct")), ".1f", True),
+                ("Whiff %", _safe_pr(pr, "WhiffPct"), get_percentile(_safe_pr(pr, "WhiffPct"), _safe_pop(all_stats, "WhiffPct")), ".1f", True),
+                ("K %", _safe_pr(pr, "KPct"), get_percentile(_safe_pr(pr, "KPct"), _safe_pop(all_stats, "KPct")), ".1f", True),
+                ("BB %", _safe_pr(pr, "BBPct"), get_percentile(_safe_pr(pr, "BBPct"), _safe_pop(all_stats, "BBPct")), ".1f", False),
+                ("Barrel %", _safe_pr(pr, "BarrelPctAgainst"), get_percentile(_safe_pr(pr, "BarrelPctAgainst"), _safe_pop(all_stats, "BarrelPctAgainst")), ".1f", False),
+                ("Hard Hit %", _safe_pr(pr, "HardHitAgainst"), get_percentile(_safe_pr(pr, "HardHitAgainst"), _safe_pop(all_stats, "HardHitAgainst")), ".1f", False),
+                ("GB %", _safe_pr(pr, "GBPct"), get_percentile(_safe_pr(pr, "GBPct"), _safe_pop(all_stats, "GBPct")), ".1f", True),
+                ("Extension", _safe_pr(pr, "Extension"), get_percentile(_safe_pr(pr, "Extension"), _safe_pop(all_stats, "Extension")), ".1f", True),
             ]
             render_savant_percentile_section(p_metrics, "Percentile Rankings")
             st.caption(f"vs. {len(all_stats)} pitchers in database (min 100 pitches)")
@@ -5420,7 +5506,7 @@ def page_pitching(data):
     throws = safe_mode(pdf["PitcherThrows"], "")
     thr = {"Right": "R", "Left": "L"}.get(throws, throws)
     total_pitches = len(pdf)
-    pa_faced = int(pr["PA"]) if pr is not None and "PA" in pr else 0
+    pa_faced = int(_safe_pr(pr, "PA") or 0) if pr is not None and "PA" in pr else 0
     player_header(pitcher, jersey, pos,
                   f"{pos}  |  Throws: {thr}  |  Davidson Wildcats",
                   f"{total_pitches} pitches  |  {pa_faced} PA faced  |  "
