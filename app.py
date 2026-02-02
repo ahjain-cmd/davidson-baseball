@@ -359,6 +359,7 @@ def get_duckdb_con():
                 ELSE TaggedPitchType
             END AS TaggedPitchType
         FROM read_parquet('{PARQUET_PATH}')
+        WHERE PitchCall IS NULL OR PitchCall != 'Undefined'
         """
     )
     return con
@@ -376,7 +377,8 @@ def load_davidson_data():
         return pd.DataFrame()
     sql = f"""
         SELECT * FROM read_parquet('{PARQUET_PATH}')
-        WHERE PitcherTeam = '{DAVIDSON_TEAM_ID}' OR BatterTeam = '{DAVIDSON_TEAM_ID}'
+        WHERE (PitcherTeam = '{DAVIDSON_TEAM_ID}' OR BatterTeam = '{DAVIDSON_TEAM_ID}')
+          AND (PitchCall IS NULL OR PitchCall != 'Undefined')
     """
     data = duckdb.query(sql).fetchdf()
     data["Date"] = pd.to_datetime(data["Date"], errors="coerce")
