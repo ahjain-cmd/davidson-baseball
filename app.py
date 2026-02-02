@@ -5369,10 +5369,12 @@ def page_pitching(data):
 
     all_pitcher_stats = compute_pitcher_stats_pop(season_filter=season_filter)
     pr = None
-    if all_pitcher_stats.empty or pitcher not in all_pitcher_stats["Pitcher"].values:
-        st.info("Not enough population data for this pitcher — showing available team data only.")
+    if all_pitcher_stats.empty:
+        st.info("Population stats unavailable — showing team data only.")
+        all_pitcher_stats = pd.DataFrame()
     else:
-    pr = all_pitcher_stats[all_pitcher_stats["Pitcher"] == pitcher].iloc[0]
+        if pitcher in all_pitcher_stats["Pitcher"].values:
+            pr = all_pitcher_stats[all_pitcher_stats["Pitcher"] == pitcher].iloc[0]
     pdf_raw = pitching[(pitching["Pitcher"] == pitcher) & (pitching["Season"].isin(season_filter))]
     pdf = filter_minor_pitches(pdf_raw)
     if pdf.empty or len(pdf) < 20:
