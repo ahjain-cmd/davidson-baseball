@@ -5094,7 +5094,8 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
                     labels=dict(x="Next Pitch", y="Current Pitch", color="%"),
                     aspect="auto",
                 )
-                fig_matrix.update_layout(height=350, **CHART_LAYOUT,
+                fig_matrix.update_layout(height=350, plot_bgcolor="white", paper_bgcolor="white",
+                                        font=dict(size=11, color="#000000", family="Inter, Arial, sans-serif"),
                                         margin=dict(l=80, r=10, t=30, b=60))
                 st.plotly_chart(fig_matrix, use_container_width=True, key="plab_trans")
 
@@ -5110,7 +5111,8 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
                             labels=dict(x="Follow-Up Pitch", y="Setup Pitch", color="Whiff%"),
                             aspect="auto",
                         )
-                        fig_whiff.update_layout(height=350, **CHART_LAYOUT,
+                        fig_whiff.update_layout(height=350, plot_bgcolor="white", paper_bgcolor="white",
+                                               font=dict(size=11, color="#000000", family="Inter, Arial, sans-serif"),
                                                margin=dict(l=80, r=10, t=30, b=60))
                         st.plotly_chart(fig_whiff, use_container_width=True, key="plab_whiff_hm")
 
