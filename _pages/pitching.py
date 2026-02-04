@@ -1139,30 +1139,40 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
 
         # ── Best Tunnel Pairs (pure deception ranking) ──
         if isinstance(tunnel_df, pd.DataFrame) and not tunnel_df.empty and "Tunnel Score" in tunnel_df.columns:
-            st.markdown("---")
-            st.markdown("**Best Tunnel Pairs (Deception Only)**")
-            st.caption(
-                "Ranked purely by tunnel score — how deceptive two pitches look out of the hand. "
-                "Tunnel score measures: (1) **Commit separation** at 280ms before plate — how far apart "
-                "pitches are when hitter must decide to swing (55% weight); (2) **Plate separation** — "
-                "how much pitches diverge at the plate (19%); (3) **Release point consistency** (10%); "
-                "(4) **Release angle similarity** (8%); (5) **Movement divergence** (6%); (6) **Velo gap** (2%). "
-                "Graded vs all D1 pitchers throwing the same pitch pair."
-            )
             # Sort by tunnel score descending, take top 2
             tunnel_sorted = tunnel_df.sort_values("Tunnel Score", ascending=False).head(2)
-            tunnel_rows = []
-            for _, r in tunnel_sorted.iterrows():
-                tunnel_rows.append({
-                    "Pair": f"{r['Pitch A']} → {r['Pitch B']}",
-                    "Grade": r.get("Grade", "-"),
-                    "Tunnel Score": f"{r['Tunnel Score']:.0f}" if pd.notna(r.get("Tunnel Score")) else "-",
-                    "Commit Sep": f"{r['Commit Sep (in)']:.1f}\"" if pd.notna(r.get("Commit Sep (in)")) else "-",
-                    "Plate Sep": f"{r['Plate Sep (in)']:.1f}\"" if pd.notna(r.get("Plate Sep (in)")) else "-",
-                    "Velo Gap": f"{r['Velo Gap (mph)']:.0f} mph" if pd.notna(r.get("Velo Gap (mph)")) else "-",
-                })
-            if tunnel_rows:
-                st.dataframe(pd.DataFrame(tunnel_rows), use_container_width=True, hide_index=True)
+            # Only show section if there's at least one pair with a passing grade (C or better = score >= 40)
+            best_score = tunnel_sorted["Tunnel Score"].max() if not tunnel_sorted.empty else 0
+            if best_score >= 40:
+                st.markdown("---")
+                st.markdown("**Best Tunnel Pairs (Deception Only)**")
+                st.caption(
+                    "Ranked purely by tunnel score — how deceptive two pitches look out of the hand. "
+                    "Tunnel score measures: (1) **Commit separation** at 280ms before plate — how far apart "
+                    "pitches are when hitter must decide to swing (55% weight); (2) **Plate separation** — "
+                    "how much pitches diverge at the plate (19%); (3) **Release point consistency** (10%); "
+                    "(4) **Release angle similarity** (8%); (5) **Movement divergence** (6%); (6) **Velo gap** (2%). "
+                    "Graded vs all D1 pitchers throwing the same pitch pair."
+                )
+                tunnel_rows = []
+                for _, r in tunnel_sorted.iterrows():
+                    tunnel_rows.append({
+                        "Pair": f"{r['Pitch A']} → {r['Pitch B']}",
+                        "Grade": r.get("Grade", "-"),
+                        "Tunnel Score": f"{r['Tunnel Score']:.0f}" if pd.notna(r.get("Tunnel Score")) else "-",
+                        "Commit Sep": f"{r['Commit Sep (in)']:.1f}\"" if pd.notna(r.get("Commit Sep (in)")) else "-",
+                        "Plate Sep": f"{r['Plate Sep (in)']:.1f}\"" if pd.notna(r.get("Plate Sep (in)")) else "-",
+                        "Velo Gap": f"{r['Velo Gap (mph)']:.0f} mph" if pd.notna(r.get("Velo Gap (mph)")) else "-",
+                    })
+                if tunnel_rows:
+                    st.dataframe(pd.DataFrame(tunnel_rows), use_container_width=True, hide_index=True)
+            elif best_score > 0:
+                # Show a note that tunneling is below average but don't display the section
+                st.markdown("---")
+                st.caption(
+                    f"**Tunneling Note**: All pitch pair tunnels are below D1 average (best: {best_score:.0f}th percentile). "
+                    "Consider working on release point consistency to improve deception."
+                )
 
         # Transition matrix mini-heatmap
         sort_cols_tm = [c for c in ["GameID", "Batter", "PAofInning", "PitchNo"] if c in pdf.columns]
