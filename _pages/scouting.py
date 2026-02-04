@@ -7478,7 +7478,7 @@ def _load_local_pitcher_baserunning():
 def _load_local_outfield_throws():
     """Load outfield throwing data (assists) from local CSV file."""
     import os
-    csv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Outfield Throws.csv")
+    csv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "outfield_throws.csv")
     if os.path.exists(csv_path):
         try:
             df = pd.read_csv(csv_path)
