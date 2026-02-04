@@ -20,6 +20,7 @@ from config import (
     ROSTER_2026,
     POSITION,
     _APP_DIR,
+    tm_name_to_trackman,
 )
 
 
@@ -122,6 +123,17 @@ def query_population(sql):
     return get_duckdb_con().execute(sql).fetchdf()
 
 
+def query_precompute(sql):
+    """Run an ad-hoc SQL query against the precomputed DuckDB (if present)."""
+    con = get_precompute_con()
+    if con is None:
+        return pd.DataFrame()
+    try:
+        return con.execute(sql).fetchdf()
+    except Exception:
+        return pd.DataFrame()
+
+
 @st.cache_data(show_spinner="Loading Davidson data...")
 def load_davidson_data():
     """Load only Davidson rows from parquet into pandas (~300k rows)."""
@@ -157,6 +169,40 @@ def load_davidson_data():
     if "Season" in data.columns:
         data["Season"] = pd.to_numeric(data["Season"], errors="coerce").astype("Int64")
     return data
+
+
+@st.cache_data(show_spinner="Loading opponent Trackman data...", ttl=600)
+def load_opponent_trackman(player_names_trackman, season_filter=None):
+    """Query full D1 parquet for pitch data involving the given player names.
+
+    Parameters
+    ----------
+    player_names_trackman : tuple of str
+        Trackman-format names ("Last, First") to search for as Pitcher OR Batter.
+    season_filter : tuple of int or None
+        If given, restrict to these seasons.
+
+    Returns a pitch-level DataFrame (may be empty).
+    """
+    if not player_names_trackman:
+        return pd.DataFrame()
+    con = get_duckdb_con()
+    names_sql = ", ".join(f"'{n.replace(chr(39), chr(39)+chr(39))}'" for n in player_names_trackman)
+    where = f"(Pitcher IN ({names_sql}) OR Batter IN ({names_sql}))"
+    if season_filter:
+        seasons_sql = ", ".join(str(int(s)) for s in season_filter)
+        where += f" AND Season IN ({seasons_sql})"
+    sql = f"SELECT * FROM trackman WHERE {where}"
+    try:
+        df = con.execute(sql).fetchdf()
+    except Exception:
+        return pd.DataFrame()
+    if "Date" in df.columns:
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    if "Season" in df.columns:
+        df["Season"] = pd.to_numeric(df["Season"], errors="coerce").astype("Int64")
+    df["__source"] = "local"
+    return df
 
 
 @st.cache_data(show_spinner=False)
@@ -387,7 +433,11 @@ def _safe_num(df, col, default=np.nan):
 
 def _tm_pctile(player_df, col, all_df, col_all=None):
     """Compute percentile of a player's value vs all D1 players in that column.
-    Returns float 0-100 or np.nan."""
+    Returns float 0-100 or np.nan.
+
+    Handles scale mismatches: if player value is in percentage form (>1) but
+    league data is in decimal form (<1), or vice versa, normalizes to same scale.
+    """
     val = _safe_num(player_df, col)
     if pd.isna(val):
         return np.nan
@@ -397,6 +447,19 @@ def _tm_pctile(player_df, col, all_df, col_all=None):
     series = pd.to_numeric(all_df[c], errors="coerce").dropna()
     if series.empty:
         return np.nan
+
+    # Detect and fix scale mismatch for percentage columns
+    # If player value looks like percentage (>1) but league median looks like decimal (<1), scale league up
+    # If player value looks like decimal (<1) but league median looks like percentage (>1), scale player up
+    if "%" in col:
+        league_median = series.median()
+        if val > 1 and league_median < 1:
+            # Player is percentage, league is decimal - scale league up
+            series = series * 100
+        elif val < 1 and league_median > 1:
+            # Player is decimal, league is percentage - scale player up
+            val = val * 100
+
     return percentileofscore(series, val, kind='rank')
 
 
@@ -411,14 +474,15 @@ def _hitter_narrative(name, rate, exit_d, pr, ht, hl, spd, all_h_rate, all_h_exi
     ops = _safe_num(rate, "OPS")
     if not pd.isna(ops):
         ops_pct = _tm_pctile(rate, "OPS", all_h_rate)
-        if ops_pct >= 80:
-            lines.append(f"**{name} is an elite offensive threat** (OPS {ops:.3f}, {int(ops_pct)}th percentile among D1 hitters).")
-        elif ops_pct >= 60:
-            lines.append(f"**{name} is an above-average hitter** (OPS {ops:.3f}, {int(ops_pct)}th percentile).")
-        elif ops_pct >= 40:
-            lines.append(f"**{name} is an average producer** at the plate (OPS {ops:.3f}, {int(ops_pct)}th percentile).")
-        else:
-            lines.append(f"**{name} has struggled offensively** (OPS {ops:.3f}, {int(ops_pct)}th percentile).")
+        if not pd.isna(ops_pct):
+            if ops_pct >= 80:
+                lines.append(f"**{name} is an elite offensive threat** (OPS {ops:.3f}, {int(ops_pct)}th percentile among D1 hitters).")
+            elif ops_pct >= 60:
+                lines.append(f"**{name} is an above-average hitter** (OPS {ops:.3f}, {int(ops_pct)}th percentile).")
+            elif ops_pct >= 40:
+                lines.append(f"**{name} is an average producer** at the plate (OPS {ops:.3f}, {int(ops_pct)}th percentile).")
+            else:
+                lines.append(f"**{name} has struggled offensively** (OPS {ops:.3f}, {int(ops_pct)}th percentile).")
 
     # Power vs contact profile
     ev = _safe_num(exit_d, "ExitVel")
@@ -484,7 +548,9 @@ def _pitcher_narrative(name, trad, mov, pr, ht, exit_d, all_p_trad, all_p_mov, a
         era_pct = _tm_pctile(trad, "ERA", all_p_trad)
         # ERA: lower is better, so invert
         era_rank = 100 - era_pct if not pd.isna(era_pct) else np.nan
-        if era_rank >= 80:
+        if pd.isna(era_rank):
+            lines.append(f"**{name}** ({era:.2f} ERA) — percentile data unavailable.")
+        elif era_rank >= 80:
             lines.append(f"**{name} is one of the best arms in D1** ({era:.2f} ERA, top {100-int(era_rank)}% among all pitchers with 10+ IP).")
         elif era_rank >= 60:
             lines.append(f"**{name} has been solid on the mound** ({era:.2f} ERA, {int(era_rank)}th percentile).")

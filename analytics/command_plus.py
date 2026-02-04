@@ -107,6 +107,22 @@ def _compute_pitch_pair_results(pdf, data, tunnel_df=None):
         whiffs = grp[is_whiff.reindex(grp.index, fill_value=False)]
         csws = grp[is_csw.reindex(grp.index, fill_value=False)]
         batted = grp[(grp["PitchCall"] == "InPlay") & grp["ExitSpeed"].notna()]
+        # Putaway% proxy: 2-strike pitches resulting in swinging/called strike
+        if "Strikes" in grp.columns:
+            two_strike = grp[grp["Strikes"] == 2]
+            putaway = two_strike[two_strike["PitchCall"].isin(["StrikeSwinging", "StrikeCalled"])]
+            putaway_pct = len(putaway) / max(len(two_strike), 1) * 100 if len(two_strike) > 0 else np.nan
+        else:
+            putaway_pct = np.nan
+        # K%: use KorBB if available, otherwise PlayResult == Strikeout
+        if "KorBB" in grp.columns:
+            k_events = grp["KorBB"].isin(["Strikeout", "K"])
+            k_pct = k_events.mean() * 100 if len(grp) > 0 else np.nan
+        elif "PlayResult" in grp.columns:
+            k_events = grp["PlayResult"].isin(["Strikeout", "K"])
+            k_pct = k_events.mean() * 100 if len(grp) > 0 else np.nan
+        else:
+            k_pct = np.nan
         # Tunnel lookup for this pair
         tun_grade, tun_score = "-", np.nan
         if isinstance(tunnel_df, pd.DataFrame) and not tunnel_df.empty:
@@ -122,6 +138,8 @@ def _compute_pitch_pair_results(pdf, data, tunnel_df=None):
             "Whiff%": round(len(whiffs) / max(len(swings), 1) * 100, 1),
             "CSW%": round(len(csws) / n * 100, 1),
             "Avg EV": round(batted["ExitSpeed"].mean(), 1) if len(batted) > 0 else np.nan,
+            "Putaway%": round(putaway_pct, 1) if not pd.isna(putaway_pct) else np.nan,
+            "K%": round(k_pct, 1) if not pd.isna(k_pct) else np.nan,
             "Chase%": round(
                 (lambda _iz=in_zone_mask(grp): len(grp[(~_iz) & grp["PitchCall"].isin(SWING_CALLS)]) /
                 max(len(grp[~_iz]), 1) * 100)(), 1),

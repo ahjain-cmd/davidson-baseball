@@ -1,6 +1,7 @@
 """Data loading, stats computation, and population queries."""
 from data.loader import (
     get_duckdb_con, query_population, load_davidson_data,
+    query_precompute,
     get_all_seasons, get_sidebar_stats, _load_truemedia,
     _tm_team, _tm_player, _safe_val, _safe_pct, _safe_num, _tm_pctile,
     _hitter_narrative, _pitcher_narrative,

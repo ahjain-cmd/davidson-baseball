@@ -163,8 +163,6 @@ CHART_LAYOUT = dict(
     plot_bgcolor="white", paper_bgcolor="white",
     font=dict(size=11, color="#000000", family="Inter, Arial, sans-serif"),
     margin=dict(l=45, r=10, t=30, b=40),
-    xaxis=dict(tickfont=dict(color="#000000"), title_font=dict(color="#000000")),
-    yaxis=dict(tickfont=dict(color="#000000"), title_font=dict(color="#000000")),
     coloraxis=dict(colorbar=dict(tickfont=dict(color="#000000"), title_font=dict(color="#000000"))),
 )
 

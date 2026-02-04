@@ -29,6 +29,42 @@ from config import safe_mode, _SWING_CALLS_SQL
 from data.loader import query_population
 
 
+_CURRENT_BATS = None
+
+
+def _set_current_bats(bats):
+    global _CURRENT_BATS
+    _CURRENT_BATS = bats
+
+
+def _add_bats_badge(fig, bats):
+    if fig is None:
+        return fig
+    if bats is None or (isinstance(bats, float) and pd.isna(bats)):
+        return fig
+    b = str(bats).strip()
+    mapping = {"Right": "R", "Left": "L", "Switch": "S", "Both": "S", "R": "R", "L": "L", "S": "S"}
+    label = mapping.get(b, b)
+    if not label or label == "?":
+        return fig
+    fig.add_annotation(
+        x=0.99, y=0.98, xref="paper", yref="paper",
+        text=f"Bats: {label}",
+        showarrow=False, xanchor="right", yanchor="top",
+        font=dict(size=11, color="#444"),
+    )
+    return fig
+
+
+def _plotly_chart_bats(fig, **kwargs):
+    if fig is None:
+        return
+    _add_bats_badge(fig, _CURRENT_BATS)
+    if "use_container_width" not in kwargs:
+        kwargs["use_container_width"] = True
+    st.plotly_chart(fig, **kwargs)
+
+
 def _hitter_card_content(data, batter, season_filter, bdf, batted, pr, all_batter_stats):
     """Render a single-page Hitter Card — simple, actionable summary."""
     all_stats = all_batter_stats
@@ -59,7 +95,7 @@ def _hitter_card_content(data, batter, season_filter, bdf, batted, pr, all_batte
         section_header("Spray Chart")
         fig_spray = make_spray_chart(in_play, height=420)
         if fig_spray:
-            st.plotly_chart(fig_spray, use_container_width=True, key="hc_spray")
+            _plotly_chart_bats(fig_spray, use_container_width=True, key="hc_spray")
         else:
             st.info("No batted ball data.")
 
@@ -119,7 +155,7 @@ def _hitter_card_content(data, batter, season_filter, bdf, batted, pr, all_batte
                                    legend=dict(orientation="h", y=1.08, x=0.5, xanchor="center", font=dict(size=10)))
             fig_dmg.update_xaxes(tickfont=dict(color="#000000"), title_font=dict(color="#000000"))
             fig_dmg.update_yaxes(tickfont=dict(color="#000000"), title_font=dict(color="#000000"))
-            st.plotly_chart(fig_dmg, use_container_width=True, key="hc_damage")
+            _plotly_chart_bats(fig_dmg, use_container_width=True, key="hc_damage")
         else:
             st.caption("Not enough batted ball data")
         st.caption(f"{len(batted_loc)} batted balls")
@@ -141,7 +177,7 @@ def _hitter_card_content(data, batter, season_filter, bdf, batted, pr, all_batte
             fig_wz.update_layout(**CHART_LAYOUT, height=350)
             fig_wz.update_xaxes(tickfont=dict(color="#000000"), title_font=dict(color="#000000"))
             fig_wz.update_yaxes(tickfont=dict(color="#000000"), title_font=dict(color="#000000"))
-            st.plotly_chart(fig_wz, use_container_width=True, key="hc_whiff_zone")
+            _plotly_chart_bats(fig_wz, use_container_width=True, key="hc_whiff_zone")
         else:
             st.caption("Not enough swing data for whiff zones")
 
@@ -168,7 +204,7 @@ def _hitter_card_content(data, batter, season_filter, bdf, batted, pr, all_batte
                                     yaxis=dict(range=[0.5, 4.5], title="Vertical"))
             fig_prob.update_xaxes(tickfont=dict(color="#000000"), title_font=dict(color="#000000"))
             fig_prob.update_yaxes(tickfont=dict(color="#000000"), title_font=dict(color="#000000"))
-            st.plotly_chart(fig_prob, use_container_width=True, key="hc_swing_prob")
+            _plotly_chart_bats(fig_prob, use_container_width=True, key="hc_swing_prob")
         else:
             st.caption("Not enough pitch data")
         st.caption(f"{len(all_with_loc)} pitches")
@@ -257,7 +293,7 @@ def _hitter_card_content(data, batter, season_filter, bdf, batted, pr, all_batte
                 plot_bgcolor="white", paper_bgcolor="white",
                 font=dict(family="Inter, Arial, sans-serif"),
             )
-            st.plotly_chart(fig, use_container_width=True, key="hc_count_grid")
+            _plotly_chart_bats(fig, use_container_width=True, key="hc_count_grid")
             st.caption("EV (bold) + Whiff% per count. Green = EV above DB avg, Red = below.")
         else:
             st.caption("Count data not available.")
@@ -415,7 +451,7 @@ def _hitter_card_content(data, batter, season_filter, bdf, batted, pr, all_batte
                               legend=dict(orientation="h", yanchor="bottom", y=1.02,
                                           font=dict(size=9, color="#000000")),
                               **CHART_LAYOUT)
-            st.plotly_chart(fig, use_container_width=True, key="hc_ev_la")
+            _plotly_chart_bats(fig, use_container_width=True, key="hc_ev_la")
         else:
             st.info("No exit velo / launch angle data.")
 
@@ -492,7 +528,7 @@ def _hitting_overview(data, batter, season_filter, bdf, batted, pr, all_batter_s
         section_header("Hits Spray Chart")
         fig = make_spray_chart(in_play, height=420)
         if fig:
-            st.plotly_chart(fig, use_container_width=True, key="hitter_spray")
+            _plotly_chart_bats(fig, use_container_width=True, key="hitter_spray")
         else:
             st.info("No batted ball data.")
 
@@ -592,7 +628,7 @@ def _hitting_overview(data, batter, season_filter, bdf, batted, pr, all_batter_s
                           annotation_font=dict(size=10, color="#666"))
             fig.update_layout(xaxis_title="Batted Ball #", yaxis_title="EV (mph)",
                               height=300, **CHART_LAYOUT)
-            st.plotly_chart(fig, use_container_width=True, key="hitter_roll_ev")
+            _plotly_chart_bats(fig, use_container_width=True, key="hitter_roll_ev")
         else:
             st.info("Not enough batted balls for rolling chart.")
 
@@ -623,7 +659,7 @@ def _hitting_overview(data, batter, season_filter, bdf, batted, pr, all_batter_s
                               legend=dict(orientation="h", yanchor="bottom", y=1.02,
                                           font=dict(size=9, color="#000000")),
                               **CHART_LAYOUT)
-            st.plotly_chart(fig, use_container_width=True, key="hitter_ev_la")
+            _plotly_chart_bats(fig, use_container_width=True, key="hitter_ev_la")
         else:
             st.info("No exit velo / launch angle data.")
 
@@ -644,7 +680,7 @@ def _hitting_overview(data, batter, season_filter, bdf, batted, pr, all_batter_s
                 coloraxis_showscale=False, plot_bgcolor="white", paper_bgcolor="white",
                 font=dict(color="#000000", family="Inter, Arial, sans-serif"),
             )
-            st.plotly_chart(fig, use_container_width=True, key="hitter_swing_hm")
+            _plotly_chart_bats(fig, use_container_width=True, key="hitter_swing_hm")
         else:
             st.info("No swing location data.")
 
@@ -833,7 +869,7 @@ def _hitting_overview(data, batter, season_filter, bdf, batted, pr, all_batter_s
             plot_bgcolor="white", paper_bgcolor="white",
             font=dict(family="Inter, Arial, sans-serif"),
         )
-        st.plotly_chart(fig, use_container_width=True, key="hitter_count_grid")
+        _plotly_chart_bats(fig, use_container_width=True, key="hitter_count_grid")
 
         # Count-state summary with percentile bars
         st.markdown("")
@@ -1143,7 +1179,7 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
             )
             _add_grid_zone_outline(fig_should)
             fig_should.update_layout(height=320, coloraxis_showscale=False, **CHART_LAYOUT)
-            st.plotly_chart(fig_should, use_container_width=True, key="sdl_should")
+            _plotly_chart_bats(fig_should, use_container_width=True, key="sdl_should")
 
         with map2:
             st.markdown("**Actually Swings**")
@@ -1156,7 +1192,7 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
             )
             _add_grid_zone_outline(fig_actual)
             fig_actual.update_layout(height=320, coloraxis_showscale=False, **CHART_LAYOUT)
-            st.plotly_chart(fig_actual, use_container_width=True, key="sdl_actual")
+            _plotly_chart_bats(fig_actual, use_container_width=True, key="sdl_actual")
 
         with map3:
             st.markdown("**Mismatch**")
@@ -1178,7 +1214,7 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
             fig_mm.update_traces(text=mm_text, texttemplate="%{text}")
             _add_grid_zone_outline(fig_mm)
             fig_mm.update_layout(height=320, coloraxis_showscale=False, **CHART_LAYOUT)
-            st.plotly_chart(fig_mm, use_container_width=True, key="sdl_mismatch")
+            _plotly_chart_bats(fig_mm, use_container_width=True, key="sdl_mismatch")
     else:
         st.info("Not enough location data for zone maps (need 30+ pitches).")
 
@@ -1336,7 +1372,7 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
                             height=350, margin=dict(l=5, r=5, t=5, b=5),
                             plot_bgcolor="white", paper_bgcolor="white",
                         )
-                        st.plotly_chart(fig_exp, use_container_width=True, key=f"sdl_exp_{cnt_label}")
+                        _plotly_chart_bats(fig_exp, use_container_width=True, key=f"sdl_exp_{cnt_label}")
                         # Compute chase rate for this count
                         cnt_iz = cnt_d[in_zone_mask(cnt_d, batter_zones, "Batter")]
                         cnt_oz_m = ~in_zone_mask(cnt_d, batter_zones, "Batter") & cnt_d["PlateLocSide"].notna()
@@ -1414,7 +1450,7 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
         )
         _add_grid_zone_outline(fig_ev_zone)
         fig_ev_zone.update_layout(height=350, **CHART_LAYOUT)
-        st.plotly_chart(fig_ev_zone, use_container_width=True, key="sdl_ev_zone")
+        _plotly_chart_bats(fig_ev_zone, use_container_width=True, key="sdl_ev_zone")
 
     # Bat speed proxy by pitch type (if enough hard hit data)
     hard_hit = batted[batted["ExitSpeed"] >= 80].copy()
@@ -1438,7 +1474,7 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
                 height=300, yaxis_title="Est. Bat Speed (mph)", **CHART_LAYOUT,
                 yaxis=dict(range=[min(bs_by_pt["mean"].min() - 5, 55), bs_by_pt["mean"].max() + 5]),
             )
-            st.plotly_chart(fig_bs, use_container_width=True, key="sdl_bat_speed")
+            _plotly_chart_bats(fig_bs, use_container_width=True, key="sdl_bat_speed")
 
     # ═══════════════════════════════════════════
     # SECTION F: Actionable Recommendations
@@ -1541,6 +1577,7 @@ def page_hitting(data):
     pos = POSITION.get(batter, "")
     side = safe_mode(bdf["BatterSide"], "")
     bats = {"Right": "R", "Left": "L", "Switch": "S"}.get(side, side)
+    _set_current_bats(bats)
     pa_val = int(_safe_pr(pr, "PA") or 0) if pr is not None and "PA" in pr else 0
     bbe_val = int(_safe_pr(pr, "BBE") or 0) if pr is not None and "BBE" in pr else 0
     player_header(batter, jersey, pos,
@@ -1610,7 +1647,7 @@ def _hitting_lab_content(data, batter, season_filter, bdf, batted, pr, all_batte
                                        font=dict(size=9, color="#d22d49"), showarrow=False)
                 fig_ev.update_layout(**CHART_LAYOUT, height=400,
                                       legend=dict(orientation="h", y=1.08, x=0.5, xanchor="center", font=dict(size=10)))
-                st.plotly_chart(fig_ev, use_container_width=True)
+                _plotly_chart_bats(fig_ev, use_container_width=True)
 
             col_ev_dist, col_la_dist = st.columns(2)
             with col_ev_dist:
@@ -1632,7 +1669,7 @@ def _hitting_lab_content(data, batter, season_filter, bdf, batted, pr, all_batte
                     xaxis_title="Exit Velocity (mph)", yaxis_title="Density",
                     legend=dict(orientation="h", y=1.08, x=0.5, xanchor="center", font=dict(size=10)),
                 )
-                st.plotly_chart(fig_ev_hist, use_container_width=True)
+                _plotly_chart_bats(fig_ev_hist, use_container_width=True)
 
             with col_la_dist:
                 section_header("Launch Angle Distribution")
@@ -1645,7 +1682,7 @@ def _hitting_lab_content(data, batter, season_filter, bdf, batted, pr, all_batte
                                             text=[f"{len(subset)/len(batted)*100:.0f}%"], textposition="outside"))
                 fig_la.update_layout(**CHART_LAYOUT, height=320, showlegend=False,
                                       yaxis_title="Count", xaxis_title="Launch Angle Zone", bargap=0.15)
-                st.plotly_chart(fig_la, use_container_width=True)
+                _plotly_chart_bats(fig_la, use_container_width=True)
 
             section_header("Expected Outcomes (EV/LA Model)")
             xo = _compute_expected_outcomes(batted)
@@ -1694,7 +1731,7 @@ def _hitting_lab_content(data, batter, season_filter, bdf, batted, pr, all_batte
             ))
             _add_grid_zone_outline(fig_grid)
             fig_grid.update_layout(**CHART_LAYOUT, height=380, xaxis=dict(side="bottom"))
-            st.plotly_chart(fig_grid, use_container_width=True)
+            _plotly_chart_bats(fig_grid, use_container_width=True)
 
         col_ev_grid, col_chase = st.columns(2)
         with col_ev_grid:
@@ -1709,7 +1746,7 @@ def _hitting_lab_content(data, batter, season_filter, bdf, batted, pr, all_batte
             ))
             _add_grid_zone_outline(fig_ev_grid)
             fig_ev_grid.update_layout(**CHART_LAYOUT, height=380, xaxis=dict(side="bottom"))
-            st.plotly_chart(fig_ev_grid, use_container_width=True)
+            _plotly_chart_bats(fig_ev_grid, use_container_width=True)
 
         with col_chase:
             section_header("Chase Locations")
@@ -1728,7 +1765,7 @@ def _hitting_lab_content(data, batter, season_filter, bdf, batted, pr, all_batte
                 fig_chase.update_layout(**CHART_LAYOUT, height=380,
                                          xaxis=dict(range=[-2.5, 2.5], scaleanchor="y"), yaxis=dict(range=[0, 5]),
                                          legend=dict(orientation="h", y=1.08, x=0.5, xanchor="center", font=dict(size=10)))
-                st.plotly_chart(fig_chase, use_container_width=True)
+                _plotly_chart_bats(fig_chase, use_container_width=True)
             else:
                 st.info("No out-of-zone data available.")
 
@@ -1777,7 +1814,7 @@ def _hitting_lab_content(data, batter, season_filter, bdf, batted, pr, all_batte
                     fig_contact.update_layout(**CHART_LAYOUT, height=400,
                                                xaxis=dict(range=[-2.5, 2.5], title="Horizontal", scaleanchor="y"),
                                                yaxis=dict(range=[0, 5], title="Vertical"))
-                    st.plotly_chart(fig_contact, use_container_width=True)
+                    _plotly_chart_bats(fig_contact, use_container_width=True)
 
             with col_damage_hz:
                 section_header("Damage Heatmap (Avg EV)")
@@ -1803,7 +1840,7 @@ def _hitting_lab_content(data, batter, season_filter, bdf, batted, pr, all_batte
                                               xaxis=dict(range=[-2.5, 2.5], title="Horizontal", scaleanchor="y"),
                                               yaxis=dict(range=[0, 5], title="Vertical"),
                                               legend=dict(orientation="h", y=1.08, x=0.5, xanchor="center", font=dict(size=10)))
-                    st.plotly_chart(fig_damage, use_container_width=True)
+                    _plotly_chart_bats(fig_damage, use_container_width=True)
 
             col_whiff_hz, _ = st.columns(2)
             with col_whiff_hz:
@@ -1817,7 +1854,7 @@ def _hitting_lab_content(data, batter, season_filter, bdf, batted, pr, all_batte
                     colorbar=dict(title="Whiff%", len=0.8)))
                 _add_grid_zone_outline(fig_wz)
                 fig_wz.update_layout(**CHART_LAYOUT, height=380)
-                st.plotly_chart(fig_wz, use_container_width=True)
+                _plotly_chart_bats(fig_wz, use_container_width=True)
 
             section_header("Damage by Pitch Type & Location")
             top_pts = [pt for pt in sorted(bdf["TaggedPitchType"].dropna().unique())
@@ -1845,10 +1882,12 @@ def _hitting_lab_content(data, batter, season_filter, bdf, batted, pr, all_batte
                             fig_pt.update_layout(plot_bgcolor="white", paper_bgcolor="white",
                                                   font=dict(size=11, color="#000000", family="Inter, Arial, sans-serif"),
                                                   height=300,
-                                                  xaxis=dict(range=[-2.5, 2.5], showticklabels=False),
-                                                  yaxis=dict(range=[0, 5], showticklabels=False),
+                                                  xaxis=dict(range=[-2.5, 2.5], showticklabels=False,
+                                                             scaleanchor="y", fixedrange=True),
+                                                  yaxis=dict(range=[0, 5], showticklabels=False,
+                                                             fixedrange=True),
                                                   margin=dict(l=5, r=5, t=5, b=5))
-                            st.plotly_chart(fig_pt, use_container_width=True)
+                            _plotly_chart_bats(fig_pt, use_container_width=True)
                         else:
                             st.caption("Not enough data")
 
@@ -1887,7 +1926,7 @@ def _hitting_lab_content(data, batter, season_filter, bdf, batted, pr, all_batte
                 colorscale=[[0, "#1f77b4"], [0.5, "#f7f7f7"], [1, "#d22d49"]],
                 zmin=70, zmax=100, showscale=True, colorbar=dict(title="EV", len=0.8)))
             fig_evc.update_layout(**CHART_LAYOUT, height=320)
-            st.plotly_chart(fig_evc, use_container_width=True)
+            _plotly_chart_bats(fig_evc, use_container_width=True)
         with col_swc:
             section_header("Swing% by Count")
             fig_swc = go.Figure(data=go.Heatmap(
@@ -1896,7 +1935,7 @@ def _hitting_lab_content(data, batter, season_filter, bdf, batted, pr, all_batte
                 colorscale=[[0, "#1f77b4"], [0.5, "#f7f7f7"], [1, "#d22d49"]],
                 zmin=0, zmax=100, showscale=True, colorbar=dict(title="Swing%", len=0.8)))
             fig_swc.update_layout(**CHART_LAYOUT, height=320)
-            st.plotly_chart(fig_swc, use_container_width=True)
+            _plotly_chart_bats(fig_swc, use_container_width=True)
 
         col_fp, col_2k = st.columns(2)
         with col_fp:
@@ -2007,7 +2046,7 @@ def _hitting_lab_content(data, batter, season_filter, bdf, batted, pr, all_batte
                     fig_pe.update_layout(**CHART_LAYOUT, height=max(200, len(ch)*40+60),
                                           xaxis_title="Avg Exit Velocity (mph)",
                                           xaxis=dict(range=[60, ch["Avg EV"].max()+8]))
-                    st.plotly_chart(fig_pe, use_container_width=True)
+                    _plotly_chart_bats(fig_pe, use_container_width=True)
             with col_whb:
                 section_header("Whiff% by Pitch Type")
                 ch2 = pt_df.sort_values("Whiff%", ascending=True)
@@ -2017,7 +2056,7 @@ def _hitting_lab_content(data, batter, season_filter, bdf, batted, pr, all_batte
                     text=ch2["Whiff%"].map(lambda x: f"{x:.1f}%"), textposition="outside"))
                 fig_pw.update_layout(**CHART_LAYOUT, height=max(200, len(ch2)*40+60),
                                       xaxis_title="Whiff%", xaxis=dict(range=[0, max(ch2["Whiff%"].max()+10, 40)]))
-                st.plotly_chart(fig_pw, use_container_width=True)
+                _plotly_chart_bats(fig_pw, use_container_width=True)
 
             section_header("Pitch Movement vs Damage")
             bwm = bdf[(bdf["PitchCall"] == "InPlay")].dropna(subset=["ExitSpeed", "HorzBreak", "InducedVertBreak"])
@@ -2028,7 +2067,7 @@ def _hitting_lab_content(data, batter, season_filter, bdf, batted, pr, all_batte
                                      hover_data={"TaggedPitchType": True, "ExitSpeed": ":.1f"},
                                      labels={"HorzBreak": "Horizontal Break (in)", "InducedVertBreak": "Induced Vert Break (in)", "ExitSpeed": "EV"})
                 fig_mv.update_layout(**CHART_LAYOUT, height=400)
-                st.plotly_chart(fig_mv, use_container_width=True)
+                _plotly_chart_bats(fig_mv, use_container_width=True)
         else:
             st.info("Not enough pitch type data.")
 
@@ -2078,7 +2117,7 @@ def _hitting_lab_content(data, batter, season_filter, bdf, batted, pr, all_batte
                                    scaleanchor="x", fixedrange=True),
                         height=450, margin=dict(l=0, r=0, t=5, b=0),
                         plot_bgcolor="white", paper_bgcolor="white")
-                    st.plotly_chart(fig_sp, use_container_width=True)
+                    _plotly_chart_bats(fig_sp, use_container_width=True)
 
             with col_table:
                 section_header("Pull / Center / Oppo")
@@ -2135,7 +2174,7 @@ def _hitting_lab_content(data, batter, season_filter, bdf, batted, pr, all_batte
                                       fillcolor="rgba(29,190,58,0.08)", line=dict(width=0))
                     fig_ld.add_annotation(x=2.3, y=20, text="Sweet Spot", font=dict(size=9, color="#2ca02c"), showarrow=False)
                     fig_ld.update_layout(**CHART_LAYOUT, height=350, showlegend=False)
-                    st.plotly_chart(fig_ld, use_container_width=True)
+                    _plotly_chart_bats(fig_ld, use_container_width=True)
             with col_gb:
                 section_header("GB% by Pitch Type")
                 gb_rows = []
@@ -2153,4 +2192,4 @@ def _hitting_lab_content(data, batter, season_filter, bdf, batted, pr, all_batte
                         text=gdf["GB%"].map(lambda x: f"{x:.0f}%"), textposition="outside"))
                     fig_gb.update_layout(**CHART_LAYOUT, height=max(200, len(gdf)*40+60),
                                           xaxis_title="Ground Ball %", xaxis=dict(range=[0, 100]))
-                    st.plotly_chart(fig_gb, use_container_width=True)
+                    _plotly_chart_bats(fig_gb, use_container_width=True)

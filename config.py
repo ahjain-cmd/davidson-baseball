@@ -15,6 +15,14 @@ PARQUET_FIXED_PATH = os.path.join(_APP_DIR, "all_trackman_fixed.parquet")
 PARQUET_PATH = PARQUET_FIXED_PATH if os.path.exists(PARQUET_FIXED_PATH) else os.path.join(_APP_DIR, "all_trackman.parquet")
 DUCKDB_PATH = os.path.join(_APP_DIR, "davidson.duckdb")
 DAVIDSON_TEAM_ID = "DAV_WIL"
+
+# ── TrueMedia API credentials ────────────────
+TM_USERNAME = "frhowden@davidson.edu"
+TM_SITENAME = "davidson-ncaabaseball"
+TM_MASTER_TOKEN = os.environ.get(
+    "TM_MASTER_TOKEN",
+    "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyIjoiZjZlZWEwYzViZmUwZTY4ZmEwZDUyMGQyMDU2NTNmYzciLCJpYXQiOjE3NzAwMDM4NTd9.c2QwNDh0Sy54ystStrYvORy4PrEQEJbUFDAacCH55EA",
+)
 CACHE_DIR = os.path.join(_APP_DIR, ".cache")
 TUNNEL_BENCH_PATH = os.path.join(CACHE_DIR, "tunnel_benchmarks.json")
 TUNNEL_WEIGHTS_PATH = os.path.join(CACHE_DIR, "tunnel_weights.json")
@@ -260,6 +268,25 @@ def display_name(name, escape_html=True):
     parts = name.split(", ")
     result = f"{parts[1]} {parts[0]}" if len(parts) == 2 else name
     return html_mod.escape(result) if escape_html else result
+
+
+def tm_name_to_trackman(full_name):
+    """Convert TrueMedia 'First Last' or 'First Last Jr.' to Trackman 'Last, First' / 'Last, First Jr.'."""
+    if not full_name or not isinstance(full_name, str):
+        return full_name
+    parts = full_name.strip().split()
+    if len(parts) < 2:
+        return full_name
+    suffixes = {"Jr.", "Jr", "Sr.", "Sr", "II", "III", "IV", "V"}
+    suffix = ""
+    if parts[-1] in suffixes:
+        suffix = " " + parts[-1]
+        parts = parts[:-1]
+    if len(parts) < 2:
+        return full_name
+    first = parts[0]
+    last = " ".join(parts[1:])
+    return f"{last}, {first}{suffix}"
 
 
 def get_percentile(value, series):

@@ -87,20 +87,20 @@ def _build_3pitch_sequences(sorted_ps, hd, tun_df, seq_df):
                 sw12, ch12 = _lookup_seq(p1, p2, seq_df)
                 sw23, ch23 = _lookup_seq(p2, p3, seq_df)
                 parts, wts = [], []
-                # Tunnel quality (45%): t12 weight=18, t23 weight=27
+                # Tunnel quality (30%): t12 weight=12, t23 weight=18
                 if not pd.isna(t12):
-                    parts.append(t12); wts.append(18)
+                    parts.append(t12); wts.append(12)
                 if not pd.isna(t23):
-                    parts.append(t23); wts.append(27)
-                # Outcome effectiveness (40%): sw23=25, sw12=10, ch23=5
+                    parts.append(t23); wts.append(18)
+                # Outcome effectiveness (55%): sw23=35, sw12=12, ch23=8
                 if not pd.isna(sw23):
-                    parts.append(min(sw23 / 50 * 100, 100)); wts.append(25)
+                    parts.append(min(sw23 / 50 * 100, 100)); wts.append(35)
                 else:
-                    parts.append(30); wts.append(25)
+                    parts.append(30); wts.append(35)
                 if not pd.isna(sw12):
-                    parts.append(min(sw12 / 50 * 100, 100)); wts.append(10)
+                    parts.append(min(sw12 / 50 * 100, 100)); wts.append(12)
                 if not pd.isna(ch23):
-                    parts.append(min(ch23 / 40 * 100, 100)); wts.append(5)
+                    parts.append(min(ch23 / 40 * 100, 100)); wts.append(8)
                 # Pitch quality (15%): putaway composite=10, EffV gap=5
                 parts.append(comp_scores.get(p3, 50)); wts.append(10)
                 p1_effv = pitch_data.get(p1, {}).get("eff_velo", np.nan)
@@ -123,7 +123,7 @@ def _build_3pitch_sequences(sorted_ps, hd, tun_df, seq_df):
                     is_hard_p3 = p3 in _hard_pitches
                     their_2k = hd.get("whiff_2k_hard" if is_hard_p3 else "whiff_2k_os", np.nan)
                     best_path = {
-                        "seq": f"{p1} → {p2} → {p3}", "p1": p1, "p2": p2, "p3": p3,
+                        "seq": f"{p1} -> {p2} -> {p3}", "p1": p1, "p2": p2, "p3": p3,
                         "score": round(p3_score * 0.35 + best_path_score * 0.65, 1),
                         "t12": t12, "t23": t23, "sw23": sw23, "their_2k": their_2k,
                         "effv_gap": ev_gap,

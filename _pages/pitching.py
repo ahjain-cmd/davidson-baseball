@@ -32,7 +32,319 @@ from analytics.expected import _create_zone_grid_data
 from config import safe_mode, _SWING_CALLS_SQL
 from data.loader import query_population
 from data.population import build_tunnel_population_pop
-from analytics.sequencing import _lookup_tunnel, _build_3pitch_sequences
+
+
+def _score_linear(val, lo, hi, invert=False):
+    if pd.isna(val) or hi == lo:
+        return np.nan
+    if invert:
+        val = hi - (val - lo)
+        lo, hi = lo, hi
+    return float(np.clip((val - lo) / (hi - lo) * 100, 0, 100))
+
+
+def _score_ev(ev):
+    # Lower EV is better. Map ~80-95 to 100-0.
+    return _score_linear(95 - ev, 0, 15)
+
+
+def _score_whiff(wh):
+    return _score_linear(wh, 0, 50)
+
+
+def _score_k(k):
+    return _score_linear(k, 0, 35)
+
+
+def _score_stuff(stuff):
+    return _score_linear(stuff, 70, 130)
+
+
+def _score_cmd(cmd):
+    return _score_linear(cmd, 80, 120)
+
+
+def _weighted_score(parts, weights):
+    vals = [(p, w) for p, w in zip(parts, weights) if pd.notna(p)]
+    if not vals:
+        return np.nan
+    s = sum(p * w for p, w in vals)
+    wsum = sum(w for _, w in vals)
+    return s / wsum if wsum else np.nan
+
+
+def _build_pitch_metric_map(pdf, stuff_df=None, cmd_df=None):
+    stuff_map = {}
+    if isinstance(stuff_df, pd.DataFrame) and not stuff_df.empty and "StuffPlus" in stuff_df.columns:
+        stuff_map = stuff_df.groupby("TaggedPitchType")["StuffPlus"].mean().to_dict()
+    cmd_map = {}
+    if isinstance(cmd_df, pd.DataFrame) and not cmd_df.empty:
+        cmd_map = dict(zip(cmd_df["Pitch"], cmd_df["Command+"]))
+    return {pt: {"stuff": stuff_map.get(pt, np.nan), "cmd": cmd_map.get(pt, np.nan)}
+            for pt in pdf["TaggedPitchType"].dropna().unique()}
+
+
+def _pair_stats(pair_df, a, b):
+    if not isinstance(pair_df, pd.DataFrame) or pair_df.empty:
+        return {}
+    sub = pair_df[((pair_df["Setup Pitch"] == a) & (pair_df["Follow Pitch"] == b)) |
+                  ((pair_df["Setup Pitch"] == b) & (pair_df["Follow Pitch"] == a))].copy()
+    if sub.empty:
+        return {}
+    sub["Count"] = pd.to_numeric(sub.get("Count"), errors="coerce").fillna(0)
+    w = sub["Count"].where(sub["Count"] > 0, 1)
+    count_ab = float(w[(sub["Setup Pitch"] == a) & (sub["Follow Pitch"] == b)].sum())
+    count_ba = float(w[(sub["Setup Pitch"] == b) & (sub["Follow Pitch"] == a)].sum())
+    def _wavg(col):
+        vals = pd.to_numeric(sub.get(col), errors="coerce")
+        if vals is None or vals.dropna().empty:
+            return np.nan
+        return float(np.average(vals.fillna(0), weights=w))
+    return {
+        "whiff": _wavg("Whiff%"),
+        "k": _wavg("K%"),
+        "ev": _wavg("Avg EV"),
+        "putaway": _wavg("Putaway%"),
+        "count": float(w.sum()),
+        "count_ab": count_ab,
+        "count_ba": count_ba,
+    }
+
+
+def _rank_pairs(tunnel_df, pair_df, pitch_metrics, top_n=2):
+    """Rank pitch pairs using outcomes-first score; include same-pitch pairs."""
+    if not isinstance(pair_df, pd.DataFrame) or pair_df.empty:
+        return []
+    # candidate pairs from pair_df (includes same-pitch)
+    candidates = set()
+    for _, r in pair_df.iterrows():
+        candidates.add((r["Setup Pitch"], r["Follow Pitch"]))
+    # add tunnel pairs
+    if isinstance(tunnel_df, pd.DataFrame) and not tunnel_df.empty:
+        for _, r in tunnel_df.iterrows():
+            candidates.add((r["Pitch A"], r["Pitch B"]))
+
+    tunnel_map = {}
+    if isinstance(tunnel_df, pd.DataFrame) and not tunnel_df.empty:
+        for _, r in tunnel_df.iterrows():
+            key = tuple(sorted([r["Pitch A"], r["Pitch B"]]))
+            tunnel_map[key] = pd.to_numeric(r.get("Tunnel Score"), errors="coerce")
+
+    best_by_key = {}
+    for a, b in candidates:
+        if a not in pitch_metrics or b not in pitch_metrics:
+            continue
+        ps = _pair_stats(pair_df, a, b)
+        pm_a = pitch_metrics.get(a, {})
+        pm_b = pitch_metrics.get(b, {})
+        stuff_avg = np.nanmean([pm_a.get("stuff", np.nan), pm_b.get("stuff", np.nan)])
+        cmd_avg = np.nanmean([pm_a.get("cmd", np.nan), pm_b.get("cmd", np.nan)])
+        tunnel = tunnel_map.get(tuple(sorted([a, b])), np.nan)
+        whiff = ps.get("whiff", np.nan)
+        k_pct = ps.get("k", np.nan)
+        if pd.isna(k_pct):
+            k_pct = ps.get("putaway", np.nan)
+        ev = ps.get("ev", np.nan)
+        count_ab = ps.get("count_ab", 0)
+        count_ba = ps.get("count_ba", 0)
+        if count_ab == count_ba:
+            label_a, label_b = sorted([a, b])
+        else:
+            label_a, label_b = (a, b) if count_ab >= count_ba else (b, a)
+        score = _weighted_score(
+            [_score_whiff(whiff), _score_k(k_pct), _score_ev(ev), tunnel],
+            [0.35, 0.25, 0.25, 0.15],
+        )
+        row = {
+            "Pair": f"{label_a} → {label_b}",
+            "Tunnel": tunnel,
+            "Whiff%": whiff,
+            "K%": k_pct,
+            "Avg EV": ev,
+            "Stuff+": stuff_avg,
+            "Cmd+": cmd_avg,
+            "Score": score,
+            "Pairs": ps.get("count", np.nan),
+            "_key": tuple(sorted([a, b])),
+        }
+        key = row["_key"]
+        prev = best_by_key.get(key)
+        if prev is None:
+            best_by_key[key] = row
+            continue
+        prev_score = prev.get("Score", np.nan)
+        if pd.isna(prev_score) or (pd.notna(score) and score > prev_score):
+            best_by_key[key] = row
+        elif pd.notna(score) and pd.isna(prev_score):
+            best_by_key[key] = row
+
+    out = list(best_by_key.values())
+    out = sorted(out, key=lambda x: (x["Score"] if pd.notna(x["Score"]) else -1), reverse=True)
+    for r in out:
+        r.pop("_key", None)
+    return out[:top_n]
+
+
+def _rank_sequences(pair_df, pitch_metrics, length=3, top_n=2):
+    if not isinstance(pair_df, pd.DataFrame) or pair_df.empty:
+        return []
+    df = pair_df.copy()
+    df["Count"] = pd.to_numeric(df.get("Count"), errors="coerce").fillna(0)
+    df["Whiff%"] = pd.to_numeric(df.get("Whiff%"), errors="coerce")
+    df["K%"] = pd.to_numeric(df.get("K%"), errors="coerce")
+    df["Putaway%"] = pd.to_numeric(df.get("Putaway%"), errors="coerce")
+    df["Avg EV"] = pd.to_numeric(df.get("Avg EV"), errors="coerce")
+    df["Tunnel Score"] = pd.to_numeric(df.get("Tunnel Score"), errors="coerce")
+    df = df.dropna(subset=["Tunnel Score"])
+    if df.empty:
+        return []
+
+    pair_map = {}
+    valid_pitches = set(pitch_metrics.keys())
+    for _, r in df.iterrows():
+        if r["Setup Pitch"] not in valid_pitches or r["Follow Pitch"] not in valid_pitches:
+            continue
+        pair_map[(r["Setup Pitch"], r["Follow Pitch"])] = {
+            "whiff": r["Whiff%"],
+            "k": r["K%"] if pd.notna(r["K%"]) else r["Putaway%"],
+            "ev": r["Avg EV"],
+            "tunnel": r["Tunnel Score"],
+            "count": r["Count"],
+        }
+
+    out_map = {}
+    for (a, b), stats in pair_map.items():
+        out_map.setdefault(a, []).append((b, stats))
+
+    def _wavg(vals, wts):
+        mask = [pd.notna(v) for v in vals]
+        if not any(mask):
+            return np.nan
+        v = [val for val, m in zip(vals, mask) if m]
+        w = [wt for wt, m in zip(wts, mask) if m]
+        return float(np.average(v, weights=w))
+
+    def _seq_stats(pairs):
+        counts = [max(p["count"], 1) for p in pairs]
+        whiff_avg = _wavg([p["whiff"] for p in pairs], counts)
+        k_avg = _wavg([p["k"] for p in pairs], counts)
+        ev_avg = _wavg([p["ev"] for p in pairs], counts)
+        tunnel_avg = _wavg([p["tunnel"] for p in pairs], counts)
+        return whiff_avg, k_avg, ev_avg, tunnel_avg, int(np.sum(counts))
+
+    results = []
+    if length == 3:
+        for a, outs in out_map.items():
+            for b, s1 in outs:
+                for c, s2 in out_map.get(b, []):
+                    wh, k, ev, tn, n = _seq_stats([s1, s2])
+                    pitches = [a, b, c]
+                    stuff_avg = np.nanmean([pitch_metrics.get(p, {}).get("stuff", np.nan) for p in pitches])
+                    cmd_avg = np.nanmean([pitch_metrics.get(p, {}).get("cmd", np.nan) for p in pitches])
+                    score = _weighted_score(
+                        [_score_whiff(wh), _score_k(k), _score_ev(ev), tn],
+                        [0.35, 0.25, 0.25, 0.15],
+                    )
+                    results.append({"Seq": f"{a} → {b} → {c}", "Tunnel": tn, "Whiff%": wh,
+                                    "K%": k, "Avg EV": ev, "Stuff+": stuff_avg,
+                                    "Cmd+": cmd_avg, "Score": score, "Pairs": n})
+    elif length == 4:
+        for a, outs in out_map.items():
+            for b, s1 in outs:
+                for c, s2 in out_map.get(b, []):
+                    for d, s3 in out_map.get(c, []):
+                        wh, k, ev, tn, n = _seq_stats([s1, s2, s3])
+                        pitches = [a, b, c, d]
+                        stuff_avg = np.nanmean([pitch_metrics.get(p, {}).get("stuff", np.nan) for p in pitches])
+                        cmd_avg = np.nanmean([pitch_metrics.get(p, {}).get("cmd", np.nan) for p in pitches])
+                        score = _weighted_score(
+                            [_score_whiff(wh), _score_k(k), _score_ev(ev), tn],
+                            [0.35, 0.25, 0.25, 0.15],
+                        )
+                        results.append({"Seq": f"{a} → {b} → {c} → {d}", "Tunnel": tn, "Whiff%": wh,
+                                        "K%": k, "Avg EV": ev, "Stuff+": stuff_avg,
+                                        "Cmd+": cmd_avg, "Score": score, "Pairs": n})
+    else:
+        return []
+    results.sort(key=lambda x: (x["Score"] if pd.notna(x["Score"]) else -1), reverse=True)
+    return results[:top_n]
+
+
+def _filter_redundant_sequences(seqs, min_unique=3, max_keep=2):
+    """Drop sequences that are just repeats of the same 2 pitches unless needed."""
+    if not seqs:
+        return []
+    def _uniq_count(seq):
+        pitches = [p.strip() for p in seq.split("→")]
+        return len(set(pitches)), tuple(sorted(set(pitches)))
+    filtered = []
+    seen_sets = set()
+    for s in seqs:
+        uniq_cnt, uniq_set = _uniq_count(s["Seq"])
+        if uniq_cnt < min_unique:
+            continue
+        if uniq_set in seen_sets:
+            continue
+        seen_sets.add(uniq_set)
+        filtered.append(s)
+        if len(filtered) >= max_keep:
+            return filtered
+    if filtered:
+        return filtered
+    # Fallback: allow 2-pitch loops if nothing else exists, still de-duplicate
+    for s in seqs:
+        uniq_cnt, uniq_set = _uniq_count(s["Seq"])
+        if uniq_cnt < 2:
+            continue
+        if uniq_set in seen_sets:
+            continue
+        seen_sets.add(uniq_set)
+        filtered.append(s)
+        if len(filtered) >= max_keep:
+            break
+    return filtered
+
+
+def _deception_flag(tunnel):
+    if pd.isna(tunnel):
+        return ""
+    if tunnel >= 60:
+        return f"+ Deception edge (Tunnel {tunnel:.0f})"
+    if tunnel <= 40:
+        return f"- Deception weak (Tunnel {tunnel:.0f})"
+    return ""
+
+
+def _assign_tactical_tags(rows):
+    if not rows:
+        return rows
+    whiffs = [r.get("Whiff%") for r in rows]
+    ks = [r.get("K%") for r in rows]
+    evs = [r.get("Avg EV") for r in rows]
+
+    def _best_idx(vals, func=max):
+        vals_clean = [v for v in vals if pd.notna(v)]
+        if not vals_clean:
+            return None
+        target = func(vals_clean)
+        for i, v in enumerate(vals):
+            if pd.notna(v) and v == target:
+                return i
+        return None
+
+    idx_put = _best_idx(ks, max)
+    idx_ev = _best_idx(evs, min)
+    idx_wh = _best_idx(whiffs, max)
+
+    tags = {}
+    for idx, label in [(idx_put, "Best putaway"), (idx_ev, "Best weak‑contact"), (idx_wh, "Best whiff")]:
+        if idx is not None and idx not in tags:
+            tags[idx] = label
+    for i in range(len(rows)):
+        if i not in tags:
+            tags[i] = "Best overall"
+        rows[i]["Tag"] = tags[i]
+    return rows
 
 
 def _pitching_overview(data, pitcher, season_filter, pdf, pdf_raw, pr, all_pitcher_stats):
@@ -685,118 +997,119 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
                 st.caption("Not enough data")
             st.caption(caption_txt)
 
-    # ── Section C: Tunnel Pairs ──
+    # ── Section C/D: Best Pairs & Sequences (Composite) ──
     if n_pitches >= 2:
         st.markdown("")
-        section_header("Tunnel Pairs")
+        section_header("Best Pitch Pairs & Sequences (Composite)")
         tunnel_pop = build_tunnel_population_pop()
         tunnel_df = _compute_tunnel_score(pdf, tunnel_pop=tunnel_pop)
-        # Filter to pitches with >= 10% usage
-        usage_ok = set(arsenal_agg[arsenal_agg["Usage%"] >= 10].index)
-        if not tunnel_df.empty:
-            tunnel_df = tunnel_df[
-                tunnel_df["Pitch A"].isin(usage_ok) & tunnel_df["Pitch B"].isin(usage_ok)
-            ].reset_index(drop=True)
-        if tunnel_df.empty:
-            st.info("Need 2+ pitch types (≥10% usage) to compute tunnels.")
-        else:
-            grade_colors = {"A": "#22c55e", "B": "#3b82f6", "C": "#f59e0b",
-                            "D": "#f97316", "F": "#ef4444"}
-            # Show all tunnel pairs in a compact table
-            for _, row in tunnel_df.iterrows():
-                gc = grade_colors.get(row["Grade"], "#888")
-                commit_str = f'{row["Commit Sep (in)"]:.1f}' if "Commit Sep (in)" in row and not pd.isna(row["Commit Sep (in)"]) else "-"
-                st.markdown(
-                    f'<div style="padding:10px 14px;border-radius:8px;'
-                    f'border-left:4px solid {gc};background:{gc}10;margin:4px 0;">'
-                    f'<span style="font-size:22px;font-weight:bold;color:{gc};">'
-                    f'{row["Grade"]}</span>'
-                    f'<span style="font-size:14px;font-weight:600;margin-left:10px;">'
-                    f'{row["Pitch A"]} + {row["Pitch B"]}</span>'
-                    f'<span style="font-size:12px;color:#666;margin-left:10px;">Score: {row["Tunnel Score"]}'
-                    f' &middot; Commit Sep: {commit_str} in</span>'
-                    f'</div>', unsafe_allow_html=True)
-    else:
-        tunnel_df = pd.DataFrame()
-
-    # ── Section D: Best Sequences ──
-    if n_pitches >= 2:
-        st.markdown("")
-        section_header("Best Sequences")
         pair_df = _compute_pitch_pair_results(pdf, data, tunnel_df=tunnel_df if not tunnel_df.empty else None)
-        # Build sorted_ps from pitcher's own stats
-        ps_items = []
-        total = len(pdf)
-        for pt in pitch_types:
-            pt_d = pdf[pdf["TaggedPitchType"] == pt]
-            if len(pt_d) < 10:
-                continue
-            usage = len(pt_d) / total * 100
-            sw = pt_d[pt_d["PitchCall"].isin(SWING_CALLS)]
-            whiff_r = len(pt_d[pt_d["PitchCall"] == "StrikeSwinging"]) / max(len(sw), 1) * 100
-            out_z = ~in_zone_mask(pt_d)
-            chase_sw = pt_d[out_z & pt_d["PitchCall"].isin(SWING_CALLS)]
-            chase_r = len(chase_sw) / max(out_z.sum(), 1) * 100
-            velo = pt_d["RelSpeed"].mean()
-            eff_velo_vals = pt_d["EffectiveVelo"].dropna() if "EffectiveVelo" in pt_d.columns else pd.Series(dtype=float)
-            eff_v = eff_velo_vals.mean() if len(eff_velo_vals) > 0 else np.nan
-            ev_against = pt_d["ExitSpeed"].dropna()
-            avg_ev = ev_against.mean() if len(ev_against) >= 3 else np.nan
-            stuff_avg = np.nan
-            if has_stuff:
-                st_vals = stuff_df[stuff_df["TaggedPitchType"] == pt]["StuffPlus"]
-                if len(st_vals) > 0:
-                    stuff_avg = st_vals.mean()
-            # Composite score
-            vals = []
-            if not pd.isna(stuff_avg):
-                s_norm = min(max((stuff_avg - 70) / 60 * 100, 0), 100)
-                vals.append(("s", s_norm))
-            if whiff_r > 0:
-                w_norm = min(whiff_r / 50 * 100, 100)
-                vals.append(("w", w_norm))
-            if chase_r > 0:
-                c_norm = min(chase_r / 40 * 100, 100)
-                vals.append(("c", c_norm))
-            if vals:
-                weights = {"s": 0.5, "w": 0.3, "c": 0.2}
-                total_w = sum(weights[k] for k, _ in vals)
-                comp = sum(weights[k] * v for k, v in vals) / total_w if total_w > 0 else 50
-            else:
-                comp = 50
-            ps_items.append((pt, {
-                "count": len(pt_d), "usage": usage, "score": comp,
-                "our_whiff": whiff_r, "our_chase": chase_r,
-                "velo": velo, "eff_velo": eff_v,
-            }))
-        ps_items.sort(key=lambda x: x[1]["score"], reverse=True)
-        top_seqs = _build_3pitch_sequences(ps_items, {}, tunnel_df, pair_df)
-        if top_seqs:
-            n_show = min(len(top_seqs), 3)
-            seq_cols = st.columns(n_show)
-            grade_colors = {"A": "#22c55e", "B": "#3b82f6", "C": "#f59e0b",
-                            "D": "#f97316", "F": "#ef4444"}
-            for idx, seq in enumerate(top_seqs[:n_show]):
-                with seq_cols[idx]:
-                    t12 = seq.get("t12", np.nan)
-                    t23 = seq.get("t23", np.nan)
-                    _, g12 = _lookup_tunnel(seq["p1"], seq["p2"], tunnel_df) if not pd.isna(t12) else (np.nan, "-")
-                    _, g23 = _lookup_tunnel(seq["p2"], seq["p3"], tunnel_df) if not pd.isna(t23) else (np.nan, "-")
-                    gc12 = grade_colors.get(g12, "#888")
-                    gc23 = grade_colors.get(g23, "#888")
-                    st.markdown(
-                        f'<div style="text-align:center;padding:12px;border-radius:8px;'
-                        f'border:1px solid #ddd;background:#f9f9f9;margin:2px;">'
-                        f'<div style="font-size:16px;font-weight:bold;">{seq["seq"]}</div>'
-                        f'<div style="font-size:20px;font-weight:bold;color:#1a1a2e;">'
-                        f'Score: {seq["score"]:.0f}</div>'
-                        f'<div style="font-size:12px;color:#666;margin-top:4px;">'
-                        f'T<sub>12</sub>: <span style="color:{gc12};font-weight:bold;">{g12}</span>'
-                        f' &middot; T<sub>23</sub>: '
-                        f'<span style="color:{gc23};font-weight:bold;">{g23}</span></div>'
-                        f'</div>', unsafe_allow_html=True)
+        pitch_metrics = _build_pitch_metric_map(pdf, stuff_df, cmd_df)
+        top_pairs = _rank_pairs(tunnel_df, pair_df, pitch_metrics, top_n=2)
+        top_seq3 = _filter_redundant_sequences(
+            _rank_sequences(pair_df, pitch_metrics, length=3, top_n=5),
+            min_unique=2, max_keep=2,
+        )
+        top_seq4 = _filter_redundant_sequences(
+            _rank_sequences(pair_df, pitch_metrics, length=4, top_n=5),
+            min_unique=2, max_keep=2,
+        )
+
+        st.caption("Outcomes-first (Whiff, K/Putaway, EV) with Tunnel as a secondary signal. Details in checkbox.")
+
+        if top_pairs:
+            top_pairs = _assign_tactical_tags(top_pairs)
+            rows = []
+            detail = []
+            for r in top_pairs:
+                rows.append({
+                    "Pair": r["Pair"],
+                    "Score": f"{r['Score']:.1f}" if pd.notna(r["Score"]) else "-",
+                    "Whiff%": f"{r['Whiff%']:.1f}" if pd.notna(r["Whiff%"]) else "-",
+                    "K/Putaway%": f"{r['K%']:.1f}" if pd.notna(r["K%"]) else "-",
+                    "Avg EV": f"{r['Avg EV']:.1f}" if pd.notna(r["Avg EV"]) else "-",
+                    "Tag": r.get("Tag", ""),
+                    "Deception": _deception_flag(r.get("Tunnel", np.nan)),
+                })
+                detail.append({
+                    "Pair": r["Pair"],
+                    "Tunnel": f"{r['Tunnel']:.1f}" if pd.notna(r["Tunnel"]) else "-",
+                    "Stuff+": f"{r['Stuff+']:.0f}" if pd.notna(r["Stuff+"]) else "-",
+                    "Cmd+": f"{r['Cmd+']:.0f}" if pd.notna(r["Cmd+"]) else "-",
+                    "Pairs": int(r["Pairs"]) if pd.notna(r["Pairs"]) else "-",
+                })
+            st.markdown("**Top 2 Pitch Pairs**")
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            show_details = st.checkbox(
+                "Show details (Tunnel / Stuff+ / Command+ / Sample size)",
+                key=f"pc_pairs_detail_{pitcher}",
+            )
+            if show_details:
+                st.dataframe(pd.DataFrame(detail), use_container_width=True, hide_index=True)
         else:
-            st.info("Not enough pitch variety to build sequences.")
+            st.info("Not enough data to rank pitch pairs.")
+
+        if top_seq3:
+            top_seq3 = _assign_tactical_tags(top_seq3)
+            rows = []
+            detail = []
+            for r in top_seq3:
+                rows.append({
+                    "Sequence": r["Seq"],
+                    "Score": f"{r['Score']:.1f}" if pd.notna(r["Score"]) else "-",
+                    "Whiff%": f"{r['Whiff%']:.1f}" if pd.notna(r["Whiff%"]) else "-",
+                    "K/Putaway%": f"{r['K%']:.1f}" if pd.notna(r["K%"]) else "-",
+                    "Avg EV": f"{r['Avg EV']:.1f}" if pd.notna(r["Avg EV"]) else "-",
+                    "Tag": r.get("Tag", ""),
+                    "Deception": _deception_flag(r.get("Tunnel", np.nan)),
+                })
+                detail.append({
+                    "Sequence": r["Seq"],
+                    "Tunnel": f"{r['Tunnel']:.1f}" if pd.notna(r["Tunnel"]) else "-",
+                    "Stuff+": f"{r['Stuff+']:.0f}" if pd.notna(r["Stuff+"]) else "-",
+                    "Cmd+": f"{r['Cmd+']:.0f}" if pd.notna(r["Cmd+"]) else "-",
+                    "Pairs": r["Pairs"],
+                })
+            st.markdown("**Top 3‑Pitch Sequences**")
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            show_details = st.checkbox(
+                "Show details (Tunnel / Stuff+ / Command+ / Sample size)",
+                key=f"pc_seq3_detail_{pitcher}",
+            )
+            if show_details:
+                st.dataframe(pd.DataFrame(detail), use_container_width=True, hide_index=True)
+        else:
+            st.info("Not enough data to rank 3‑pitch sequences.")
+
+        if top_seq4:
+            top_seq4 = _assign_tactical_tags(top_seq4)
+            rows = []
+            detail = []
+            for r in top_seq4:
+                rows.append({
+                    "Sequence": r["Seq"],
+                    "Score": f"{r['Score']:.1f}" if pd.notna(r["Score"]) else "-",
+                    "Whiff%": f"{r['Whiff%']:.1f}" if pd.notna(r["Whiff%"]) else "-",
+                    "K/Putaway%": f"{r['K%']:.1f}" if pd.notna(r["K%"]) else "-",
+                    "Avg EV": f"{r['Avg EV']:.1f}" if pd.notna(r["Avg EV"]) else "-",
+                    "Tag": r.get("Tag", ""),
+                    "Deception": _deception_flag(r.get("Tunnel", np.nan)),
+                })
+                detail.append({
+                    "Sequence": r["Seq"],
+                    "Tunnel": f"{r['Tunnel']:.1f}" if pd.notna(r["Tunnel"]) else "-",
+                    "Stuff+": f"{r['Stuff+']:.0f}" if pd.notna(r["Stuff+"]) else "-",
+                    "Cmd+": f"{r['Cmd+']:.0f}" if pd.notna(r["Cmd+"]) else "-",
+                    "Pairs": r["Pairs"],
+                })
+            st.markdown("**Top 4‑Pitch Sequences**")
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            show_details = st.checkbox(
+                "Show details (Tunnel / Stuff+ / Command+ / Sample size)",
+                key=f"pc_seq4_detail_{pitcher}",
+            )
+            if show_details:
+                st.dataframe(pd.DataFrame(detail), use_container_width=True, hide_index=True)
 
         # Transition matrix mini-heatmap
         sort_cols_tm = [c for c in ["GameID", "Batter", "PAofInning", "PitchNo"] if c in pdf.columns]
@@ -1093,7 +1406,7 @@ def _compute_pitch_recommendations(pdf, data, tunnel_df):
 
 
 def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher_stats, cmd_df=None):
-    """Render the Pitch Lab tab with arsenal recommendations, tunnel roadmap,
+    """Render the Pitch Lab tab with arsenal recommendations,
     sequencing playbook, and pitch-specific deep dives."""
 
     if len(pdf) < 20:
@@ -1120,6 +1433,119 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
     cmd_map = dict(zip(cmd_df["Pitch"], cmd_df["Command+"])) if not cmd_df.empty else {}
 
     pitch_types = sorted(pdf["TaggedPitchType"].unique())
+    pair_df = _compute_pitch_pair_results(pdf, data, tunnel_df=tunnel_df)
+    pitch_metrics = _build_pitch_metric_map(pdf, stuff_df, cmd_df)
+
+    # ═══════════════════════════════════════════
+    # BEST PAIRS & SEQUENCES (COMPOSITE)
+    # ═══════════════════════════════════════════
+    section_header("Best Pairs & Sequences (Composite)")
+    st.caption("Outcomes-first (Whiff, K/Putaway, EV) with Tunnel as a secondary signal. Details in checkbox.")
+    top_pairs = _rank_pairs(tunnel_df, pair_df, pitch_metrics, top_n=2)
+    top_seq3 = _filter_redundant_sequences(
+        _rank_sequences(pair_df, pitch_metrics, length=3, top_n=5),
+        min_unique=2, max_keep=2,
+    )
+    top_seq4 = _filter_redundant_sequences(
+        _rank_sequences(pair_df, pitch_metrics, length=4, top_n=5),
+        min_unique=2, max_keep=2,
+    )
+
+    if top_pairs:
+        top_pairs = _assign_tactical_tags(top_pairs)
+        rows = []
+        detail = []
+        for r in top_pairs:
+            rows.append({
+                "Pair": r["Pair"],
+                "Score": f"{r['Score']:.1f}" if pd.notna(r["Score"]) else "-",
+                "Whiff%": f"{r['Whiff%']:.1f}" if pd.notna(r["Whiff%"]) else "-",
+                "K/Putaway%": f"{r['K%']:.1f}" if pd.notna(r["K%"]) else "-",
+                "Avg EV": f"{r['Avg EV']:.1f}" if pd.notna(r["Avg EV"]) else "-",
+                "Tag": r.get("Tag", ""),
+                "Deception": _deception_flag(r.get("Tunnel", np.nan)),
+            })
+            detail.append({
+                "Pair": r["Pair"],
+                "Tunnel": f"{r['Tunnel']:.1f}" if pd.notna(r["Tunnel"]) else "-",
+                "Stuff+": f"{r['Stuff+']:.0f}" if pd.notna(r["Stuff+"]) else "-",
+                "Cmd+": f"{r['Cmd+']:.0f}" if pd.notna(r["Cmd+"]) else "-",
+                "Pairs": int(r["Pairs"]) if pd.notna(r["Pairs"]) else "-",
+            })
+        st.markdown("**Top 2 Pitch Pairs**")
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        show_details = st.checkbox(
+            "Show details (Tunnel / Stuff+ / Command+ / Sample size)",
+            key=f"pl_pairs_detail_{pitcher}",
+        )
+        if show_details:
+            st.dataframe(pd.DataFrame(detail), use_container_width=True, hide_index=True)
+    else:
+        st.caption("Not enough data to rank pitch pairs.")
+
+    if top_seq3:
+        top_seq3 = _assign_tactical_tags(top_seq3)
+        rows = []
+        detail = []
+        for r in top_seq3:
+            rows.append({
+                "Sequence": r["Seq"],
+                "Score": f"{r['Score']:.1f}" if pd.notna(r["Score"]) else "-",
+                "Whiff%": f"{r['Whiff%']:.1f}" if pd.notna(r["Whiff%"]) else "-",
+                "K/Putaway%": f"{r['K%']:.1f}" if pd.notna(r["K%"]) else "-",
+                "Avg EV": f"{r['Avg EV']:.1f}" if pd.notna(r["Avg EV"]) else "-",
+                "Tag": r.get("Tag", ""),
+                "Deception": _deception_flag(r.get("Tunnel", np.nan)),
+            })
+            detail.append({
+                "Sequence": r["Seq"],
+                "Tunnel": f"{r['Tunnel']:.1f}" if pd.notna(r["Tunnel"]) else "-",
+                "Stuff+": f"{r['Stuff+']:.0f}" if pd.notna(r["Stuff+"]) else "-",
+                "Cmd+": f"{r['Cmd+']:.0f}" if pd.notna(r["Cmd+"]) else "-",
+                "Pairs": r["Pairs"],
+            })
+        st.markdown("**Top 3‑Pitch Sequences**")
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        show_details = st.checkbox(
+            "Show details (Tunnel / Stuff+ / Command+ / Sample size)",
+            key=f"pl_seq3_detail_{pitcher}",
+        )
+        if show_details:
+            st.dataframe(pd.DataFrame(detail), use_container_width=True, hide_index=True)
+    else:
+        st.caption("Not enough data to rank 3‑pitch sequences.")
+
+    if top_seq4:
+        top_seq4 = _assign_tactical_tags(top_seq4)
+        rows = []
+        detail = []
+        for r in top_seq4:
+            rows.append({
+                "Sequence": r["Seq"],
+                "Score": f"{r['Score']:.1f}" if pd.notna(r["Score"]) else "-",
+                "Whiff%": f"{r['Whiff%']:.1f}" if pd.notna(r["Whiff%"]) else "-",
+                "K/Putaway%": f"{r['K%']:.1f}" if pd.notna(r["K%"]) else "-",
+                "Avg EV": f"{r['Avg EV']:.1f}" if pd.notna(r["Avg EV"]) else "-",
+                "Tag": r.get("Tag", ""),
+                "Deception": _deception_flag(r.get("Tunnel", np.nan)),
+            })
+            detail.append({
+                "Sequence": r["Seq"],
+                "Tunnel": f"{r['Tunnel']:.1f}" if pd.notna(r["Tunnel"]) else "-",
+                "Stuff+": f"{r['Stuff+']:.0f}" if pd.notna(r["Stuff+"]) else "-",
+                "Cmd+": f"{r['Cmd+']:.0f}" if pd.notna(r["Cmd+"]) else "-",
+                "Pairs": r["Pairs"],
+            })
+        st.markdown("**Top 4‑Pitch Sequences**")
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        show_details = st.checkbox(
+            "Show details (Tunnel / Stuff+ / Command+ / Sample size)",
+            key=f"pl_seq4_detail_{pitcher}",
+        )
+        if show_details:
+            st.dataframe(pd.DataFrame(detail), use_container_width=True, hide_index=True)
+    else:
+        st.caption("Not enough data to rank 4‑pitch sequences.")
 
     # ═══════════════════════════════════════════
     # SECTION A: Arsenal Overview with Improvement Targets
@@ -1238,96 +1664,11 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
                 '</div>', unsafe_allow_html=True)
 
     # ═══════════════════════════════════════════
-    # SECTION B: Tunnel Improvement Roadmap
-    # ═══════════════════════════════════════════
-    st.markdown("---")
-    section_header("Tunnel Improvement Roadmap")
-    st.caption("All tunnel pairs ranked by priority. Worst grades first — focus fixes here.")
-
-    if isinstance(tunnel_df, pd.DataFrame) and not tunnel_df.empty:
-        # Sort worst first
-        grade_order = {"F": 0, "D": 1, "C": 2, "B": 3, "A": 4}
-        tdf_sorted = tunnel_df.copy()
-        tdf_sorted["_grade_ord"] = tdf_sorted["Grade"].map(grade_order).fillna(2)
-        tdf_sorted = tdf_sorted.sort_values("_grade_ord").drop(columns=["_grade_ord"])
-
-        grade_colors = {"A": "#22c55e", "B": "#3b82f6", "C": "#f59e0b",
-                        "D": "#f97316", "F": "#ef4444"}
-
-        for _, row in tdf_sorted.iterrows():
-            gc = grade_colors.get(row["Grade"], "#888")
-            commit_str = f'{row["Commit Sep (in)"]:.1f}' if "Commit Sep (in)" in row and not pd.isna(row.get("Commit Sep (in)")) else "-"
-            highlight = "border-width:2px;" if row["Grade"] in ("F", "D") else ""
-
-            st.markdown(
-                f'<div style="padding:10px 14px;border-radius:8px;'
-                f'border-left:4px solid {gc};{highlight}background:{gc}10;margin:4px 0;">'
-                f'<span style="font-size:22px;font-weight:bold;color:{gc};">'
-                f'{row["Grade"]}</span>'
-                f'<span style="font-size:14px;font-weight:600;margin-left:10px;">'
-                f'{row["Pitch A"]} + {row["Pitch B"]}</span>'
-                f'<span style="font-size:12px;color:#666;margin-left:10px;">'
-                f'Score: {row["Tunnel Score"]} &middot; Commit Sep: {commit_str} in</span>'
-                f'</div>', unsafe_allow_html=True)
-
-        # Release point overlay for each pair
-        st.markdown("")
-        st.caption("Release Point Overlays")
-        rel_cols_needed = ["RelSide", "RelHeight", "TaggedPitchType"]
-        has_rel = all(c in pdf.columns for c in rel_cols_needed)
-        if has_rel:
-            pairs_to_show = tdf_sorted.head(4)
-            n_pairs = len(pairs_to_show)
-            if n_pairs > 0:
-                rel_cols = st.columns(min(n_pairs, 2))
-                for pidx, (_, prow) in enumerate(pairs_to_show.iterrows()):
-                    with rel_cols[pidx % 2]:
-                        pa, pb = prow["Pitch A"], prow["Pitch B"]
-                        da = pdf[pdf["TaggedPitchType"] == pa].dropna(subset=["RelSide", "RelHeight"])
-                        db = pdf[pdf["TaggedPitchType"] == pb].dropna(subset=["RelSide", "RelHeight"])
-                        if len(da) >= 3 and len(db) >= 3:
-                            fig_rel = go.Figure()
-                            ca = PITCH_COLORS.get(pa, "#888")
-                            cb = PITCH_COLORS.get(pb, "#888")
-                            fig_rel.add_trace(go.Scatter(
-                                x=da["RelSide"], y=da["RelHeight"], mode="markers",
-                                marker=dict(size=6, color=ca, opacity=0.6),
-                                name=pa,
-                            ))
-                            fig_rel.add_trace(go.Scatter(
-                                x=db["RelSide"], y=db["RelHeight"], mode="markers",
-                                marker=dict(size=6, color=cb, opacity=0.6),
-                                name=pb,
-                            ))
-                            fig_rel.update_layout(
-                                height=250, title=f"{pa} vs {pb}",
-                                xaxis_title="RelSide (ft)", yaxis_title="RelHeight (ft)",
-                                xaxis=dict(scaleanchor="y"),
-                                legend=dict(orientation="h", yanchor="bottom", y=1.02,
-                                            xanchor="center", x=0.5, font=dict(size=10)),
-                                plot_bgcolor="white", paper_bgcolor="white",
-                                font=dict(size=11, color="#000000", family="Inter, Arial, sans-serif"),
-                                margin=dict(l=40, r=10, t=40, b=35),
-                            )
-                            st.plotly_chart(fig_rel, use_container_width=True,
-                                            key=f"plab_rel_{pa}_{pb}")
-
-        # Movement delta visualization
-        st.caption("Movement Profiles (IVB vs HB)")
-        mov_fig = make_movement_profile(pdf, height=380)
-        if mov_fig is not None:
-            st.plotly_chart(mov_fig, use_container_width=True, key="plab_mov_profile")
-    else:
-        st.info("Not enough pitch variety to compute tunnel pairs.")
-
-    # ═══════════════════════════════════════════
     # SECTION C: Sequencing Playbook
     # ═══════════════════════════════════════════
     st.markdown("---")
     section_header("Sequencing Playbook")
     st.caption("Transition frequencies, sequence effectiveness, and count-state pitch selection.")
-
-    pair_df = _compute_pitch_pair_results(pdf, data, tunnel_df=tunnel_df)
 
     # Transition matrix
     sort_cols_seq = [c for c in ["GameID", "Batter", "PAofInning", "PitchNo"] if c in pdf.columns]
@@ -1393,159 +1734,6 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
     else:
         st.info("Not enough count-state data.")
 
-    # ── Build ps_items for sequence computation (shared) ──
-    ps_items = []
-    total_p = len(pdf)
-    for pt in pitch_types:
-        pt_d = pdf[pdf["TaggedPitchType"] == pt]
-        if len(pt_d) < 10:
-            continue
-        usage = len(pt_d) / total_p * 100
-        sw = pt_d[pt_d["PitchCall"].isin(SWING_CALLS)]
-        whiff_r = len(pt_d[pt_d["PitchCall"] == "StrikeSwinging"]) / max(len(sw), 1) * 100
-        out_z = ~in_zone_mask(pt_d)
-        chase_sw = pt_d[out_z & pt_d["PitchCall"].isin(SWING_CALLS)]
-        chase_r = len(chase_sw) / max(out_z.sum(), 1) * 100
-        stuff_avg = np.nan
-        if has_stuff:
-            st_v = stuff_df[stuff_df["TaggedPitchType"] == pt]["StuffPlus"]
-            if len(st_v) > 0:
-                stuff_avg = st_v.mean()
-        vals = []
-        if not pd.isna(stuff_avg):
-            vals.append(("s", min(max((stuff_avg - 70) / 60 * 100, 0), 100)))
-        if whiff_r > 0:
-            vals.append(("w", min(whiff_r / 50 * 100, 100)))
-        if chase_r > 0:
-            vals.append(("c", min(chase_r / 40 * 100, 100)))
-        if vals:
-            wts = {"s": 0.5, "w": 0.3, "c": 0.2}
-            tw = sum(wts[k] for k, _ in vals)
-            comp = sum(wts[k] * v for k, v in vals) / tw if tw > 0 else 50
-        else:
-            comp = 50
-        ps_items.append((pt, {"count": len(pt_d), "usage": usage, "score": comp,
-                               "our_whiff": whiff_r, "our_chase": chase_r,
-                               "velo": pt_d["RelSpeed"].mean(),
-                               "eff_velo": np.nan}))
-    ps_items.sort(key=lambda x: x[1]["score"], reverse=True)
-
-    # Helper: render a sequence card
-    grade_colors_seq = {"A": "#22c55e", "B": "#3b82f6", "C": "#f59e0b",
-                        "D": "#f97316", "F": "#ef4444"}
-
-    def _render_seq_card(seq, tunnel_df_ref, key_prefix=""):
-        pitches_in_seq = [seq.get(f"p{i}") for i in range(1, 5) if seq.get(f"p{i}")]
-        tunnel_strs = []
-        for i in range(len(pitches_in_seq) - 1):
-            t_key = f"t{i+1}{i+2}"
-            t_val = seq.get(t_key, np.nan)
-            if not pd.isna(t_val):
-                _, g = _lookup_tunnel(pitches_in_seq[i], pitches_in_seq[i+1], tunnel_df_ref)
-            else:
-                g = "-"
-            gc = grade_colors_seq.get(g, "#888")
-            tunnel_strs.append(f'T<sub>{i+1}{i+2}</sub>: <span style="color:{gc};font-weight:bold;">{g}</span>')
-        tunnels_html = " &middot; ".join(tunnel_strs)
-        st.markdown(
-            f'<div style="text-align:center;padding:12px;border-radius:8px;'
-            f'border:1px solid #ddd;background:#f9f9f9;margin:2px;">'
-            f'<div style="font-size:14px;font-weight:bold;">{seq["seq"]}</div>'
-            f'<div style="font-size:18px;font-weight:bold;color:#1a1a2e;">'
-            f'Score: {seq["score"]:.0f}</div>'
-            f'<div style="font-size:11px;color:#666;margin-top:4px;">{tunnels_html}</div>'
-            f'</div>', unsafe_allow_html=True)
-
-    # Helper: render location heatmaps for pitches in a sequence
-    def _render_seq_locations(pitches_list, pdf_ref, key_prefix=""):
-        n = len(pitches_list)
-        loc_cols = st.columns(n)
-        for i, pt_name in enumerate(pitches_list):
-            with loc_cols[i]:
-                pt_sub = pdf_ref[pdf_ref["TaggedPitchType"] == pt_name].dropna(
-                    subset=["PlateLocSide", "PlateLocHeight"])
-                color = PITCH_COLORS.get(pt_name, "#888")
-                st.caption(f"{pt_name}")
-                if len(pt_sub) >= 5:
-                    # Show CSW locations (called strikes + whiffs = best outcomes)
-                    csw = pt_sub[pt_sub["PitchCall"].isin(["StrikeCalled", "StrikeSwinging"])]
-                    plot_data = csw if len(csw) >= 3 else pt_sub
-                    fig_loc = go.Figure(go.Histogram2d(
-                        x=plot_data["PlateLocSide"], y=plot_data["PlateLocHeight"],
-                        nbinsx=8, nbinsy=8, colorscale=[[0, "white"], [1, color]],
-                        showscale=False,
-                    ))
-                    add_strike_zone(fig_loc)
-                    fig_loc.update_layout(
-                        xaxis=dict(range=[-2, 2], title="", showticklabels=False,
-                                   scaleanchor="y", scaleratio=1),
-                        yaxis=dict(range=[0, 5], title="", showticklabels=False),
-                        height=250, margin=dict(l=5, r=5, t=5, b=5),
-                        plot_bgcolor="white", paper_bgcolor="white",
-                    )
-                    st.plotly_chart(fig_loc, use_container_width=True,
-                                    key=f"{key_prefix}_loc_{pt_name}_{i}")
-                else:
-                    st.info("< 5 pitches")
-
-    # Top 3-pitch sequences with tunnel grades
-    if isinstance(tunnel_df, pd.DataFrame) and not tunnel_df.empty:
-        top_seqs = _build_3pitch_sequences(ps_items, {}, tunnel_df, pair_df)
-        if top_seqs:
-            st.markdown("**Top 3-Pitch Sequences**")
-            n_show = min(len(top_seqs), 3)
-            seq_cols = st.columns(n_show)
-            for idx, seq in enumerate(top_seqs[:n_show]):
-                with seq_cols[idx]:
-                    _render_seq_card(seq, tunnel_df)
-            # Location heatmaps for the best 3-pitch sequence
-            best3 = top_seqs[0]
-            st.caption(f"Best locations for: {best3['seq']}")
-            _render_seq_locations([best3["p1"], best3["p2"], best3["p3"]], pdf, "seq3")
-
-    # Top 4-pitch sequences
-    if isinstance(tunnel_df, pd.DataFrame) and not tunnel_df.empty and len(ps_items) >= 3:
-        st.markdown("**Top 4-Pitch Sequences**")
-        top3 = _build_3pitch_sequences(ps_items, {}, tunnel_df, pair_df)
-        four_seqs = []
-        if top3:
-            used_combos = set()
-            for s3 in top3[:5]:
-                p1, p2, p3 = s3["p1"], s3["p2"], s3["p3"]
-                for ext_pt, ext_stats in ps_items:
-                    if ext_pt == p3:
-                        continue
-                    combo = (p1, p2, p3, ext_pt)
-                    if combo in used_combos:
-                        continue
-                    t34_score, t34_grade = _lookup_tunnel(p3, ext_pt, tunnel_df)
-                    if t34_grade == "-":
-                        continue
-                    ext_score = ext_stats["score"]
-                    seq_score = s3["score"] * 0.6 + ext_score * 0.2
-                    if not pd.isna(t34_score):
-                        seq_score += t34_score * 0.2
-                    four_seqs.append({
-                        "seq": f"{p1} → {p2} → {p3} → {ext_pt}",
-                        "p1": p1, "p2": p2, "p3": p3, "p4": ext_pt,
-                        "score": seq_score,
-                        "t12": s3.get("t12", np.nan),
-                        "t23": s3.get("t23", np.nan),
-                        "t34": t34_score,
-                    })
-                    used_combos.add(combo)
-            four_seqs.sort(key=lambda x: x["score"], reverse=True)
-        if four_seqs:
-            n_show4 = min(len(four_seqs), 3)
-            seq4_cols = st.columns(n_show4)
-            for idx, seq in enumerate(four_seqs[:n_show4]):
-                with seq4_cols[idx]:
-                    _render_seq_card(seq, tunnel_df)
-            # Location heatmaps for the best 4-pitch sequence
-            best4 = four_seqs[0]
-            st.caption(f"Best locations for: {best4['seq']}")
-            _render_seq_locations([best4["p1"], best4["p2"], best4["p3"], best4["p4"]], pdf, "seq4")
-
     # ── Get Back in the Count: best pitches at 1-0 and 2-0 ──
     st.markdown("**Get Back in the Count (1-0, 2-0)**")
     st.caption("Best pitches to throw when behind — ranked by CSW% at that count.")
@@ -1595,9 +1783,11 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
                     ))
                     add_strike_zone(fig_gbc)
                     fig_gbc.update_layout(
-                        xaxis=dict(range=[-2.5, 2.5], title="", showticklabels=False),
-                        yaxis=dict(range=[0, 5], title="", showticklabels=False),
-                        height=220, margin=dict(l=5, r=5, t=5, b=5),
+                        xaxis=dict(range=[-2.5, 2.5], title="", showticklabels=False,
+                                   fixedrange=True, scaleanchor="y"),
+                        yaxis=dict(range=[0, 5], title="", showticklabels=False,
+                                   fixedrange=True),
+                        height=320, margin=dict(l=5, r=5, t=5, b=5),
                         plot_bgcolor="white", paper_bgcolor="white",
                     )
                     st.plotly_chart(fig_gbc, use_container_width=True,
@@ -1682,9 +1872,11 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
                     nbinsx=10, nbinsy=10, colorscale="YlOrRd", showscale=False,
                 ))
                 add_strike_zone(fig_w)
-                fig_w.update_layout(xaxis=dict(range=[-2.5, 2.5], title=""),
-                                    yaxis=dict(range=[0, 5], title=""),
-                                    height=280, **CHART_LAYOUT)
+                fig_w.update_layout(xaxis=dict(range=[-2.5, 2.5], title="", showticklabels=False,
+                                               fixedrange=True, scaleanchor="y"),
+                                    yaxis=dict(range=[0, 5], title="", showticklabels=False,
+                                               fixedrange=True),
+                                    height=320, **CHART_LAYOUT)
                 st.plotly_chart(fig_w, use_container_width=True, key="plab_dd_whiff")
             else:
                 st.info("< 3 whiffs")
@@ -1697,9 +1889,11 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
                     nbinsx=10, nbinsy=10, colorscale="Blues", showscale=False,
                 ))
                 add_strike_zone(fig_cs)
-                fig_cs.update_layout(xaxis=dict(range=[-2.5, 2.5], title=""),
-                                     yaxis=dict(range=[0, 5], title=""),
-                                     height=280, **CHART_LAYOUT)
+                fig_cs.update_layout(xaxis=dict(range=[-2.5, 2.5], title="", showticklabels=False,
+                                                fixedrange=True, scaleanchor="y"),
+                                     yaxis=dict(range=[0, 5], title="", showticklabels=False,
+                                                fixedrange=True),
+                                     height=320, **CHART_LAYOUT)
                 st.plotly_chart(fig_cs, use_container_width=True, key="plab_dd_cs")
             else:
                 st.info("< 3 called strikes")
@@ -1713,9 +1907,11 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
                     nbinsx=10, nbinsy=10, colorscale="Greens", showscale=False,
                 ))
                 add_strike_zone(fig_wk)
-                fig_wk.update_layout(xaxis=dict(range=[-2.5, 2.5], title=""),
-                                     yaxis=dict(range=[0, 5], title=""),
-                                     height=280, **CHART_LAYOUT)
+                fig_wk.update_layout(xaxis=dict(range=[-2.5, 2.5], title="", showticklabels=False,
+                                                fixedrange=True, scaleanchor="y"),
+                                     yaxis=dict(range=[0, 5], title="", showticklabels=False,
+                                                fixedrange=True),
+                                     height=320, **CHART_LAYOUT)
                 st.plotly_chart(fig_wk, use_container_width=True, key="plab_dd_weak")
             else:
                 st.info("< 3 weak contacts")
@@ -2133,8 +2329,10 @@ def _pitching_lab_content(data, pitcher, season_filter, pdf, stuff_df,
                     ))
                     add_strike_zone(fig)
                     fig.update_layout(
-                        xaxis=dict(range=[-2.5, 2.5], title=""),
-                        yaxis=dict(range=[0, 5], title=""),
+                        xaxis=dict(range=[-2.5, 2.5], title="", showticklabels=False,
+                                   fixedrange=True, scaleanchor="y"),
+                        yaxis=dict(range=[0, 5], title="", showticklabels=False,
+                                   fixedrange=True),
                         height=320, **CHART_LAYOUT,
                     )
                     st.plotly_chart(fig, use_container_width=True)
@@ -2154,8 +2352,10 @@ def _pitching_lab_content(data, pitcher, season_filter, pdf, stuff_df,
                     ))
                     add_strike_zone(fig)
                     fig.update_layout(
-                        xaxis=dict(range=[-2.5, 2.5], title=""),
-                        yaxis=dict(range=[0, 5], title=""),
+                        xaxis=dict(range=[-2.5, 2.5], title="", showticklabels=False,
+                                   fixedrange=True, scaleanchor="y"),
+                        yaxis=dict(range=[0, 5], title="", showticklabels=False,
+                                   fixedrange=True),
                         height=320, **CHART_LAYOUT,
                     )
                     st.plotly_chart(fig, use_container_width=True)
@@ -2176,8 +2376,10 @@ def _pitching_lab_content(data, pitcher, season_filter, pdf, stuff_df,
                     ))
                     add_strike_zone(fig)
                     fig.update_layout(
-                        xaxis=dict(range=[-2.5, 2.5], title=""),
-                        yaxis=dict(range=[0, 5], title=""),
+                        xaxis=dict(range=[-2.5, 2.5], title="", showticklabels=False,
+                                   fixedrange=True, scaleanchor="y"),
+                        yaxis=dict(range=[0, 5], title="", showticklabels=False,
+                                   fixedrange=True),
                         height=320, **CHART_LAYOUT,
                     )
                     st.plotly_chart(fig, use_container_width=True)
@@ -3570,5 +3772,3 @@ def _game_planning_content(data, pitcher=None, season_filter=None, pdf=None, key
             fig_tunnel.update_layout(**CHART_LAYOUT, height=380, showlegend=False,
                                       yaxis_title="Effective Velocity (mph)")
             st.plotly_chart(fig_tunnel, use_container_width=True)
-
-

@@ -6,6 +6,7 @@ Builds davidson.duckdb with:
   - pitcher_stats_pop (base aggregates by season)
   - stuff_baselines, fb_velo_by_pitcher, velo_diff_stats
   - tunnel_population, tunnel_benchmarks, tunnel_weights
+  - tunnel_pair_outcomes
   - sidebar_stats, seasons, meta
 """
 
@@ -34,7 +35,7 @@ from config import (
 )
 
 from analytics.stuff_plus import _compute_stuff_plus
-from data.population import build_tunnel_population_pop
+from data.population import _build_tunnel_population_pop
 
 
 def _parquet_fingerprint(path):
@@ -129,6 +130,38 @@ def _create_seasons_and_sidebar(con):
     """)
 
 
+def _create_trackman_pop(con):
+    con.execute(
+        """
+        CREATE OR REPLACE TABLE trackman_pop AS
+        SELECT
+            Season,
+            GameID,
+            Inning,
+            PAofInning,
+            Pitcher,
+            PitcherTeam,
+            Batter,
+            BatterTeam,
+            PitchCall,
+            ExitSpeed,
+            Angle,
+            Distance,
+            TaggedHitType,
+            TaggedPitchType,
+            PlateLocSide,
+            PlateLocHeight,
+            BatterSide,
+            Direction,
+            KorBB,
+            RelSpeed,
+            SpinRate,
+            Extension
+        FROM trackman
+        """
+    )
+
+
 def _create_batter_stats_pop(con):
     _bnorm = _name_case_sql("Batter")
     sql = f"""
@@ -145,7 +178,6 @@ def _create_batter_stats_pop(con):
         WHERE PitchCall = 'StrikeCalled'
           AND PlateLocHeight IS NOT NULL
           AND Batter IS NOT NULL
-          AND Season IS NOT NULL AND Season > 0
         GROUP BY Season, {_bnorm}
     ),
     raw AS (
@@ -170,7 +202,6 @@ def _create_batter_stats_pop(con):
         FROM trackman r
         LEFT JOIN batter_zones bz ON r.Season = bz.Season AND {_bnorm} = bz.batter_name
         WHERE r.Batter IS NOT NULL
-          AND r.Season IS NOT NULL AND r.Season > 0
     ),
     pitch_agg AS (
         SELECT
@@ -230,7 +261,6 @@ def _create_pitcher_stats_pop(con):
         WHERE PitchCall = 'StrikeCalled'
           AND PlateLocHeight IS NOT NULL
           AND Batter IS NOT NULL
-          AND Season IS NOT NULL AND Season > 0
         GROUP BY Season, {_bnorm_p}
     ),
     raw AS (
@@ -253,7 +283,6 @@ def _create_pitcher_stats_pop(con):
         FROM trackman r
         LEFT JOIN batter_zones bz ON r.Season = bz.Season AND {_bnorm_p} = bz.batter_name
         WHERE r.Pitcher IS NOT NULL
-          AND r.Season IS NOT NULL AND r.Season > 0
     ),
     pitch_agg AS (
         SELECT
@@ -460,11 +489,7 @@ def _attach_stuff_plus(con, baselines_dict):
 
 
 def _create_tunnel_population(con):
-    try:
-        build_tunnel_population_pop.clear()
-    except Exception:
-        pass
-    pop = build_tunnel_population_pop()
+    pop = _build_tunnel_population_pop(con=con)
     rows = []
     for pair, scores in pop.items():
         for score in scores:
@@ -472,6 +497,53 @@ def _create_tunnel_population(con):
     pop_df = pd.DataFrame(rows, columns=["pair_type", "score"])
     con.register("pop_df", pop_df)
     con.execute("CREATE OR REPLACE TABLE tunnel_population AS SELECT * FROM pop_df")
+
+
+def _create_tunnel_pair_outcomes(con):
+    con.execute(
+        """
+        CREATE OR REPLACE TABLE tunnel_pair_outcomes AS
+        WITH ordered AS (
+            SELECT GameID, Inning, PAofInning, Batter, Pitcher, PitchofPA,
+                   TaggedPitchType, PitchCall
+            FROM trackman
+            WHERE TaggedPitchType IS NOT NULL AND PitchCall IS NOT NULL
+        ),
+        pairs AS (
+            SELECT
+                CASE
+                    WHEN TaggedPitchType < prev_type THEN TaggedPitchType || '/' || prev_type
+                    ELSE prev_type || '/' || TaggedPitchType
+                END AS pair_type,
+                PitchCall
+            FROM (
+                SELECT *,
+                       LAG(TaggedPitchType) OVER (
+                           PARTITION BY GameID, Inning, PAofInning, Batter, Pitcher
+                           ORDER BY PitchofPA
+                       ) AS prev_type
+                FROM ordered
+            )
+            WHERE prev_type IS NOT NULL AND TaggedPitchType != prev_type
+        ),
+        agg AS (
+            SELECT pair_type,
+                   COUNT(*) AS n_pairs,
+                   AVG(CASE WHEN PitchCall='StrikeSwinging' THEN 1 ELSE 0 END) * 100 AS whiff_rate
+            FROM pairs
+            GROUP BY pair_type
+        ),
+        global_row AS (
+            SELECT '__ALL__' AS pair_type,
+                   COUNT(*) AS n_pairs,
+                   AVG(CASE WHEN PitchCall='StrikeSwinging' THEN 1 ELSE 0 END) * 100 AS whiff_rate
+            FROM pairs
+        )
+        SELECT * FROM agg
+        UNION ALL
+        SELECT * FROM global_row
+        """
+    )
 
     # Benchmarks
     if os.path.exists(TUNNEL_BENCH_PATH):
@@ -515,12 +587,14 @@ def run(parquet_path, db_path, overwrite=False):
     _create_trackman_view(con, parquet_path)
     _create_meta(con, parquet_path)
     _create_seasons_and_sidebar(con)
+    _create_trackman_pop(con)
     _create_batter_stats_pop(con)
     _create_pitcher_stats_pop(con)
     baselines = _create_stuff_baselines(con)
     _create_davidson_data(con, parquet_path)
     _attach_stuff_plus(con, baselines)
     _create_tunnel_population(con)
+    _create_tunnel_pair_outcomes(con)
     con.close()
 
 

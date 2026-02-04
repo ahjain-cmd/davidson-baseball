@@ -5,10 +5,13 @@ services:
       - "8501:8501"
     volumes:
       # Mount your data files into the container
-      - ./all_trackman.parquet:/app/all_trackman.parquet:ro
-      - ./davidson.duckdb:/app/davidson.duckdb:ro
+      - ${DATA_DIR:-.}/all_trackman.parquet:/app/all_trackman.parquet:ro
+      - ${DATA_DIR:-.}/davidson.duckdb:/app/davidson.duckdb:ro
       # Optional: mount TrueMedia data
-      - ./export.json:/app/export.json:ro
+      - ${DATA_DIR:-.}/export.json:/app/export.json:ro
     environment:
       - STREAMLIT_SERVER_MAX_UPLOAD_SIZE=500
+      - TM_MASTER_TOKEN=${TM_MASTER_TOKEN}
+      - TM_USERNAME=${TM_USERNAME}
+      - TM_SITENAME=${TM_SITENAME}
     restart: unless-stopped

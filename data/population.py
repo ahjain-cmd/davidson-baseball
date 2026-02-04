@@ -22,7 +22,7 @@ from config import (
     PLATE_HEIGHT_MIN,
     PLATE_HEIGHT_MAX,
 )
-from data.loader import query_population, _precompute_table_exists, _read_precompute_table
+from data.loader import query_population, query_precompute, _precompute_table_exists, _read_precompute_table
 
 # ── Paths for tunnel caching (mirrors app.py constants) ──────────
 _APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -234,6 +234,136 @@ def _compute_pitcher_from_base(df):
 def compute_batter_stats_pop(season_filter=None, _version=5):
     """Compute batter stats for all D1 batters via DuckDB. Adaptive per-batter zone."""
     if _precompute_table_exists("batter_stats_pop"):
+        df = _read_precompute_table("batter_stats_pop")
+        if df.empty:
+            return df
+        if season_filter and "Season" in df.columns:
+            seasons = [int(s) for s in season_filter]
+            df = df[df["Season"].isin(seasons)]
+        return _compute_batter_from_base(df)
+    if _precompute_table_exists("trackman_pop"):
+        season_clause = ""
+        if season_filter:
+            seasons_in = ",".join(str(int(s)) for s in season_filter)
+            season_clause = f"AND Season IN ({seasons_in})"
+        _bnorm = _name_sql("Batter")
+        table = "trackman_pop"
+        sql = f"""
+        WITH batter_zones AS (
+            SELECT {_bnorm} AS batter_name,
+                CASE WHEN COUNT(*) >= {MIN_CALLED_STRIKES_FOR_ADAPTIVE_ZONE}
+                     THEN ROUND(PERCENTILE_CONT(0.05) WITHIN GROUP (ORDER BY PlateLocHeight), 3)
+                     ELSE {ZONE_HEIGHT_BOT} END AS zone_bot,
+                CASE WHEN COUNT(*) >= {MIN_CALLED_STRIKES_FOR_ADAPTIVE_ZONE}
+                     THEN ROUND(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY PlateLocHeight), 3)
+                     ELSE {ZONE_HEIGHT_TOP} END AS zone_top
+            FROM {table}
+            WHERE PitchCall = 'StrikeCalled'
+              AND PlateLocHeight IS NOT NULL
+              AND Batter IS NOT NULL {season_clause}
+            GROUP BY {_bnorm}
+        ),
+        raw AS (
+            SELECT
+                {_bnorm} AS Batter, BatterTeam,
+                PitchCall, ExitSpeed, Angle, Distance, TaggedHitType,
+                PlateLocSide, PlateLocHeight, BatterSide, Direction, KorBB,
+                GameID || '_' || Inning || '_' || PAofInning || '_' || {_bnorm} AS pa_id,
+                COALESCE(bz.zone_bot, {ZONE_HEIGHT_BOT}) AS zone_bot,
+                COALESCE(bz.zone_top, {ZONE_HEIGHT_TOP}) AS zone_top,
+                CASE WHEN PlateLocSide IS NOT NULL AND PlateLocHeight IS NOT NULL
+                      AND ABS(PlateLocSide) <= {ZONE_SIDE}
+                      AND PlateLocHeight >= COALESCE(bz.zone_bot, {ZONE_HEIGHT_BOT})
+                      AND PlateLocHeight <= COALESCE(bz.zone_top, {ZONE_HEIGHT_TOP})
+                     THEN 1 ELSE 0 END AS is_iz,
+                CASE WHEN PlateLocSide IS NOT NULL AND PlateLocHeight IS NOT NULL
+                      AND NOT (ABS(PlateLocSide) <= {ZONE_SIDE}
+                               AND PlateLocHeight >= COALESCE(bz.zone_bot, {ZONE_HEIGHT_BOT})
+                               AND PlateLocHeight <= COALESCE(bz.zone_top, {ZONE_HEIGHT_TOP}))
+                     THEN 1 ELSE 0 END AS is_oz
+            FROM {table} r
+            LEFT JOIN batter_zones bz ON {_bnorm} = bz.batter_name
+            WHERE Batter IS NOT NULL {season_clause}
+        ),
+        pitch_agg AS (
+            SELECT
+                Batter, BatterTeam,
+                COUNT(*) AS n_pitches,
+                COUNT(DISTINCT pa_id) AS PA,
+                COUNT(DISTINCT CASE WHEN KorBB='Strikeout' THEN pa_id END) AS ks,
+                COUNT(DISTINCT CASE WHEN KorBB='Walk' THEN pa_id END) AS bbs,
+                SUM(CASE WHEN PitchCall IN {_SWING_CALLS_SQL} THEN 1 ELSE 0 END) AS swings,
+                SUM(CASE WHEN PitchCall='StrikeSwinging' THEN 1 ELSE 0 END) AS whiffs,
+                SUM(CASE WHEN PitchCall IN {_CONTACT_CALLS_SQL} THEN 1 ELSE 0 END) AS contacts,
+                SUM(CASE WHEN {_HAS_LOC} THEN 1 ELSE 0 END) AS n_loc,
+                SUM(is_iz) AS iz_count,
+                SUM(is_oz) AS oz_count,
+                SUM(CASE WHEN is_iz = 1 AND PitchCall IN {_SWING_CALLS_SQL} THEN 1 ELSE 0 END) AS iz_swings,
+                SUM(CASE WHEN is_oz = 1 AND PitchCall IN {_SWING_CALLS_SQL} THEN 1 ELSE 0 END) AS oz_swings,
+                SUM(CASE WHEN is_iz = 1 AND PitchCall IN {_CONTACT_CALLS_SQL} THEN 1 ELSE 0 END) AS iz_contacts,
+                SUM(CASE WHEN is_oz = 1 AND PitchCall IN {_CONTACT_CALLS_SQL} THEN 1 ELSE 0 END) AS oz_contacts,
+                SUM(CASE WHEN PitchCall='InPlay' AND ExitSpeed IS NOT NULL THEN 1 ELSE 0 END) AS bbe,
+                SUM(CASE WHEN PitchCall='InPlay' AND ExitSpeed IS NOT NULL AND ExitSpeed>=95 THEN 1 ELSE 0 END) AS hard_hits,
+                SUM(CASE WHEN PitchCall='InPlay' AND ExitSpeed IS NOT NULL AND Angle BETWEEN 8 AND 32 THEN 1 ELSE 0 END) AS sweet_spots,
+                AVG(CASE WHEN PitchCall='InPlay' AND ExitSpeed IS NOT NULL THEN ExitSpeed END) AS AvgEV,
+                MAX(CASE WHEN PitchCall='InPlay' AND ExitSpeed IS NOT NULL THEN ExitSpeed END) AS MaxEV,
+                AVG(CASE WHEN PitchCall='InPlay' AND ExitSpeed IS NOT NULL THEN Angle END) AS AvgLA,
+                AVG(CASE WHEN PitchCall='InPlay' AND ExitSpeed IS NOT NULL THEN Distance END) AS AvgDist,
+                SUM(CASE WHEN PitchCall='InPlay' AND ExitSpeed IS NOT NULL AND ExitSpeed>=98
+                    AND Angle >= GREATEST(26 - 2*(ExitSpeed-98), 8)
+                    AND Angle <= LEAST(30 + 3*(ExitSpeed-98), 50) THEN 1 ELSE 0 END) AS Barrels,
+                SUM(CASE WHEN PitchCall='InPlay' AND ExitSpeed IS NOT NULL AND TaggedHitType='GroundBall' THEN 1 ELSE 0 END) AS gb,
+                SUM(CASE WHEN PitchCall='InPlay' AND ExitSpeed IS NOT NULL AND TaggedHitType='FlyBall' THEN 1 ELSE 0 END) AS fb,
+                SUM(CASE WHEN PitchCall='InPlay' AND ExitSpeed IS NOT NULL AND TaggedHitType='LineDrive' THEN 1 ELSE 0 END) AS ld,
+                SUM(CASE WHEN PitchCall='InPlay' AND ExitSpeed IS NOT NULL AND TaggedHitType='Popup' THEN 1 ELSE 0 END) AS pu
+            FROM raw
+            GROUP BY Batter, BatterTeam
+            HAVING PA >= 50
+        )
+        SELECT * FROM pitch_agg
+        """
+        agg = query_precompute(sql)
+        if agg.empty:
+            return agg
+
+        n = agg["bbe"]
+        pa = agg["PA"]
+        sw = agg["swings"]
+        oz = agg["oz_count"]
+        iz = agg["iz_count"]
+        iz_sw = agg["iz_swings"]
+        oz_sw = agg["oz_swings"]
+
+        agg["HardHitPct"] = np.where(n > 0, agg["hard_hits"] / n * 100, np.nan)
+        agg["BarrelPct"] = np.where(n > 0, agg["Barrels"] / n * 100, np.nan)
+        agg["BarrelPA"] = np.where(pa > 0, agg["Barrels"] / pa * 100, np.nan)
+        agg["SweetSpotPct"] = np.where(n > 0, agg["sweet_spots"] / n * 100, np.nan)
+        agg["WhiffPct"] = np.where(sw > 0, agg["whiffs"] / sw * 100, np.nan)
+        agg["KPct"] = np.where(pa > 0, agg["ks"] / pa * 100, np.nan)
+        agg["BBPct"] = np.where(pa > 0, agg["bbs"] / pa * 100, np.nan)
+        agg["ChasePct"] = np.where(oz > 0, agg["oz_swings"] / oz * 100, np.nan)
+        agg["ChaseContact"] = np.where(oz_sw > 0, agg["oz_contacts"] / oz_sw * 100, np.nan)
+        agg["ZoneSwingPct"] = np.where(iz > 0, iz_sw / iz * 100, np.nan)
+        agg["ZoneContactPct"] = np.where(iz_sw > 0, agg["iz_contacts"] / iz_sw * 100, np.nan)
+        agg["ZonePct"] = np.where(agg["n_loc"] > 0, agg["iz_count"] / agg["n_loc"] * 100, np.nan)
+        agg["SwingPct"] = np.where(agg["n_pitches"] > 0, sw / agg["n_pitches"] * 100, np.nan)
+        agg["GBPct"] = np.where(n > 0, agg["gb"] / n * 100, np.nan)
+        agg["FBPct"] = np.where(n > 0, agg["fb"] / n * 100, np.nan)
+        agg["LDPct"] = np.where(n > 0, agg["ld"] / n * 100, np.nan)
+        agg["PUPct"] = np.where(n > 0, agg["pu"] / n * 100, np.nan)
+        agg["AirPct"] = np.where(n > 0, (agg["fb"] + agg["ld"] + agg["pu"]) / n * 100, np.nan)
+        agg["BBE"] = agg["bbe"]
+
+        keep = [
+            "Batter", "BatterTeam", "PA", "BBE", "AvgEV", "MaxEV", "HardHitPct",
+            "Barrels", "BarrelPct", "BarrelPA", "SweetSpotPct", "AvgLA", "AvgDist",
+            "WhiffPct", "KPct", "BBPct", "ChasePct", "ChaseContact",
+            "ZoneSwingPct", "ZoneContactPct", "ZonePct", "SwingPct",
+            "GBPct", "FBPct", "LDPct", "PUPct", "AirPct",
+        ]
+        return agg[[c for c in keep if c in agg.columns]]
+
+    if _precompute_table_exists("batter_stats_pop"):
         where = None
         if season_filter:
             seasons_in = ",".join(str(int(s)) for s in season_filter)
@@ -375,6 +505,121 @@ def compute_batter_stats_pop(season_filter=None, _version=5):
 def compute_pitcher_stats_pop(season_filter=None, _version=5):
     """Compute pitcher stats for all D1 pitchers via DuckDB. Adaptive per-batter zone."""
     if _precompute_table_exists("pitcher_stats_pop"):
+        df = _read_precompute_table("pitcher_stats_pop")
+        if df.empty:
+            return df
+        if season_filter and "Season" in df.columns:
+            seasons = [int(s) for s in season_filter]
+            df = df[df["Season"].isin(seasons)]
+        return _compute_pitcher_from_base(df)
+    if _precompute_table_exists("trackman_pop"):
+        season_clause = ""
+        if season_filter:
+            seasons_in = ",".join(str(int(s)) for s in season_filter)
+            season_clause = f"AND Season IN ({seasons_in})"
+
+        _pnorm = _name_sql("Pitcher")
+        _bnorm_p = _name_sql("Batter")
+        table = "trackman_pop"
+        sql = f"""
+        WITH batter_zones AS (
+            SELECT {_bnorm_p} AS batter_name,
+                CASE WHEN COUNT(*) >= {MIN_CALLED_STRIKES_FOR_ADAPTIVE_ZONE}
+                     THEN ROUND(PERCENTILE_CONT(0.05) WITHIN GROUP (ORDER BY PlateLocHeight), 3)
+                     ELSE {ZONE_HEIGHT_BOT} END AS zone_bot,
+                CASE WHEN COUNT(*) >= {MIN_CALLED_STRIKES_FOR_ADAPTIVE_ZONE}
+                     THEN ROUND(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY PlateLocHeight), 3)
+                     ELSE {ZONE_HEIGHT_TOP} END AS zone_top
+            FROM {table}
+            WHERE PitchCall = 'StrikeCalled'
+              AND PlateLocHeight IS NOT NULL
+              AND Batter IS NOT NULL {season_clause}
+            GROUP BY {_bnorm_p}
+        ),
+        raw AS (
+            SELECT
+                {_pnorm} AS Pitcher, PitcherTeam,
+                PitchCall, ExitSpeed, Angle, TaggedHitType, TaggedPitchType,
+                PlateLocSide, PlateLocHeight, RelSpeed, SpinRate, Extension, KorBB,
+                GameID || '_' || Inning || '_' || PAofInning || '_' || {_bnorm_p} AS pa_id,
+                CASE WHEN PlateLocSide IS NOT NULL AND PlateLocHeight IS NOT NULL
+                      AND ABS(PlateLocSide) <= {ZONE_SIDE}
+                      AND PlateLocHeight >= COALESCE(bz.zone_bot, {ZONE_HEIGHT_BOT})
+                      AND PlateLocHeight <= COALESCE(bz.zone_top, {ZONE_HEIGHT_TOP})
+                     THEN 1 ELSE 0 END AS is_iz,
+                CASE WHEN PlateLocSide IS NOT NULL AND PlateLocHeight IS NOT NULL
+                      AND NOT (ABS(PlateLocSide) <= {ZONE_SIDE}
+                               AND PlateLocHeight >= COALESCE(bz.zone_bot, {ZONE_HEIGHT_BOT})
+                               AND PlateLocHeight <= COALESCE(bz.zone_top, {ZONE_HEIGHT_TOP}))
+                     THEN 1 ELSE 0 END AS is_oz
+            FROM {table} r
+            LEFT JOIN batter_zones bz ON {_bnorm_p} = bz.batter_name
+            WHERE Pitcher IS NOT NULL {season_clause}
+        ),
+        pitch_agg AS (
+            SELECT
+                Pitcher, PitcherTeam,
+                COUNT(*) AS Pitches,
+                COUNT(DISTINCT pa_id) AS PA,
+                COUNT(DISTINCT CASE WHEN KorBB='Strikeout' THEN pa_id END) AS ks,
+                COUNT(DISTINCT CASE WHEN KorBB='Walk' THEN pa_id END) AS bbs,
+                SUM(CASE WHEN PitchCall IN {_SWING_CALLS_SQL} THEN 1 ELSE 0 END) AS swings,
+                SUM(CASE WHEN PitchCall='StrikeSwinging' THEN 1 ELSE 0 END) AS whiffs,
+                SUM(CASE WHEN {_HAS_LOC} THEN 1 ELSE 0 END) AS n_loc,
+                SUM(is_iz) AS iz_count,
+                SUM(is_oz) AS oz_count,
+                SUM(CASE WHEN is_iz = 1 AND PitchCall IN {_SWING_CALLS_SQL} THEN 1 ELSE 0 END) AS iz_swings,
+                SUM(CASE WHEN is_oz = 1 AND PitchCall IN {_SWING_CALLS_SQL} THEN 1 ELSE 0 END) AS oz_swings,
+                SUM(CASE WHEN is_iz = 1 AND PitchCall IN {_CONTACT_CALLS_SQL} THEN 1 ELSE 0 END) AS iz_contacts,
+                SUM(CASE WHEN PitchCall='InPlay' AND ExitSpeed IS NOT NULL THEN 1 ELSE 0 END) AS bbe,
+                SUM(CASE WHEN PitchCall='InPlay' AND ExitSpeed IS NOT NULL AND ExitSpeed>=95 THEN 1 ELSE 0 END) AS hard_hits,
+                AVG(CASE WHEN PitchCall='InPlay' AND ExitSpeed IS NOT NULL THEN ExitSpeed END) AS AvgEVAgainst,
+                SUM(CASE WHEN PitchCall='InPlay' AND ExitSpeed IS NOT NULL AND ExitSpeed>=98
+                    AND Angle >= GREATEST(26 - 2*(ExitSpeed-98), 8)
+                    AND Angle <= LEAST(30 + 3*(ExitSpeed-98), 50) THEN 1 ELSE 0 END) AS n_barrels,
+                SUM(CASE WHEN PitchCall='InPlay' AND TaggedHitType='GroundBall' THEN 1 ELSE 0 END) AS gb,
+                SUM(CASE WHEN PitchCall='InPlay' THEN 1 ELSE 0 END) AS n_ip,
+                AVG(CASE WHEN TaggedPitchType IN ('Fastball','Sinker','Cutter') AND RelSpeed IS NOT NULL THEN RelSpeed END) AS AvgFBVelo,
+                MAX(CASE WHEN TaggedPitchType IN ('Fastball','Sinker','Cutter') AND RelSpeed IS NOT NULL THEN RelSpeed END) AS MaxFBVelo,
+                AVG(SpinRate) AS AvgSpin,
+                AVG(Extension) AS Extension
+            FROM raw
+            GROUP BY Pitcher, PitcherTeam
+            HAVING Pitches >= 100
+        )
+        SELECT * FROM pitch_agg
+        """
+        agg = query_precompute(sql)
+        if agg.empty:
+            return agg
+
+        pa = agg["PA"]
+        sw = agg["swings"]
+        oz = agg["oz_count"]
+        iz_sw = agg["iz_swings"]
+        n_bat = agg["bbe"]
+        n_ip = agg["n_ip"]
+
+        agg["WhiffPct"] = np.where(sw > 0, agg["whiffs"] / sw * 100, np.nan)
+        agg["KPct"] = np.where(pa > 0, agg["ks"] / pa * 100, np.nan)
+        agg["BBPct"] = np.where(pa > 0, agg["bbs"] / pa * 100, np.nan)
+        agg["ZonePct"] = np.where(agg["n_loc"] > 0, agg["iz_count"] / agg["n_loc"] * 100, np.nan)
+        agg["ChasePct"] = np.where(oz > 0, agg["oz_swings"] / oz * 100, np.nan)
+        agg["ZoneContactPct"] = np.where(iz_sw > 0, agg["iz_contacts"] / iz_sw * 100, np.nan)
+        agg["HardHitAgainst"] = np.where(n_bat > 0, agg["hard_hits"] / n_bat * 100, np.nan)
+        agg["BarrelPctAgainst"] = np.where(n_bat > 0, agg["n_barrels"] / n_bat * 100, np.nan)
+        agg["GBPct"] = np.where(n_ip > 0, agg["gb"] / n_ip * 100, np.nan)
+        agg["SwingPct"] = np.where(agg["Pitches"] > 0, sw / agg["Pitches"] * 100, np.nan)
+
+        keep = [
+            "Pitcher", "PitcherTeam", "Pitches", "PA", "AvgFBVelo", "MaxFBVelo",
+            "AvgSpin", "Extension", "WhiffPct", "KPct", "BBPct", "ZonePct",
+            "ChasePct", "ZoneContactPct", "AvgEVAgainst", "HardHitAgainst",
+            "BarrelPctAgainst", "GBPct", "SwingPct",
+        ]
+        return agg[[c for c in keep if c in agg.columns]]
+
+    if _precompute_table_exists("pitcher_stats_pop"):
         where = None
         if season_filter:
             seasons_in = ",".join(str(int(s)) for s in season_filter)
@@ -492,6 +737,140 @@ def compute_pitcher_stats_pop(season_filter=None, _version=5):
             "ChasePct", "ZoneContactPct", "AvgEVAgainst", "HardHitAgainst",
             "BarrelPctAgainst", "GBPct", "SwingPct"]
     return agg[[c for c in keep if c in agg.columns]]
+
+
+# ──────────────────────────────────────────────
+# League percentile dict builders (for scouting)
+# ──────────────────────────────────────────────
+
+@st.cache_data(show_spinner="Loading D1 batter percentiles...")
+def build_league_hitters_from_local(season_filter=None):
+    """Build league hitters dict for percentile context from local precomputed data.
+
+    Returns dict matching build_tm_dict_for_league_hitters format with keys:
+    rate, exit, pitch_rates, hit_types, etc.
+    """
+    df = compute_batter_stats_pop(season_filter=season_filter)
+    if df.empty:
+        return {}
+
+    # Create a copy and rename columns to match TrueMedia API format
+    out = df.copy()
+    out["playerFullName"] = out["Batter"]
+    out["newestTeamName"] = out["BatterTeam"]
+
+    # Map local column names to API column names
+    col_map = {
+        "AvgEV": "ExitVel",
+        "BarrelPct": "Barrel%",
+        "HardHitPct": "HardHit%",
+        "KPct": "K%",
+        "BBPct": "BB%",
+        "ChasePct": "Chase%",
+        "WhiffPct": "SwStrk%",
+        "GBPct": "Ground%",
+        "FBPct": "Fly%",
+        "LDPct": "Line%",
+        "PUPct": "Popup%",
+    }
+    for old, new in col_map.items():
+        if old in out.columns:
+            out[new] = out[old]
+
+    # Also add Hit95+% alias for HardHit%
+    if "HardHit%" in out.columns:
+        out["Hit95+%"] = out["HardHit%"]
+
+    # Build sub-DataFrames matching the API dict structure
+    def _sub(cols):
+        keep = ["playerFullName", "newestTeamName"] + [c for c in cols if c in out.columns]
+        return out[keep].copy()
+
+    return {
+        "rate": _sub(["PA", "K%", "BB%"]),
+        "exit": _sub(["ExitVel", "Barrel%", "HardHit%", "Hit95+%"]),
+        "pitch_rates": _sub(["Chase%", "SwStrk%", "SwingPct"]),
+        "hit_types": _sub(["Ground%", "Fly%", "Line%", "Popup%"]),
+        "hit_locations": pd.DataFrame(),
+        "speed": pd.DataFrame(),
+        "run_expectancy": pd.DataFrame(),
+        "swing_pct": pd.DataFrame(),
+        "swing_stats": pd.DataFrame(),
+        "counting": pd.DataFrame(),
+        "pitch_counts": pd.DataFrame(),
+        "pitch_type_counts": pd.DataFrame(),
+        "pitch_calls": pd.DataFrame(),
+        "pitch_locations": pd.DataFrame(),
+        "pitch_types": pd.DataFrame(),
+        "stolen_bases": pd.DataFrame(),
+        "home_runs": pd.DataFrame(),
+        "expected_rate": pd.DataFrame(),
+        "expected_hit_rates": pd.DataFrame(),
+    }
+
+
+@st.cache_data(show_spinner="Loading D1 pitcher percentiles...")
+def build_league_pitchers_from_local(season_filter=None):
+    """Build league pitchers dict for percentile context from local precomputed data.
+
+    Returns dict matching build_tm_dict_for_league_pitchers format.
+    """
+    df = compute_pitcher_stats_pop(season_filter=season_filter)
+    if df.empty:
+        return {}
+
+    # Create a copy and rename columns to match TrueMedia API format
+    out = df.copy()
+    out["playerFullName"] = out["Pitcher"]
+    out["newestTeamName"] = out["PitcherTeam"]
+
+    # Map local column names to API column names
+    col_map = {
+        "AvgFBVelo": "Vel",
+        "MaxFBVelo": "MaxVel",
+        "AvgSpin": "Spin",
+        "KPct": "K%",
+        "BBPct": "BB%",
+        "ChasePct": "Chase%",
+        "WhiffPct": "SwStrk%",
+        "ZonePct": "InZone%",
+        "AvgEVAgainst": "ExitVel",
+        "BarrelPctAgainst": "Barrel%",
+        "HardHitAgainst": "HardHit%",
+        "GBPct": "Ground%",
+    }
+    for old, new in col_map.items():
+        if old in out.columns:
+            out[new] = out[old]
+
+    # Build sub-DataFrames matching the API dict structure
+    def _sub(cols):
+        keep = ["playerFullName", "newestTeamName"] + [c for c in cols if c in out.columns]
+        return out[keep].copy()
+
+    return {
+        "traditional": _sub(["Pitches", "PA", "K%", "BB%"]),
+        "rate": _sub(["K%", "BB%"]),
+        "movement": _sub(["Vel", "MaxVel", "Spin", "Extension"]),
+        "pitch_rates": _sub(["Chase%", "SwStrk%", "InZone%", "SwingPct"]),
+        "exit": _sub(["ExitVel", "Barrel%", "HardHit%"]),
+        "hit_types": _sub(["Ground%"]),
+        "pitch_locations": pd.DataFrame(),
+        "pitch_types": pd.DataFrame(),
+        "counting": pd.DataFrame(),
+        "pitch_counts": pd.DataFrame(),
+        "pitch_type_counts": pd.DataFrame(),
+        "baserunning": pd.DataFrame(),
+        "stolen_bases": pd.DataFrame(),
+        "home_runs": pd.DataFrame(),
+        "expected_rate": pd.DataFrame(),
+        "expected_hit_rates": pd.DataFrame(),
+        "hit_locations": pd.DataFrame(),
+        "pitch_calls": pd.DataFrame(),
+        "expected_counting": pd.DataFrame(),
+        "pitching_counting": pd.DataFrame(),
+        "bids": pd.DataFrame(),
+    }
 
 
 @st.cache_data(show_spinner=False)
@@ -612,11 +991,10 @@ def compute_stuff_baselines():
             "velo_diff_stats": velo_diff_stats}
 
 
-@st.cache_data(show_spinner="Building tunnel population database...")
-def build_tunnel_population_pop():
+def _build_tunnel_population_pop(con=None):
     """Build tunnel population from pitch-level kinematics for accurate physics.
     Returns dict: pair_type -> sorted array of raw tunnel scores."""
-    if _precompute_table_exists("tunnel_population"):
+    if con is None and _precompute_table_exists("tunnel_population"):
         df = _read_precompute_table("tunnel_population")
         if not df.empty and {"pair_type", "score"}.issubset(set(df.columns)):
             pop = {}
@@ -640,7 +1018,10 @@ def build_tunnel_population_pop():
           AND PlateLocSide BETWEEN -{PLATE_SIDE_MAX} AND {PLATE_SIDE_MAX}
           AND PlateLocHeight BETWEEN {PLATE_HEIGHT_MIN} AND {PLATE_HEIGHT_MAX}
     """
-    df = query_population(sql)
+    if con is not None:
+        df = con.execute(sql).fetchdf()
+    else:
+        df = query_population(sql)
     if df.empty:
         return {}
 
@@ -942,3 +1323,8 @@ def build_tunnel_population_pop():
             pop[pair_key] = np.array(sorted(raw_list))
 
     return pop
+
+
+@st.cache_data(show_spinner="Building tunnel population database...")
+def build_tunnel_population_pop():
+    return _build_tunnel_population_pop()

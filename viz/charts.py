@@ -12,14 +12,25 @@ def strike_zone_rect():
                 line=dict(color="#333", width=2), fillcolor="rgba(0,0,0,0)")
 
 
+def add_view_badge(fig, view="Catcher"):
+    if fig is None:
+        return fig
+    fig.add_annotation(
+        x=0.99, y=0.02, xref="paper", yref="paper",
+        text=f"{view} View",
+        showarrow=False, xanchor="right", yanchor="bottom",
+        font=dict(size=10, color="#666"),
+        bgcolor="rgba(255,255,255,0.6)",
+        bordercolor="rgba(0,0,0,0.05)",
+        borderwidth=1,
+    )
+    return fig
+
+
 def add_strike_zone(fig, label=True):
     fig.add_shape(strike_zone_rect())
     if label:
-        fig.add_annotation(
-            x=0, y=ZONE_HEIGHT_BOT - 0.18, text="Catcher's View",
-            showarrow=False, font=dict(size=9, color="#999"),
-            xanchor="center", yanchor="top",
-        )
+        add_view_badge(fig, "Catcher")
     return fig
 
 
@@ -272,4 +283,13 @@ def make_pitch_location_heatmap(pitch_data, title, color, height=380):
         plot_bgcolor="white", paper_bgcolor="white",
         font=dict(color="#000000", family="Inter, Arial, sans-serif"),
     )
+    if title:
+        fig.add_annotation(
+            x=0.02, y=0.98, xref="paper", yref="paper",
+            text=f"<b>{title}</b>", showarrow=False,
+            xanchor="left", yanchor="top",
+            font=dict(size=12, color="#222"),
+            bgcolor="rgba(255,255,255,0.7)",
+        )
+    add_view_badge(fig, "Catcher")
     return fig

@@ -8,6 +8,7 @@ from config import (
     DAVIDSON_TEAM_ID, ROSTER_2026, JERSEY, POSITION, PITCH_COLORS,
     SWING_CALLS, CONTACT_CALLS,
     ZONE_SIDE, ZONE_HEIGHT_BOT, ZONE_HEIGHT_TOP,
+    PLATE_SIDE_MAX, PLATE_HEIGHT_MIN, PLATE_HEIGHT_MAX,
     in_zone_mask, is_barrel_mask, display_name,
 )
 from viz.layout import CHART_LAYOUT, section_header
@@ -121,14 +122,24 @@ def _postgame_umpire(gd):
     section_header("Umpire Report")
 
     called = gd[gd["PitchCall"].isin(["StrikeCalled", "BallCalled"])].copy()
+    # Ensure numeric locations and remove invalid/out-of-range tracking
+    called["PlateLocSide"] = pd.to_numeric(called.get("PlateLocSide"), errors="coerce")
+    called["PlateLocHeight"] = pd.to_numeric(called.get("PlateLocHeight"), errors="coerce")
     called = called.dropna(subset=["PlateLocSide", "PlateLocHeight"])
+    valid_loc = (
+        called["PlateLocSide"].between(-PLATE_SIDE_MAX, PLATE_SIDE_MAX) &
+        called["PlateLocHeight"].between(PLATE_HEIGHT_MIN, PLATE_HEIGHT_MAX)
+    )
+    dropped = int((~valid_loc).sum())
+    called = called.loc[valid_loc].copy()
     if called.empty:
         st.info("No called pitch location data available for this game.")
         return
+    if dropped > 0:
+        st.caption(f"Excluded {dropped} called pitches with invalid tracking locations.")
 
     # Fixed rulebook zone for umpire evaluation (no batter-adaptive)
-    iz = (called["PlateLocSide"].abs() <= ZONE_SIDE) & \
-         called["PlateLocHeight"].between(ZONE_HEIGHT_BOT, ZONE_HEIGHT_TOP)
+    iz = in_zone_mask(called)
     is_strike = called["PitchCall"] == "StrikeCalled"
     called["InZone"] = iz
     called["Correct"] = (is_strike & iz) | (~is_strike & ~iz)

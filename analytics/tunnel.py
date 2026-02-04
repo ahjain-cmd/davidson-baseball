@@ -14,7 +14,18 @@ from config import (
     PLATE_SIDE_MAX, PLATE_HEIGHT_MIN, PLATE_HEIGHT_MAX,
     MIN_PITCH_USAGE_PCT, filter_minor_pitches, SWING_CALLS,
 )
-from data.loader import _precompute_table_exists, _read_precompute_table
+from data.loader import (
+    _precompute_table_exists,
+    _read_precompute_table,
+    query_precompute,
+    query_population,
+)
+
+# Outcome-boost settings (small, sample-size gated)
+WHIFF_MIN_PAIRS = 15
+WHIFF_SHRINK_K = 40
+WHIFF_BOOST_MAX = 8.0
+WHIFF_BOOST_SCALE = 20.0  # percentage-point diff for max boost
 
 
 def _parquet_fingerprint():
@@ -24,9 +35,98 @@ def _parquet_fingerprint():
         return {"path": PARQUET_PATH, "mtime": None, "size": None}
 
 
+def _precompute_meta_matches():
+    if not _precompute_table_exists("meta"):
+        return False
+    df = _read_precompute_table("meta")
+    if df.empty:
+        return False
+    fp = _parquet_fingerprint()
+    row = df.iloc[0]
+    return (
+        row.get("parquet_path") == fp.get("path") and
+        row.get("parquet_mtime") == fp.get("mtime") and
+        row.get("parquet_size") == fp.get("size")
+    )
+
+
+@st.cache_data(show_spinner=False)
+def _load_pair_outcomes():
+    """Return (pair_whiff_baselines, global_whiff) in percent."""
+    # Prefer precomputed baselines if available and up to date.
+    if _precompute_table_exists("tunnel_pair_outcomes") and _precompute_meta_matches():
+        df = _read_precompute_table("tunnel_pair_outcomes")
+        if not df.empty and {"pair_type", "whiff_rate", "n_pairs"}.issubset(df.columns):
+            baselines = {}
+            global_whiff = None
+            for _, row in df.iterrows():
+                pair = row.get("pair_type")
+                if not pair:
+                    continue
+                if pair == "__ALL__":
+                    global_whiff = float(row.get("whiff_rate", np.nan))
+                    continue
+                baselines[pair] = float(row.get("whiff_rate", np.nan))
+            if global_whiff is None and baselines:
+                weights = df[df["pair_type"] != "__ALL__"]["n_pairs"].astype(float)
+                rates = df[df["pair_type"] != "__ALL__"]["whiff_rate"].astype(float)
+                if not weights.empty:
+                    global_whiff = float(np.average(rates, weights=weights))
+            return baselines, global_whiff
+
+    # Fallback: compute from available tables
+    table = None
+    if _precompute_table_exists("trackman_pop"):
+        table = "trackman_pop"
+        runner = query_precompute
+    else:
+        table = "trackman"
+        runner = query_population
+
+    sql = f"""
+    WITH ordered AS (
+        SELECT GameID, Inning, PAofInning, Batter, Pitcher, PitchofPA,
+               TaggedPitchType, PitchCall
+        FROM {table}
+        WHERE TaggedPitchType IS NOT NULL AND PitchCall IS NOT NULL
+    ),
+    pairs AS (
+        SELECT
+            CASE
+                WHEN TaggedPitchType < prev_type THEN TaggedPitchType || '/' || prev_type
+                ELSE prev_type || '/' || TaggedPitchType
+            END AS pair_type,
+            PitchCall
+        FROM (
+            SELECT *,
+                   LAG(TaggedPitchType) OVER (
+                       PARTITION BY GameID, Inning, PAofInning, Batter, Pitcher
+                       ORDER BY PitchofPA
+                   ) AS prev_type
+            FROM ordered
+        )
+        WHERE prev_type IS NOT NULL AND TaggedPitchType != prev_type
+    )
+    SELECT pair_type,
+           COUNT(*) AS n_pairs,
+           AVG(CASE WHEN PitchCall='StrikeSwinging' THEN 1 ELSE 0 END) * 100 AS whiff_rate
+    FROM pairs
+    GROUP BY pair_type
+    """
+    try:
+        df = runner(sql)
+    except Exception:
+        return {}, None
+    if df.empty:
+        return {}, None
+    baselines = {r["pair_type"]: float(r["whiff_rate"]) for _, r in df.iterrows()}
+    global_whiff = float(np.average(df["whiff_rate"], weights=df["n_pairs"]))
+    return baselines, global_whiff
+
+
 def _load_tunnel_benchmarks():
     if not os.path.exists(TUNNEL_BENCH_PATH):
-        if _precompute_table_exists("tunnel_benchmarks"):
+        if _precompute_table_exists("tunnel_benchmarks") and _precompute_meta_matches():
             df = _read_precompute_table("tunnel_benchmarks")
             if df.empty:
                 return None
@@ -51,7 +151,7 @@ def _load_tunnel_benchmarks():
             blob = json.load(f)
         if blob.get("fingerprint") != _parquet_fingerprint():
             # Fallback to precomputed DB if available
-            if _precompute_table_exists("tunnel_benchmarks"):
+            if _precompute_table_exists("tunnel_benchmarks") and _precompute_meta_matches():
                 df = _read_precompute_table("tunnel_benchmarks")
                 if df.empty:
                     return None
@@ -73,7 +173,7 @@ def _load_tunnel_benchmarks():
             return None
         return blob.get("benchmarks")
     except Exception:
-        if _precompute_table_exists("tunnel_benchmarks"):
+        if _precompute_table_exists("tunnel_benchmarks") and _precompute_meta_matches():
             df = _read_precompute_table("tunnel_benchmarks")
             if df.empty:
                 return None
@@ -104,7 +204,7 @@ def _save_tunnel_benchmarks(benchmarks):
 
 def _load_tunnel_weights():
     if not os.path.exists(TUNNEL_WEIGHTS_PATH):
-        if _precompute_table_exists("tunnel_weights"):
+        if _precompute_table_exists("tunnel_weights") and _precompute_meta_matches():
             df = _read_precompute_table("tunnel_weights")
             if not df.empty and "weights_json" in df.columns:
                 try:
@@ -116,7 +216,7 @@ def _load_tunnel_weights():
         with open(TUNNEL_WEIGHTS_PATH, "r", encoding="utf-8") as f:
             blob = json.load(f)
         if blob.get("fingerprint") != _parquet_fingerprint():
-            if _precompute_table_exists("tunnel_weights"):
+            if _precompute_table_exists("tunnel_weights") and _precompute_meta_matches():
                 df = _read_precompute_table("tunnel_weights")
                 if not df.empty and "weights_json" in df.columns:
                     try:
@@ -126,7 +226,7 @@ def _load_tunnel_weights():
             return None
         return blob.get("weights")
     except Exception:
-        if _precompute_table_exists("tunnel_weights"):
+        if _precompute_table_exists("tunnel_weights") and _precompute_meta_matches():
             df = _read_precompute_table("tunnel_weights")
             if not df.empty and "weights_json" in df.columns:
                 try:
@@ -225,6 +325,8 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
     # Pair-type benchmarks loaded from population cache (commit_sep percentiles).
     # Format: (p10, p25, p50, p75, p90, mean, std)
     PAIR_BENCHMARKS = _load_tunnel_benchmarks() or {}
+    # Pair-type outcome baselines (whiff%) for shrinkage
+    PAIR_OUTCOMES, GLOBAL_WHIFF = _load_pair_outcomes()
     DEFAULT_BENCHMARK = (1.2, 2.1, 3.3, 4.9, 6.8, 3.8, 2.7)
 
     # ── Per-pitch-type aggregates (used as fallback & for diagnostics) ──
@@ -384,45 +486,39 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
 
     # ── Build pitch-by-pitch pair data (Improvement #4) ──
     pair_scores = {}  # (typeA, typeB) -> list of (row_a, row_b) pairs
-    has_pbp = "PitchofPA" in pdf.columns and "Batter" in pdf.columns
+    has_pbp = {"PitchofPA", "Batter", "PAofInning", "GameID"}.issubset(pdf.columns)
     if has_pbp:
-        pbp_req = ["TaggedPitchType", "RelHeight", "RelSide", "PlateLocHeight",
-                    "PlateLocSide", "RelSpeed"]
+        pbp_req = [
+            "TaggedPitchType", "RelHeight", "RelSide", "PlateLocHeight",
+            "PlateLocSide", "RelSpeed", "GameID", "PAofInning", "PitchofPA", "Batter",
+        ]
         pbp = pdf.dropna(subset=pbp_req).copy()
         if "Extension" not in pbp.columns:
             pbp["Extension"] = 6.0
         else:
             pbp["Extension"] = pbp["Extension"].fillna(6.0)
-        # Sort by batter and pitch order within PA
-        sort_cols = ["Batter"]
-        if "Date" in pbp.columns:
-            sort_cols.append("Date")
-        if "Inning" in pbp.columns:
-            sort_cols.append("Inning")
-        sort_cols.append("PitchofPA")
-        valid_sort = [c for c in sort_cols if c in pbp.columns]
-        if valid_sort:
-            pbp = pbp.sort_values(valid_sort)
+        # Sort by PA and pitch order within PA
+        group_cols = ["GameID", "Inning", "PAofInning", "Batter"]
+        if "Pitcher" in pbp.columns:
+            group_cols.append("Pitcher")
+        group_cols = [c for c in group_cols if c in pbp.columns]
+        pbp = pbp.sort_values(group_cols + ["PitchofPA"])
         # Build consecutive pairs within each PA
-        if "PitchofPA" in pbp.columns:
-            prev = pbp.shift(1)
-            same_batter = pbp["Batter"] == prev["Batter"]
-            if "Date" in pbp.columns:
-                same_batter = same_batter & (pbp["Date"] == prev["Date"])
-            diff_type = pbp["TaggedPitchType"] != prev["TaggedPitchType"]
-            pair_mask = same_batter & diff_type
-            pair_idx = pbp.index[pair_mask]
-            for pidx in pair_idx:
-                crow = pbp.loc[pidx]
-                prow = prev.loc[pidx]
-                tA = prow["TaggedPitchType"]
-                tB = crow["TaggedPitchType"]
-                if pd.isna(tA) or pd.isna(tB):
-                    continue
-                key = tuple(sorted([tA, tB]))
-                if key not in pair_scores:
-                    pair_scores[key] = []
-                pair_scores[key].append((prow, crow))
+        prev = pbp.groupby(group_cols).shift(1)
+        diff_type = pbp["TaggedPitchType"] != prev["TaggedPitchType"]
+        pair_mask = prev["TaggedPitchType"].notna() & diff_type
+        pair_idx = pbp.index[pair_mask]
+        for pidx in pair_idx:
+            crow = pbp.loc[pidx]
+            prow = prev.loc[pidx]
+            tA = prow["TaggedPitchType"]
+            tB = crow["TaggedPitchType"]
+            if pd.isna(tA) or pd.isna(tB):
+                continue
+            key = tuple(sorted([tA, tB]))
+            if key not in pair_scores:
+                pair_scores[key] = []
+            pair_scores[key].append((prow, crow))
 
     # ── Score each pitch-type pair ──
     def _score_single_pair_from_rows(row_a, row_b):
@@ -503,18 +599,21 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
                     velo_gap = float(np.median(arr[:, 4]))
                     rel_angle_sep = float(np.nanmedian(arr[:, 5]))
                     pair_whiff = float(np.mean(whiff_flags)) * 100 if whiff_flags else np.nan
+                    n_pairs_used = len(metrics)
                 else:
                     result = _score_single_pair_from_rows(a, b)
                     if result is None:
                         continue
                     commit_sep, rel_sep, plate_sep, move_div, velo_gap, rel_angle_sep = result
                     pair_whiff = np.nan
+                    n_pairs_used = 0
             else:
                 result = _score_single_pair_from_rows(a, b)
                 if result is None:
                     continue
                 commit_sep, rel_sep, plate_sep, move_div, velo_gap, rel_angle_sep = result
                 pair_whiff = np.nan
+                n_pairs_used = 0
 
             # Release-point variance penalty (#2)
             combined_rel_std = np.sqrt(
@@ -600,6 +699,17 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
                 move_pct * weights["move"] +
                 velo_pct * weights["velo"], 2)
 
+            # Outcome boost: small, sample-size gated, shrunk to league baseline
+            outcome_boost = 0.0
+            if n_pairs_used >= WHIFF_MIN_PAIRS and pd.notna(pair_whiff):
+                baseline = PAIR_OUTCOMES.get(pair_label, GLOBAL_WHIFF)
+                if baseline is not None and not pd.isna(baseline):
+                    adj_whiff = (pair_whiff * n_pairs_used + baseline * WHIFF_SHRINK_K) / (n_pairs_used + WHIFF_SHRINK_K)
+                    diff = adj_whiff - baseline
+                    outcome_boost = float(np.clip(diff / WHIFF_BOOST_SCALE * WHIFF_BOOST_MAX,
+                                                  -WHIFF_BOOST_MAX, WHIFF_BOOST_MAX))
+                    raw_tunnel = round(raw_tunnel + outcome_boost, 2)
+
             # Percentile grading vs all pitchers in the database
             if tunnel_pop is not None and pair_label in tunnel_pop:
                 tunnel = round(percentileofscore(tunnel_pop[pair_label], raw_tunnel, kind='rank'), 1)
@@ -659,8 +769,6 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
                     diagnosis = f"Poor tunnel — bottom {tunnel:.0f}% for {pair_label}"
             else:
                 diagnosis = "; ".join(issues)
-
-            n_pairs_used = len(metrics) if len(pbp_pairs) >= 8 and len(metrics) >= 5 else 0
 
             rows.append({
                 "Pitch A": types[i], "Pitch B": types[j],
