@@ -7,6 +7,8 @@ services:
       # Mount your data files into the container
       - ${DATA_DIR:-.}/all_trackman.parquet:/app/all_trackman.parquet:ro
       - ${DATA_DIR:-.}/davidson.duckdb:/app/davidson.duckdb:ro
+      # Mount cache directory for fast league percentile loading
+      - ${DATA_DIR:-.}/.cache:/app/.cache
       # Optional: mount TrueMedia data
       - ${DATA_DIR:-.}/export.json:/app/export.json:ro
     environment:
