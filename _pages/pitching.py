@@ -182,7 +182,33 @@ def _rank_pairs(tunnel_df, pair_df, pitch_metrics, top_n=2):
     out = sorted(out, key=lambda x: (x["Score"] if pd.notna(x["Score"]) else -1), reverse=True)
     for r in out:
         r.pop("_key", None)
-    return out[:top_n]
+
+    # Prioritize diverse pairs: ensure at least one different-pitch pair in top results
+    # Split into different-pitch and same-pitch pairs
+    different_pairs = [r for r in out if " → " in r["Pair"] and r["Pair"].split(" → ")[0] != r["Pair"].split(" → ")[1]]
+    same_pairs = [r for r in out if " → " in r["Pair"] and r["Pair"].split(" → ")[0] == r["Pair"].split(" → ")[1]]
+
+    # Build result: prioritize different-pitch pairs, but include same-pitch if score is significantly higher
+    result = []
+    if different_pairs:
+        result.append(different_pairs[0])  # Best different-pitch pair
+        # Add second best: either another different pair or a same pair if it scores much higher
+        remaining_diff = different_pairs[1:] if len(different_pairs) > 1 else []
+        if same_pairs and remaining_diff:
+            # Include same pair only if it scores > 10 points higher than next different pair
+            if same_pairs[0].get("Score", 0) > remaining_diff[0].get("Score", 0) + 10:
+                result.append(same_pairs[0])
+            else:
+                result.append(remaining_diff[0])
+        elif same_pairs:
+            result.append(same_pairs[0])
+        elif remaining_diff:
+            result.append(remaining_diff[0])
+    elif same_pairs:
+        # Only same-pitch pairs available
+        result = same_pairs[:top_n]
+
+    return result[:top_n]
 
 
 def _rank_sequences(pair_df, pitch_metrics, length=3, top_n=2):
