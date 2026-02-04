@@ -7429,19 +7429,24 @@ def _scouting_catcher_report(tm, team):
 
 
 def _load_local_catcher_throws():
-    """Load catcher throwing data from local CSV file."""
+    """Load catcher throwing data from local CSV file (stolen_bases_catchers.csv)."""
     import os
-    csv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "All Tracked Throws.csv")
+    # Use the new catcher SB data which includes PopTimeSBA2
+    csv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "stolen_bases_catchers.csv")
     if os.path.exists(csv_path):
         try:
             df = pd.read_csv(csv_path)
-            # Convert PopTime to numeric if it's a string
-            if "PopTime" in df.columns:
-                df["PopTime"] = pd.to_numeric(df["PopTime"], errors="coerce")
-            if "CThrowSpd" in df.columns:
-                df["CThrowSpd"] = pd.to_numeric(df["CThrowSpd"], errors="coerce")
-            if "CExchTime" in df.columns:
-                df["CExchTime"] = pd.to_numeric(df["CExchTime"], errors="coerce")
+            # Map PopTimeSBA2 to PopTime for compatibility
+            if "PopTimeSBA2" in df.columns:
+                df["PopTime"] = pd.to_numeric(df["PopTimeSBA2"], errors="coerce")
+            # Convert numeric columns
+            for col in ["SB", "CS", "SBA", "SBOpp", "SB2", "CS2", "SB3", "CS3"]:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+            # Parse SB% (remove % sign, handle '-' as NaN)
+            if "SB%" in df.columns:
+                df["SB%"] = df["SB%"].astype(str).str.replace("%", "", regex=False).replace("-", "")
+                df["SB%"] = pd.to_numeric(df["SB%"], errors="coerce")
             return df
         except Exception:
             return pd.DataFrame()
@@ -7449,20 +7454,21 @@ def _load_local_catcher_throws():
 
 
 def _load_local_pitcher_baserunning():
-    """Load pitcher baserunning data (SB/CS allowed) from local CSV file."""
+    """Load pitcher-level SB allowed data (stolen_bases_pitchers.csv)."""
     import os
-    csv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Baserunning.csv")
+    csv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "stolen_bases_pitchers.csv")
     if os.path.exists(csv_path):
         try:
             df = pd.read_csv(csv_path)
             # Convert numeric columns
-            for col in ["SB", "CS", "SBA", "IP", "PitcherPKAtt", "PitcherPK", "PK1Att", "PK1"]:
+            for col in ["SB", "CS", "SBA", "SBOpp", "G", "SB2", "CS2", "SB3", "CS3"]:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors="coerce")
-            # Parse SB% (remove % sign, handle '-' as NaN)
-            if "SB%" in df.columns:
-                df["SB%"] = df["SB%"].astype(str).str.replace("%", "", regex=False).replace("-", "")
-                df["SB%"] = pd.to_numeric(df["SB%"], errors="coerce")
+            # Parse SB% columns (remove % sign, handle '-' as NaN)
+            for pct_col in ["SB%", "SB2%", "SB3%"]:
+                if pct_col in df.columns:
+                    df[pct_col] = df[pct_col].astype(str).str.replace("%", "", regex=False).replace("-", "")
+                    df[pct_col] = pd.to_numeric(df[pct_col], errors="coerce")
             return df
         except Exception:
             return pd.DataFrame()
@@ -7489,7 +7495,7 @@ def _load_local_outfield_throws():
 def _load_local_stolen_bases_catcher():
     """Load catcher stolen base data (SB/CS allowed) from local CSV file."""
     import os
-    csv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Stolen Bases.csv")
+    csv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "stolen_bases_catchers.csv")
     if os.path.exists(csv_path):
         try:
             df = pd.read_csv(csv_path)
@@ -7501,6 +7507,73 @@ def _load_local_stolen_bases_catcher():
             if "SB%" in df.columns:
                 df["SB%"] = df["SB%"].astype(str).str.replace("%", "", regex=False).replace("-", "")
                 df["SB%"] = pd.to_numeric(df["SB%"], errors="coerce")
+            return df
+        except Exception:
+            return pd.DataFrame()
+    return pd.DataFrame()
+
+
+def _load_local_stolen_bases_runners():
+    """Load runner stolen base data from local CSV file."""
+    import os
+    csv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "stolen_bases_runners.csv")
+    if os.path.exists(csv_path):
+        try:
+            df = pd.read_csv(csv_path)
+            # Convert numeric columns
+            for col in ["SB", "CS", "SBA", "SBOpp", "SB2", "CS2", "SB3", "CS3", "G"]:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+            # Parse SB% columns
+            for pct_col in ["SB%", "SB2%", "SB3%"]:
+                if pct_col in df.columns:
+                    df[pct_col] = df[pct_col].astype(str).str.replace("%", "", regex=False).replace("-", "")
+                    df[pct_col] = pd.to_numeric(df[pct_col], errors="coerce")
+            return df
+        except Exception:
+            return pd.DataFrame()
+    return pd.DataFrame()
+
+
+def _load_local_speed_scores():
+    """Load speed score data from local CSV file."""
+    import os
+    csv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "speed_scores.csv")
+    if os.path.exists(csv_path):
+        try:
+            df = pd.read_csv(csv_path)
+            # Convert numeric columns
+            for col in ["SpeedScore", "SB", "SBA", "AB", "3B", "RS"]:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+            # Parse SB%
+            if "SB%" in df.columns:
+                df["SB%"] = df["SB%"].astype(str).str.replace("%", "", regex=False).replace("-", "")
+                df["SB%"] = pd.to_numeric(df["SB%"], errors="coerce")
+            return df
+        except Exception:
+            return pd.DataFrame()
+    return pd.DataFrame()
+
+
+def _load_local_running_bases():
+    """Load team baserunning data (1st to 3rd, scoring, etc.) from local CSV file."""
+    import os
+    csv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "running_bases.csv")
+    if os.path.exists(csv_path):
+        try:
+            df = pd.read_csv(csv_path)
+            # Convert numeric columns
+            for col in ["G", "1stTo3rdOpp", "1stTo3rdAtt", "1stTo3rd", "1stTo3rdOut",
+                        "1stToHomeOpp", "1stToHomeAtt", "1stToHome", "1stToHomeOut",
+                        "2ndToHomeOpp", "2ndToHomeAtt", "2ndToHome", "2ndToHomeOut", "ROE"]:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+            # Parse percentage columns
+            for pct_col in ["1stTo3rdAtt%", "1stTo3rdSafe%", "1stToHomeAtt%", "1stToHomeSafe%", "2ndToHomeAtt%", "2ndToHomeSafe%"]:
+                if pct_col in df.columns:
+                    df[pct_col] = df[pct_col].astype(str).str.replace("%", "", regex=False).replace("-", "")
+                    df[pct_col] = pd.to_numeric(df[pct_col], errors="coerce")
             return df
         except Exception:
             return pd.DataFrame()
@@ -7698,18 +7771,17 @@ def _scouting_baserunning_report(tm, team, opp_pitches, season_year=2026):
     pitcher_rows = []
 
     if not team_pitcher_br.empty and "playerFullName" in team_pitcher_br.columns:
-        # Filter to pitchers with meaningful innings
-        team_pitcher_br = team_pitcher_br[team_pitcher_br["IP"] >= 5].copy()
+        # Filter to pitchers with meaningful steal attempts against them
+        team_pitcher_br = team_pitcher_br[team_pitcher_br["SBA"] >= 3].copy()
 
         for _, row in team_pitcher_br.iterrows():
             pitcher = row["playerFullName"]
-            ip = row.get("IP", np.nan)
+            games = row.get("G", np.nan)
             sb_allowed = row.get("SB", np.nan)
             cs = row.get("CS", np.nan)
             sb_pct = row.get("SB%", np.nan)
             sba = row.get("SBA", np.nan)
-            pk_att = row.get("PitcherPKAtt", np.nan) if "PitcherPKAtt" in row else row.get("PK1Att", np.nan)
-            pk_success = row.get("PitcherPK", np.nan) if "PitcherPK" in row else row.get("PK1", np.nan)
+            sb_opp = row.get("SBOpp", np.nan)
 
             # Calculate vulnerability rating
             rating = "No Data"
@@ -7737,12 +7809,11 @@ def _scouting_baserunning_report(tm, team, opp_pitches, season_year=2026):
 
             pitcher_rows.append({
                 "Pitcher": pitcher,
-                "IP": f"{ip:.1f}" if not pd.isna(ip) else "-",
+                "G": int(games) if not pd.isna(games) else "-",
                 "SB Allowed": int(sb_allowed) if not pd.isna(sb_allowed) else "-",
                 "CS": int(cs) if not pd.isna(cs) else "-",
                 "SB%": f"{sb_pct:.1f}%" if not pd.isna(sb_pct) else "-",
                 "SBA": int(sba) if not pd.isna(sba) else "-",
-                "Pickoffs": int(pk_att) if not pd.isna(pk_att) else "-",
                 "Rating": rating,
             })
 
@@ -7857,6 +7928,23 @@ def _scouting_baserunning_report(tm, team, opp_pitches, season_year=2026):
 
     h_cnt = _tm_team(tm["hitting"]["counting"], team)
     h_sb = _tm_team(tm["hitting"]["stolen_bases"], team) if "stolen_bases" in tm["hitting"] else pd.DataFrame()
+
+    # Fallback: load local hitter SB data
+    if h_cnt.empty or "SB" not in h_cnt.columns:
+        local_hitter_sb = _load_local_stolen_bases_runners()
+        if not local_hitter_sb.empty and "newestTeamName" in local_hitter_sb.columns:
+            # Try to match team
+            team_hitters = local_hitter_sb[local_hitter_sb["newestTeamName"] == team].copy()
+            if team_hitters.empty:
+                team_hitters = local_hitter_sb[
+                    local_hitter_sb["newestTeamName"].str.lower() == team.lower()
+                ].copy()
+            if team_hitters.empty:
+                team_hitters = local_hitter_sb[
+                    local_hitter_sb["newestTeamName"].str.lower().str.contains(team.lower().split()[0], na=False)
+                ].copy()
+            if not team_hitters.empty:
+                h_cnt = team_hitters
 
     # Use counting stats for SB data
     if not h_cnt.empty and "SB" in h_cnt.columns and "playerFullName" in h_cnt.columns:

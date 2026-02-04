@@ -1,0 +1,308 @@
+﻿Rank,teamId,teamName,team,teamFullName,location,teamAbbrevName,teamLevel,synergyTeamId,newestTeamId,newestTeamLevel,newestTeamName,newestTeamAbbrevName,newestTeamLocation,G,SBOpp,SBA,SB,CS,SB%,SB2Opp,SBA2,SB2,CS2,SB2%,SB3Opp,SBA3,SB3,CS3,SB3%,SBAH,SBH,CSH
+1,730173440,Keydets,VMI,Virginia Military Institute,VMI,VMI,BBC,,730173440,BBC,Keydets,VMI,VMI,53,1009,246,209,37,85.0%,601,157,127,30,80.9%,408,67,62,5,92.5%,7,5,2
+2,343,Huskies,Northeastern,Northeastern University,Northeastern,NE,BBC,,343,BBC,Huskies,NE,Northeastern,60,991,228,196,32,86.0%,586,150,121,29,80.7%,405,39,36,3,92.3%,2,2,0
+3,4767,Jaguars,Southern,Southern University,Southern,SOU,BBC,,4767,BBC,Jaguars,SOU,Southern,51,934,227,191,36,84.1%,583,152,124,28,81.6%,351,41,33,8,80.5%,7,7,0
+4,730265088,Patriots,George Mason,George Mason University,George Mason,GMU,BBC,,730265088,BBC,Patriots,GMU,George Mason,61,1160,199,165,34,82.9%,688,129,104,25,80.6%,472,42,34,8,81.0%,8,7,1
+5,5467,Cardinals,Louisville,University of Louisville,Louisville,LOU,BBC,,5467,BBC,Cardinals,LOU,Louisville,66,1118,182,162,20,89.0%,680,132,116,16,87.9%,438,34,30,4,88.2%,0,0,0
+6,5376,Braves,Alcorn State,Alcorn State University,Alcorn State,ALCN,BBC,,5376,BBC,Braves,ALCN,Alcorn State,49,821,167,153,14,91.6%,470,108,98,10,90.7%,351,57,53,4,93.0%,2,2,0
+7,730176512,Terriers,Wofford,Wofford College,Wofford,WOF,BBC,,730176512,BBC,Terriers,WOF,Wofford,60,1071,180,151,29,83.9%,636,134,110,24,82.1%,435,37,33,4,89.2%,5,4,1
+8,730291712,Mountaineers,Mount St. Mary's,Mount St. Mary's University,Mount St. Mary's,MSM,BBC,,730291712,BBC,Mountaineers,MSM,Mount St. Mary's,51,881,182,148,34,81.3%,542,127,97,30,76.4%,339,28,25,3,89.3%,6,5,1
+9,5386,Golden Grizzlies,Oakland,Oakland University,Oakland,OAK,BBC,,5386,BBC,Golden Grizzlies,OAK,Oakland,60,1010,176,146,30,83.0%,593,119,98,21,82.4%,417,40,32,8,80.0%,3,2,1
+10,5486,Huskies,Connecticut,University of Connecticut,Connecticut,CONN,BBC,,5486,BBC,Huskies,CONN,Connecticut,59,1076,172,139,33,80.8%,668,129,102,27,79.1%,408,26,22,4,84.6%,3,1,2
+11,730219264,Lancers,Longwood,Longwood University,Longwood,LONG,BBC,,730219264,BBC,Lancers,LONG,Longwood,52,880,161,135,26,83.9%,526,110,90,20,81.8%,354,33,28,5,84.8%,6,5,1
+12,5378,Tigers,Grambling State,Grambling State University,Grambling State,GRAM,BBC,,5378,BBC,Tigers,GRAM,Grambling State,54,1069,148,133,15,89.9%,621,115,103,12,89.6%,448,24,22,2,91.7%,3,2,1
+12,730194944,Pioneers,Sacred Heart,Sacred Heart University,Sacred Heart,SHU,BBC,,730194944,BBC,Pioneers,SHU,Sacred Heart,54,965,148,133,15,89.9%,570,98,86,12,87.8%,395,28,25,3,89.3%,4,4,0
+12,5362,Wildcats,Kentucky,University of Kentucky,Kentucky,UK,BBC,,5362,BBC,Wildcats,UK,Kentucky,57,936,161,133,28,82.6%,535,106,84,22,79.2%,401,27,23,4,85.2%,4,2,2
+15,730152960,Wildcats,Bethune-Cookman,Bethune-Cookman University,Bethune-Cookman,COOK,BBC,,730152960,BBC,Wildcats,COOK,Bethune-Cookman,60,1049,156,132,24,84.6%,613,103,85,18,82.5%,436,26,22,4,84.6%,8,6,2
+16,730324992,Rams,Fordham,Fordham University,Fordham,FOR,BBC,,730324992,BBC,Rams,FOR,Fordham,58,1043,162,131,31,80.9%,641,119,94,25,79.0%,402,28,23,5,82.1%,3,2,1
+17,730261504,Hatters,Stetson,Stetson University,Stetson,STET,BBC,,730261504,BBC,Hatters,STET,Stetson,63,1046,154,130,24,84.4%,657,130,109,21,83.8%,389,12,9,3,75.0%,3,3,0
+18,730352896,Sharks,LIU Brooklyn,Long Island University-Brooklyn,LIU Brooklyn,LIU,BBC,,730352896,BBC,Sharks,LIU,LIU Brooklyn,58,953,153,129,24,84.3%,577,102,85,17,83.3%,376,25,20,5,80.0%,5,3,2
+19,5390,Raiders,Wright State,Wright State University,Wright State,WRST,BBC,,5390,BBC,Raiders,WRST,Wright State,61,1088,158,128,30,81.0%,637,118,95,23,80.5%,451,25,19,6,76.0%,1,0,1
+20,5465,Bearcats,Cincinnati,University of Cincinnati,Cincinnati,CIN,BBC,,5465,BBC,Bearcats,CIN,Cincinnati,59,1042,139,127,12,91.4%,620,95,85,10,89.5%,422,25,24,1,96.0%,2,1,1
+20,4768,Tigers,Texas Southern,Texas Southern University,Texas Southern,TXSO,BBC,,4768,BBC,Tigers,TXSO,Texas Southern,54,1009,145,127,18,87.6%,592,106,90,16,84.9%,417,30,28,2,93.3%,1,1,0
+20,730315008,Golden Flashes,Kent State,Kent State University,Kent State,KENT,BBC,,730315008,BBC,Golden Flashes,KENT,Kent State,56,1011,158,127,31,80.4%,571,111,86,25,77.5%,440,30,24,6,80.0%,3,3,0
+23,730378240,Tigers,Jackson State,Jackson State University,Jackson State,JKST,BBC,,730378240,BBC,Tigers,JKST,Jackson State,51,948,143,124,19,86.7%,568,88,76,12,86.4%,380,34,31,3,91.2%,5,1,4
+23,730163712,Rams,Rhode Island,University of Rhode Island,Rhode Island,URI,BBC,,730163712,BBC,Rams,URI,Rhode Island,60,1204,156,124,32,79.5%,715,118,94,24,79.7%,489,22,17,5,77.3%,6,3,3
+25,227,Eagles,Boston College,Boston College,Boston College,BC,BBC,,227,BBC,Eagles,BC,Boston College,57,942,147,123,24,83.7%,621,87,69,18,79.3%,321,47,44,3,93.6%,3,0,3
+26,730149120,Lions,Loyola Marymount,Loyola Marymount University,Loyola Marymount,LMU,BBC,,730149120,BBC,Lions,LMU,Loyola Marymount,58,1021,148,122,26,82.4%,593,113,91,22,80.5%,428,17,13,4,76.5%,8,8,0
+26,730212096,Hilltoppers,Western Kentucky,Western Kentucky University,Western Kentucky,WKU,BBC,,730212096,BBC,Hilltoppers,WKU,Western Kentucky,60,1091,147,122,25,83.0%,635,105,82,23,78.1%,456,22,21,1,95.5%,5,4,1
+28,730263552,Wolverines,Utah Valley,Utah Valley University,Utah Valley,UVU,BBC,,730263552,BBC,Wolverines,UVU,Utah Valley,62,1131,147,121,26,82.3%,696,118,95,23,80.5%,435,15,12,3,80.0%,5,5,0
+28,730310656,Crusaders,Holy Cross,College of the Holy Cross,Holy Cross,HC,BBC,,730310656,BBC,Crusaders,HC,Holy Cross,58,1049,140,121,19,86.4%,621,93,77,16,82.8%,428,27,26,1,96.3%,5,3,2
+28,730386688,Bobcats,Quinnipiac,Quinnipiac University,Quinnipiac,QUIN,BBC,,730386688,BBC,Bobcats,QUIN,Quinnipiac,56,1018,153,121,32,79.1%,593,110,86,24,78.2%,425,28,21,7,75.0%,2,1,1
+31,730187776,Fighting Camels,Campbell,Campbell University,Campbell,CAMP,BBC,,730187776,BBC,Fighting Camels,CAMP,Campbell,56,940,140,120,20,85.7%,530,113,96,17,85.0%,410,22,19,3,86.4%,2,2,0
+31,730225408,Gamecocks,Jacksonville State,Jacksonville State University,Jacksonville State,JVST,BBC,,730225408,BBC,Gamecocks,JVST,Jacksonville State,61,1038,142,120,22,84.5%,626,105,85,20,81.0%,412,20,18,2,90.0%,6,6,0
+33,730355200,Knights,Fairleigh Dickinson,Fairleigh Dickinson University,Fairleigh Dickinson,FDU,BBC,,730355200,BBC,Knights,FDU,Fairleigh Dickinson,53,909,140,119,21,85.0%,567,107,89,18,83.2%,342,26,24,2,92.3%,1,0,1
+33,730194688,Flyers,Dayton,University of Dayton,Dayton,DAY,BBC,,730194688,BBC,Flyers,DAY,Dayton,58,1090,140,119,21,85.0%,657,107,90,17,84.1%,433,23,19,4,82.6%,3,3,0
+35,730238976,Skyhawks,UT Martin,University of Tennessee at Martin,UT Martin,UTM,BBC,,730238976,BBC,Skyhawks,UTM,UT Martin,54,917,143,118,25,82.5%,571,102,82,20,80.4%,346,27,25,2,92.6%,9,6,3
+35,730177792,Cougars,College of Charleston,College of Charleston,College of Charleston,COFC,BBC,,730177792,BBC,Cougars,COFC,College of Charleston,59,1033,136,118,18,86.8%,576,96,79,17,82.3%,457,25,24,1,96.0%,2,2,0
+35,730230272,Norse,Northern Kentucky,Northern Kentucky University,Northern Kentucky,NKU,BBC,,730230272,BBC,Norse,NKU,Northern Kentucky,56,1038,134,118,16,88.1%,585,109,95,14,87.2%,453,13,13,0,100.0%,4,2,2
+38,2330,Hoyas,Georgetown,Georgetown University,Georgetown,GTWN,BBC,,2330,BBC,Hoyas,GTWN,Georgetown,56,879,142,117,25,82.4%,525,126,104,22,82.5%,354,15,13,2,86.7%,2,1,1
+38,730294528,Sooners,Oklahoma,University of Oklahoma,Oklahoma,OKLA,BBC,,730294528,BBC,Sooners,OKLA,Oklahoma,60,1013,141,117,24,83.0%,640,99,79,20,79.8%,373,20,16,4,80.0%,0,0,0
+40,730318336,Tigers,Towson,Towson University,Towson,TOWS,BBC,,730318336,BBC,Tigers,TOWS,Towson,56,878,137,114,23,83.2%,515,102,84,18,82.4%,363,23,20,3,87.0%,6,4,2
+41,5035,Sun Devils,Arizona State,Arizona State University,Arizona State,ASU,BBC,,5035,BBC,Sun Devils,ASU,Arizona State,60,1078,135,112,23,83.0%,660,100,81,19,81.0%,418,25,23,2,92.0%,4,2,2
+41,730249984,Seawolves,Stony Brook,Stony Brook University,Stony Brook,STON,BBC,,730249984,BBC,Seawolves,STON,Stony Brook,52,871,128,112,16,87.5%,544,99,83,16,83.8%,327,19,19,0,100.0%,0,0,0
+43,5327,Mountaineers,West Virginia,West Virginia University,West Virginia,WVU,BBC,,5327,BBC,Mountaineers,WVU,West Virginia,60,1115,139,111,28,79.9%,697,103,81,22,78.6%,418,17,15,2,88.2%,8,4,4
+44,730375936,Wildcats,Abilene Christian,Abilene Christian University,Abilene Christian,AC,BBC,,730375936,BBC,Wildcats,AC,Abilene Christian,57,1017,128,110,18,85.9%,613,107,90,17,84.1%,404,12,11,1,91.7%,0,0,0
+45,4104,Chanticleers,Coastal Carolina,Coastal Carolina University,Coastal Carolina,CCAR,BBC,,4104,BBC,Chanticleers,CCAR,Coastal Carolina,69,1189,132,109,23,82.6%,698,98,83,15,84.7%,491,21,14,7,66.7%,3,2,1
+46,4766,Panthers,Prairie View A&M,Prairie View A&M University,Prairie View A&M,PV,BBC,,4766,BBC,Panthers,PV,Prairie View A&M,53,860,133,108,25,81.2%,524,92,72,20,78.3%,336,23,18,5,78.3%,1,1,0
+47,730198016,Patriots,Dallas Baptist,Dallas Baptist University,Dallas Baptist,DBU,BBC,,730198016,BBC,Patriots,DBU,Dallas Baptist,59,1047,121,106,15,87.6%,622,82,68,14,82.9%,425,18,17,1,94.4%,2,2,0
+47,5326,Nittany Lions,Penn State,Penn State University,Penn State,PSU,BBC,,5326,BBC,Nittany Lions,PSU,Penn State,56,1008,122,106,16,86.9%,580,89,74,15,83.1%,428,19,18,1,94.7%,1,1,0
+49,730190336,Bruins,Belmont,Belmont University,Belmont,BEL,BBC,,730190336,BBC,Bruins,BEL,Belmont,60,983,133,104,29,78.2%,590,94,73,21,77.7%,393,28,22,6,78.6%,2,0,2
+50,730335488,Dolphins,Jacksonville,Jacksonville University,Jacksonville,JAC,BBC,,730335488,BBC,Dolphins,JAC,Jacksonville,56,943,117,103,14,88.0%,588,94,83,11,88.3%,355,16,13,3,81.3%,0,0,0
+51,730236416,Tarleton State,Tarleton State,Tarleton State University,Tarleton State,TAR,BBC,,730236416,BBC,Tarleton State,TAR,Tarleton State,56,973,121,102,19,84.3%,586,82,66,16,80.5%,387,22,20,2,90.9%,1,0,1
+52,730334464,Bulldogs,Yale,Yale University,Yale,YALE,BBC,,730334464,BBC,Bulldogs,YALE,Yale,45,800,128,101,27,78.9%,460,89,65,24,73.0%,340,22,20,2,90.9%,2,1,1
+52,4164,Hawks,Monmouth,Monmouth University,Monmouth,MONM,BBC,,4164,BBC,Hawks,MONM,Monmouth,54,942,123,101,22,82.1%,561,96,79,17,82.3%,381,22,19,3,86.4%,2,0,2
+52,5046,Commodores,Vanderbilt,Vanderbilt University,Vanderbilt,VAN,BBC,,5046,BBC,Commodores,VAN,Vanderbilt,61,903,120,101,19,84.2%,562,83,66,17,79.5%,341,17,15,2,88.2%,2,2,0
+55,730366720,Bulldogs,The Citadel,The Citadel,The Citadel,CIT,BBC,,730366720,BBC,Bulldogs,CIT,The Citadel,57,931,128,100,28,78.1%,557,93,67,26,72.0%,374,21,19,2,90.5%,7,7,0
+55,5075,Ragin' Cajuns,Louisiana,University of Louisiana at Lafayette,Louisiana,ULL,BBC,,5075,BBC,Ragin' Cajuns,ULL,Louisiana,58,963,125,100,25,80.0%,618,90,69,21,76.7%,345,20,16,4,80.0%,2,2,0
+57,730365440,Bulldogs,Alabama A&M,Alabama A&M University,Alabama A&M,AAMU,BBC,,730365440,BBC,Bulldogs,AAMU,Alabama A&M,50,873,116,99,17,85.3%,519,78,66,12,84.6%,354,30,26,4,86.7%,4,3,1
+58,730375424,Bonnies,St. Bonaventure,St. Bonaventure University,St. Bonaventure,SBON,BBC,,730375424,BBC,Bonnies,SBON,St. Bonaventure,49,853,115,97,18,84.3%,524,84,68,16,81.0%,329,18,16,2,88.9%,2,2,0
+59,730267392,Highlanders,Radford,Radford University,Radford,RAD,BBC,,730267392,BBC,Highlanders,RAD,Radford,56,1062,117,96,21,82.1%,635,88,68,20,77.3%,427,19,18,1,94.7%,1,1,0
+59,730296832,Ospreys,North Florida,University of North Florida,North Florida,UNF,BBC,,730296832,BBC,Ospreys,UNF,North Florida,56,967,110,96,14,87.3%,568,89,78,11,87.6%,399,14,11,3,78.6%,0,0,0
+61,730181888,Tar Heels,North Carolina,University of North Carolina,North Carolina,UNC,BBC,,730181888,BBC,Tar Heels,UNC,North Carolina,61,1110,107,95,12,88.8%,671,79,68,11,86.1%,439,13,12,1,92.3%,1,1,0
+61,4285,Red Storm,St. John's,St. John's University (NY),St. John's,SJU,BBC,,4285,BBC,Red Storm,SJU,St. John's,53,1000,111,95,16,85.6%,596,92,77,15,83.7%,404,14,13,1,92.9%,1,1,0
+63,730194432,Buccaneers,Charleston Southern,Charleston Southern University,Charleston Southern,CHSO,BBC,,730194432,BBC,Buccaneers,CHSO,Charleston Southern,53,1059,120,94,26,78.3%,620,92,70,22,76.1%,439,12,9,3,75.0%,4,3,1
+63,730245120,Pride,Hofstra,Hofstra University,Hofstra,HOF,BBC,,730245120,BBC,Pride,HOF,Hofstra,54,894,110,94,16,85.5%,528,86,73,13,84.9%,366,9,7,2,77.8%,3,2,1
+63,730380544,Stags,Fairfield,Fairfield University,Fairfield,FAIR,BBC,,730380544,BBC,Stags,FAIR,Fairfield,58,1127,109,94,15,86.2%,661,85,71,14,83.5%,466,14,13,1,92.9%,0,0,0
+63,5377,Golden Lions,Arkansas-Pine Bluff,University of Arkansas-Pine Bluff,Arkansas-Pine Bluff,ARPB,BBC,,5377,BBC,Golden Lions,ARPB,Arkansas-Pine Bluff,53,878,109,94,15,86.2%,538,90,76,14,84.4%,340,7,7,0,100.0%,4,3,1
+67,730205440,Falcons,Air Force,Air Force Academy,Air Force,AFA,BBC,,730205440,BBC,Falcons,AFA,Air Force,54,903,121,93,28,76.9%,518,95,71,24,74.7%,385,13,10,3,76.9%,2,1,1
+67,4864,Golden Gophers,Minnesota,University of Minnesota,Minnesota,MINN,BBC,,4864,BBC,Golden Gophers,MINN,Minnesota,52,840,110,93,17,84.5%,504,84,68,16,81.0%,336,14,13,1,92.9%,1,1,0
+67,5363,Bearkats,Sam Houston State,Sam Houston State University,Sam Houston State,SHSU,BBC,,5363,BBC,Bearkats,SHSU,Sam Houston State,55,899,117,93,24,79.5%,555,98,77,21,78.6%,344,14,12,2,85.7%,2,1,1
+70,730374656,Red Foxes,Marist,Marist College,Marist,MRST,BBC,,730374656,BBC,Red Foxes,MRST,Marist,54,993,105,92,13,87.6%,600,69,59,10,85.5%,393,24,22,2,91.7%,3,2,1
+70,730271744,Panthers,Eastern Illinois,Eastern Illinois University,Eastern Illinois,EIU,BBC,,730271744,BBC,Panthers,EIU,Eastern Illinois,53,1079,105,92,13,87.6%,616,92,81,11,88.0%,463,1,1,0,100.0%,3,1,2
+72,730353152,Boilermakers,Purdue,Purdue University,Purdue,PUR,BBC,,730353152,BBC,Boilermakers,PUR,Purdue,54,955,105,91,14,86.7%,581,82,70,12,85.4%,374,12,10,2,83.3%,4,4,0
+73,730202880,Le Moyne,Le Moyne,Le Moyne College,Le Moyne,LMC,BBC,,730202880,BBC,Le Moyne,LMC,Le Moyne,48,896,109,90,19,82.6%,540,89,72,17,80.9%,356,16,15,1,93.8%,2,1,1
+74,5091,Lancers,California Baptist,California Baptist University,California Baptist,CBU,BBC,,5091,BBC,Lancers,CBU,California Baptist,57,1067,110,89,21,80.9%,605,79,60,19,75.9%,462,21,19,2,90.5%,1,1,0
+74,730317312,Spartans,South Carolina Upstate,University of South Carolina Upstate,South Carolina Upstate,SCUS,BBC,,730317312,BBC,Spartans,SCUS,South Carolina Upstate,61,1204,113,89,24,78.8%,709,89,69,20,77.5%,495,12,9,3,75.0%,1,0,1
+74,4844,Buccaneers,East Tennessee State,East Tennessee State University,East Tennessee State,ETSU,BBC,,4844,BBC,Buccaneers,ETSU,East Tennessee State,58,989,98,89,9,90.8%,613,63,54,9,85.7%,376,18,18,0,100.0%,0,0,0
+77,730386432,Bulldogs,Samford,Samford University,Samford,SAM,BBC,,730386432,BBC,Bulldogs,SAM,Samford,57,959,103,88,15,85.4%,578,78,64,14,82.1%,381,16,15,1,93.8%,0,0,0
+77,730168320,Gators,Florida,University of Florida,Florida,FLA,BBC,,730168320,BBC,Gators,FLA,Florida,61,1005,104,88,16,84.6%,590,84,70,14,83.3%,415,11,10,1,90.9%,3,2,1
+77,3030,Cougars,Houston,University of Houston,Houston,HOU,BBC,,3030,BBC,Cougars,HOU,Houston,55,902,106,88,18,83.0%,543,76,60,16,78.9%,359,19,17,2,89.5%,1,1,0
+80,730149888,Peacocks,Saint Peter's,Saint Peter's University,Saint Peter's,SPC,BBC,,730149888,BBC,Peacocks,SPC,Saint Peter's,48,847,105,87,18,82.9%,499,77,61,16,79.2%,348,12,11,1,91.7%,3,2,1
+80,3110,Huskies,Washington,University of Washington,Washington,WASH,BBC,,3110,BBC,Huskies,WASH,Washington,57,918,112,87,25,77.7%,567,91,67,24,73.6%,351,10,10,0,100.0%,5,4,1
+82,4744,Black Knights,Army,Army West Point,Army,ARMY,BBC,,4744,BBC,Black Knights,ARMY,Army,50,867,100,86,14,86.0%,504,81,69,12,85.2%,363,7,6,1,85.7%,3,2,1
+82,5464,Musketeers,Xavier,Xavier University,Xavier,XAV,BBC,,5464,BBC,Musketeers,XAV,Xavier,59,1020,98,86,12,87.8%,606,69,61,8,88.4%,414,19,16,3,84.2%,3,2,1
+84,730358784,Tigers,Clemson,Clemson University,Clemson,CLEM,BBC,,730358784,BBC,Tigers,CLEM,Clemson,63,1148,101,85,16,84.2%,702,67,52,15,77.6%,446,15,15,0,100.0%,1,0,1
+85,730340096,Dukes,James Madison,James Madison University,James Madison,JMU,BBC,,730340096,BBC,Dukes,JMU,James Madison,55,848,104,83,21,79.8%,487,82,63,19,76.8%,361,8,7,1,87.5%,2,1,1
+85,730255872,Demons,Northwestern State,Northwestern State University,Northwestern State,NWST,BBC,,730255872,BBC,Demons,NWST,Northwestern State,56,1028,97,83,14,85.6%,593,82,68,14,82.9%,435,7,7,0,100.0%,2,2,0
+85,2292,Bulls,South Florida,University of South Florida,South Florida,USF,BBC,,2292,BBC,Bulls,USF,South Florida,56,906,99,83,16,83.8%,553,63,48,15,76.2%,353,17,16,1,94.1%,1,1,0
+88,2350,Red Raiders,Texas Tech,Texas Tech University,Texas Tech,TTU,BBC,,2350,BBC,Red Raiders,TTU,Texas Tech,53,901,90,82,8,91.1%,563,65,60,5,92.3%,338,15,13,2,86.7%,2,1,1
+88,730238720,Spartans,UNC Greensboro,UNC Greensboro,UNC Greensboro,UNCG,BBC,,730238720,BBC,Spartans,UNCG,UNC Greensboro,54,875,92,82,10,89.1%,523,65,57,8,87.7%,352,21,19,2,90.5%,0,0,0
+88,730174976,Broncs,Rider,Rider University,Rider,RID,BBC,,730174976,BBC,Broncs,RID,Rider,52,984,110,82,28,74.5%,614,82,59,23,72.0%,370,16,13,3,81.3%,5,3,2
+88,730288896,Gaels,Saint Mary's,Saint Mary's College (CA),Saint Mary's,SMC,BBC,,730288896,BBC,Gaels,SMC,Saint Mary's,62,1120,107,82,25,76.6%,662,85,63,22,74.1%,458,10,8,2,80.0%,1,0,1
+92,100,Yellow Jackets,Georgia Tech,Georgia Tech,Georgia Tech,GT,BBC,,100,BBC,Yellow Jackets,GT,Georgia Tech,60,1118,92,81,11,88.0%,669,69,59,10,85.5%,449,10,9,1,90.0%,0,0,0
+92,730210304,Retrievers,UMBC,UMBC,UMBC,UMBC,BBC,,730210304,BBC,Retrievers,UMBC,UMBC,46,744,95,81,14,85.3%,446,70,56,14,80.0%,298,12,12,0,100.0%,1,1,0
+92,730349824,Salukis,Southern Illinois,Southern Illinois University,Southern Illinois,SIU,BBC,,730349824,BBC,Salukis,SIU,Southern Illinois,57,1014,97,81,16,83.5%,618,72,59,13,81.9%,396,16,15,1,93.8%,2,0,2
+92,730298112,Cougars,SIU Edwardsville,Southern Illinois Univ.-Edwardsville,SIU Edwardsville,SIUE,BBC,,730298112,BBC,Cougars,SIUE,SIU Edwardsville,54,864,100,81,19,81.0%,509,73,57,16,78.1%,355,16,13,3,81.3%,1,1,0
+96,5045,Horned Frogs,TCU,Texas Christian University,TCU,TCU,BBC,,5045,BBC,Horned Frogs,TCU,TCU,59,1011,98,80,18,81.6%,664,77,62,15,80.5%,347,14,11,3,78.6%,0,0,0
+96,730218752,Golden Griffins,Canisius,Canisius College,Canisius,CAN,BBC,,730218752,BBC,Golden Griffins,CAN,Canisius,45,742,92,80,12,87.0%,446,73,64,9,87.7%,296,13,11,2,84.6%,1,0,1
+98,730219520,Governors,Austin Peay,Austin Peay State University,Austin Peay,PEAY,BBC,,730219520,BBC,Governors,PEAY,Austin Peay,59,1114,101,79,22,78.2%,621,72,53,19,73.6%,493,14,14,0,100.0%,5,2,3
+98,5379,Flames,Illinois-Chicago,University of Illinois-Chicago,Illinois-Chicago,UIC,BBC,,5379,BBC,Flames,UIC,Illinois-Chicago,55,990,101,79,22,78.2%,605,78,57,21,73.1%,385,15,14,1,93.3%,0,0,0
+98,730371584,River Hawks,UMass Lowell,UMass Lowell,UMass Lowell,MASSL,BBC,,730371584,BBC,River Hawks,MASSL,UMass Lowell,53,829,95,79,16,83.2%,506,61,53,8,86.9%,323,18,11,7,61.1%,3,2,1
+98,730321152,Panthers,High Point,High Point University,High Point,HP,BBC,,730321152,BBC,Panthers,HP,High Point,58,1112,97,79,18,81.4%,642,69,53,16,76.8%,470,12,12,0,100.0%,2,0,2
+98,730294784,Eagles,Winthrop,Winthrop University,Winthrop,WIN,BBC,,730294784,BBC,Eagles,WIN,Winthrop,60,1210,99,79,20,79.8%,702,68,50,18,73.5%,508,20,19,1,95.0%,1,0,1
+103,730171904,Spiders,Richmond,University of Richmond,Richmond,RICH,BBC,,730171904,BBC,Spiders,RICH,Richmond,52,945,92,78,14,84.8%,538,71,59,12,83.1%,407,12,10,2,83.3%,2,2,0
+103,730158848,Warriors,Hawaii,"University of Hawaii, Manoa",Hawaii,HAW,BBC,,730158848,BBC,Warriors,HAW,Hawaii,56,1019,107,78,29,72.9%,631,86,62,24,72.1%,388,15,13,2,86.7%,4,1,3
+105,730229504,Seahawks,UNC Wilmington,UNC Wilmington,UNC Wilmington,UNCW,BBC,,730229504,BBC,Seahawks,UNCW,UNC Wilmington,58,1027,96,77,19,80.2%,617,68,52,16,76.5%,410,10,7,3,70.0%,3,3,0
+105,2291,Billikens,St. Louis,Saint Louis University,St. Louis,SLU,BBC,,2291,BBC,Billikens,SLU,St. Louis,59,1024,90,77,13,85.6%,623,75,62,13,82.7%,401,9,9,0,100.0%,0,0,0
+105,730196224,Lakers,Mercyhurst,Mercyhurst College,Mercyhurst,MCYH,BBC,,730196224,BBC,Lakers,MCYH,Mercyhurst,52,864,98,77,21,78.6%,504,78,60,18,76.9%,360,14,11,3,78.6%,0,0,0
+108,730363648,Jaspers,Manhattan,Manhattan College,Manhattan,MAN,BBC,,730363648,BBC,Jaspers,MAN,Manhattan,48,803,102,76,26,74.5%,505,84,58,26,69.0%,298,12,12,0,100.0%,1,1,0
+108,730288640,Screaming Eagles,Southern Indiana,University of Southern Indiana,Southern Indiana,SIND,BBC,,730288640,BBC,Screaming Eagles,SIND,Southern Indiana,56,1065,94,76,18,80.9%,647,75,59,16,78.7%,418,11,9,2,81.8%,0,0,0
+108,730243840,Bluejays,Creighton,Creighton University,Creighton,CREI,BBC,,730243840,BBC,Bluejays,CREI,Creighton,59,1066,94,76,18,80.9%,624,76,60,16,78.9%,442,8,8,0,100.0%,7,5,2
+108,5342,Chippewas,Central Michigan,Central Michigan University,Central Michigan,CMU,BBC,,5342,BBC,Chippewas,CMU,Central Michigan,55,911,97,76,21,78.4%,552,77,59,18,76.6%,359,12,9,3,75.0%,2,2,0
+108,245,Longhorns,Texas,University of Texas,Texas,TEX,BBC,,245,BBC,Longhorns,TEX,Texas,58,970,91,76,15,83.5%,579,70,59,11,84.3%,391,14,10,4,71.4%,0,0,0
+108,730328320,Utes,Utah,University of Utah,Utah,UTAH,BBC,,730328320,BBC,Utes,UTAH,Utah,50,894,89,76,13,85.4%,519,59,48,11,81.4%,375,12,10,2,83.3%,2,2,0
+114,730345984,Blazers,UAB,UAB,UAB,UAB,BBC,,730345984,BBC,Blazers,UAB,UAB,54,896,91,75,16,82.4%,544,68,55,13,80.9%,352,13,10,3,76.9%,0,0,0
+114,730333696,Thundering Herd,Marshall,Marshall University,Marshall,MRSH,BBC,,730333696,BBC,Thundering Herd,MRSH,Marshall,59,996,92,75,17,81.5%,590,74,59,15,79.7%,406,8,7,1,87.5%,1,0,1
+114,508,Midshipmen,Navy,U.S. Naval Academy,Navy,NAVY,BBC,,508,BBC,Midshipmen,NAVY,Navy,51,791,94,75,19,79.8%,481,82,65,17,79.3%,310,6,5,1,83.3%,2,1,1
+114,730259200,Delta Devils,Mississippi Valley State,Mississippi Valley State University,Mississippi Valley State,MVSU,BBC,,730259200,BBC,Delta Devils,MVSU,Mississippi Valley State,41,668,89,75,14,84.3%,415,73,60,13,82.2%,253,12,11,1,91.7%,1,1,0
+114,730362880,Warhawks,UL Monroe,University of Louisiana at Monroe,UL Monroe,ULM,BBC,,730362880,BBC,Warhawks,ULM,UL Monroe,55,792,89,75,14,84.3%,472,58,46,12,79.3%,320,9,7,2,77.8%,0,0,0
+114,730322176,Lindenwood,Lindenwood,Lindenwood University,Lindenwood,LU,BBC,,730322176,BBC,Lindenwood,LU,Lindenwood,60,1016,94,75,19,79.8%,598,66,53,13,80.3%,418,18,13,5,72.2%,2,1,1
+114,4807,Ducks,Oregon,University of Oregon,Oregon,ORE,BBC,,4807,BBC,Ducks,ORE,Oregon,58,1002,94,75,19,79.8%,641,78,61,17,78.2%,361,9,8,1,88.9%,2,1,1
+121,730283008,Roadrunners,CSU Bakersfield,CSU Bakersfield,CSU Bakersfield,CSB,BBC,,730283008,BBC,Roadrunners,CSB,CSU Bakersfield,56,961,95,74,21,77.9%,561,70,54,16,77.1%,400,18,14,4,77.8%,6,5,1
+121,540536064,Zips,Akron,University of Akron,Akron,AKR,BBC,,540536064,BBC,Zips,AKR,Akron,54,929,91,74,17,81.3%,559,72,58,14,80.6%,370,12,9,3,75.0%,1,1,0
+121,4964,Eagles,Florida Gulf Coast,Florida Gulf Coast University,Florida Gulf Coast,FGCU,BBC,,4964,BBC,Eagles,FGCU,Florida Gulf Coast,60,984,87,74,13,85.1%,620,67,57,10,85.1%,364,10,7,3,70.0%,0,0,0
+121,730373120,Roadrunners,UTSA,UTSA,UTSA,UTSA,BBC,,730373120,BBC,Roadrunners,UTSA,UTSA,62,1186,89,74,15,83.1%,683,58,44,14,75.9%,503,15,14,1,93.3%,3,3,0
+121,5036,Panthers,Milwaukee,University of Wisconsin-Milwaukee,Milwaukee,MILW,BBC,,5036,BBC,Panthers,MILW,Milwaukee,59,992,88,74,14,84.1%,561,66,53,13,80.3%,431,8,8,0,100.0%,5,4,1
+126,730189056,Falcons,Bowling Green,Bowling Green State University,Bowling Green,BGSU,BBC,,730189056,BBC,Falcons,BGSU,Bowling Green,55,1042,97,73,24,75.3%,628,84,63,21,75.0%,414,8,6,2,75.0%,1,0,1
+126,730227200,Lumberjacks,Stephen F. Austin State,Stephen F. Austin State University,Stephen F. Austin State,SFA,BBC,,730227200,BBC,Lumberjacks,SFA,Stephen F. Austin State,49,796,95,73,22,76.8%,488,74,54,20,73.0%,308,17,15,2,88.2%,1,1,0
+126,730373376,Demon Deacons,Wake Forest,Wake Forest University,Wake Forest,WAKE,BBC,,730373376,BBC,Demon Deacons,WAKE,Wake Forest,61,1112,85,73,12,85.9%,679,68,57,11,83.8%,433,7,6,1,85.7%,0,0,0
+129,5322,Rebels,Ole Miss,University of Mississippi,Ole Miss,MISS,BBC,,5322,BBC,Rebels,MISS,Ole Miss,64,1125,87,71,16,81.6%,718,65,53,12,81.5%,407,11,7,4,63.6%,2,2,0
+129,730239744,Panthers,Georgia State,Georgia State University,Georgia State,GAST,BBC,,730239744,BBC,Panthers,GAST,Georgia State,56,987,90,71,19,78.9%,578,65,52,13,80.0%,409,17,14,3,82.4%,5,2,3
+129,4144,Buckeyes,Ohio State,The Ohio State University,Ohio State,OSU,BBC,,4144,BBC,Buckeyes,OSU,Ohio State,50,831,90,71,19,78.9%,513,63,47,16,74.6%,318,20,17,3,85.0%,1,1,0
+132,730270720,Pirates,East Carolina,East Carolina University,East Carolina,ECU,BBC,,730270720,BBC,Pirates,ECU,East Carolina,62,1051,82,70,12,85.4%,628,70,59,11,84.3%,423,3,2,1,66.7%,0,0,0
+132,730270464,Wildcats,Kansas State,Kansas State University,Kansas State,KSU,BBC,,730270464,BBC,Wildcats,KSU,Kansas State,58,937,91,70,21,76.9%,593,68,51,17,75.0%,344,12,11,1,91.7%,5,2,3
+134,101,Seminoles,Florida State,Florida State University,Florida State,FSU,BBC,,101,BBC,Seminoles,FSU,Florida State,58,1020,82,69,13,84.1%,608,59,48,11,81.4%,412,17,15,2,88.2%,0,0,0
+134,730200320,Tommies,University of St. Thomas (Minn.),University of St. Thomas (Minn.),University of St. Thomas (Minn.),UOST,BBC,,730200320,BBC,Tommies,UOST,University of St. Thomas (Minn.),50,867,83,69,14,83.1%,509,63,50,13,79.4%,358,8,7,1,87.5%,0,0,0
+136,730285056,Cowboys,McNeese State,McNeese State University,McNeese State,MCNS,BBC,,730285056,BBC,Cowboys,MCNS,McNeese State,48,829,81,68,13,84.0%,485,52,42,10,80.8%,344,16,13,3,81.3%,0,0,0
+136,730258944,Redbirds,Illinois State,Illinois State University,Illinois State,ILST,BBC,,730258944,BBC,Redbirds,ILST,Illinois State,56,1006,85,68,17,80.0%,599,67,51,16,76.1%,407,8,7,1,87.5%,0,0,0
+136,730162432,Cardinals,Lamar,Lamar University,Lamar,LAM,BBC,,730162432,BBC,Cardinals,LAM,Lamar,57,1104,75,68,7,90.7%,665,60,54,6,90.0%,439,5,4,1,80.0%,1,1,0
+136,5415,Cavaliers,Virginia,University of Virginia,Virginia,UVA,BBC,,5415,BBC,Cavaliers,UVA,Virginia,50,956,85,68,17,80.0%,562,74,58,16,78.4%,394,2,2,0,100.0%,2,1,1
+136,730197504,Owls,Kennesaw State,Kennesaw State University,Kennesaw State,KENN,BBC,,730197504,BBC,Owls,KENN,Kennesaw State,58,1062,79,68,11,86.1%,598,66,56,10,84.8%,464,3,2,1,66.7%,1,1,0
+136,730249216,Colonials,George Washington,George Washington University,George Washington,GW,BBC,,730249216,BBC,Colonials,GW,George Washington,54,1011,84,68,16,81.0%,605,73,57,16,78.1%,406,7,7,0,100.0%,0,0,0
+136,730163456,Fighting Illini,Illinois,University of Illinois,Illinois,ILL,BBC,,730163456,BBC,Fighting Illini,ILL,Illinois,54,995,80,68,12,85.0%,608,57,45,12,78.9%,387,14,14,0,100.0%,1,1,0
+136,730313216,Highlanders,NJIT,New Jersey Institute of Technology,NJIT,NJIT,BBC,,730313216,BBC,Highlanders,NJIT,NJIT,53,921,77,68,9,88.3%,521,59,51,8,86.4%,400,6,5,1,83.3%,1,1,0
+144,4806,Tigers,Missouri,University of Missouri,Missouri,MIZZ,BBC,,4806,BBC,Tigers,MIZZ,Missouri,55,857,85,67,18,78.8%,509,76,58,18,76.3%,348,5,5,0,100.0%,0,0,0
+144,730252544,Phoenix,Elon,Elon University,Elon,ELON,BBC,,730252544,BBC,Phoenix,ELON,Elon,57,1005,84,67,17,79.8%,608,65,51,14,78.5%,397,13,10,3,76.9%,0,0,0
+144,730256640,Knights,Central Florida,University of Central Florida,Central Florida,UCF,BBC,,730256640,BBC,Knights,UCF,Central Florida,55,1048,85,67,18,78.8%,606,71,55,16,77.5%,442,6,4,2,66.7%,1,1,0
+144,730307072,Bisons,Lipscomb,Lipscomb University,Lipscomb,LIP,BBC,,730307072,BBC,Bisons,LIP,Lipscomb,55,958,94,67,27,71.3%,581,71,45,26,63.4%,377,11,10,1,90.9%,0,0,0
+144,3904,Spartans,Norfolk State,Norfolk State University,Norfolk State,NORF,BBC,,3904,BBC,Spartans,NORF,Norfolk State,42,696,76,67,9,88.2%,417,60,51,9,85.0%,279,13,13,0,100.0%,3,3,0
+149,730156288,Flames,Liberty,Liberty University,Liberty,LIB,BBC,,730156288,BBC,Flames,LIB,Liberty,56,918,82,66,16,80.5%,572,68,53,15,77.9%,346,5,4,1,80.0%,1,1,0
+149,730302720,Aggies,New Mexico State,New Mexico State University,New Mexico State,NMSU,BBC,,730302720,BBC,Aggies,NMSU,New Mexico State,56,1038,80,66,14,82.5%,638,64,51,13,79.7%,400,9,8,1,88.9%,2,2,0
+149,730222592,Runnin' Bulldogs,Gardner Webb,Gardner Webb University,Gardner Webb,WEBB,BBC,,730222592,BBC,Runnin' Bulldogs,WEBB,Gardner Webb,53,886,80,66,14,82.5%,507,62,50,12,80.6%,379,9,7,2,77.8%,3,3,0
+149,4764,Islanders,Texas A&M-Corpus Christi,Texas A&M-Corpus Christi,Texas A&M-Corpus Christi,AMCC,BBC,,4764,BBC,Islanders,AMCC,Texas A&M-Corpus Christi,52,861,86,66,20,76.7%,527,70,51,19,72.9%,334,11,11,0,100.0%,3,2,1
+149,730306816,Blue Devils,Central Connecticut State,Central Connecticut State University,Central Connecticut State,CCSU,BBC,,730306816,BBC,Blue Devils,CCSU,Central Connecticut State,48,986,71,66,5,93.0%,588,56,53,3,94.6%,398,7,5,2,71.4%,1,1,0
+154,3090,Monarchs,Old Dominion,Old Dominion University,Old Dominion,ODU,BBC,,3090,BBC,Monarchs,ODU,Old Dominion,53,899,73,65,8,89.0%,525,56,49,7,87.5%,374,13,13,0,100.0%,1,0,1
+154,730165248,Broncos,Western Michigan,Western Michigan University,Western Michigan,WMU,BBC,,730165248,BBC,Broncos,WMU,Western Michigan,51,878,79,65,14,82.3%,528,73,59,14,80.8%,350,3,3,0,100.0%,0,0,0
+154,226,Bulldogs,Georgia,University of Georgia,Georgia,UGA,BBC,,226,BBC,Bulldogs,UGA,Georgia,60,1042,73,65,8,89.0%,655,56,50,6,89.3%,387,11,10,1,90.9%,1,0,1
+157,730327808,Purple Aces,Evansville,University of Evansville,Evansville,EVAN,BBC,,730327808,BBC,Purple Aces,EVAN,Evansville,54,914,72,64,8,88.9%,550,58,51,7,87.9%,364,8,7,1,87.5%,0,0,0
+157,236,Hurricanes,Miami,University of Miami,Miami,MIA,BBC,,236,BBC,Hurricanes,MIA,Miami,62,990,77,64,13,83.1%,608,60,48,12,80.0%,382,10,9,1,90.0%,1,1,0
+157,730184192,Blue Hose,Presbyterian,Presbyterian College,Presbyterian,PRE,BBC,,730184192,BBC,Blue Hose,PRE,Presbyterian,52,835,83,64,19,77.1%,513,65,48,17,73.8%,322,11,9,2,81.8%,1,1,0
+157,730284544,Penguins,Youngstown State,Youngstown State University,Youngstown State,YSU,BBC,,730284544,BBC,Penguins,YSU,Youngstown State,57,953,87,64,23,73.6%,573,68,48,20,70.6%,380,14,11,3,78.6%,0,0,0
+161,5466,Tigers,Auburn,Auburn University,Auburn,AUB,BBC,,5466,BBC,Tigers,AUB,Auburn,61,1091,79,63,16,79.7%,637,67,53,14,79.1%,454,5,3,2,60.0%,1,1,0
+162,730195456,Cardinals,Ball State,Ball State University,Ball State,BALL,BBC,,730195456,BBC,Cardinals,BALL,Ball State,58,1021,83,62,21,74.7%,632,73,53,20,72.6%,389,7,7,0,100.0%,1,0,1
+162,730386944,Tigers,Pacific,University of the Pacific,Pacific,PAC,BBC,,730386944,BBC,Tigers,PAC,Pacific,56,843,76,62,14,81.6%,512,56,46,10,82.1%,331,9,6,3,66.7%,2,1,1
+162,730203136,Fightin Blue Hens,Delaware,University of Delaware,Delaware,DEL,BBC,,730203136,BBC,Fightin Blue Hens,DEL,Delaware,53,965,74,62,12,83.8%,558,59,48,11,81.4%,407,5,5,0,100.0%,1,0,1
+162,730240512,Bears,Mercer,Mercer University,Mercer,MER,BBC,,730240512,BBC,Bears,MER,Mercer,60,1067,75,62,13,82.7%,617,67,56,11,83.6%,450,4,2,2,50.0%,0,0,0
+162,1551,Spartans,Michigan State,Michigan State University,Michigan State,MSU,BBC,,1551,BBC,Spartans,MSU,Michigan State,55,911,79,62,17,78.5%,560,65,50,15,76.9%,351,7,6,1,85.7%,1,0,1
+162,5048,Bruins,UCLA,UCLA,UCLA,UCLA,BBC,,5048,BBC,Bruins,UCLA,UCLA,66,1183,79,62,17,78.5%,728,60,46,14,76.7%,455,12,10,2,83.3%,2,1,1
+168,730272512,Pirates,Seton Hall,Seton Hall University,Seton Hall,HALL,BBC,,730272512,BBC,Pirates,HALL,Seton Hall,54,966,71,61,10,85.9%,553,48,38,10,79.2%,413,13,13,0,100.0%,1,1,0
+168,730308864,Wolves,West Georgia,University of West Georgia,West Georgia,UOWG,BBC,,730308864,BBC,Wolves,UOWG,West Georgia,51,778,74,61,13,82.4%,488,61,51,10,83.6%,290,10,7,3,70.0%,0,0,0
+170,730378496,Trojans,Troy,Troy University,Troy,TROY,BBC,,730378496,BBC,Trojans,TROY,Troy,60,1116,70,60,10,85.7%,641,57,48,9,84.2%,475,5,4,1,80.0%,1,1,0
+170,730380032,Matadors,CSU Northridge,Cal State-Northridge,CSU Northridge,CSN,BBC,,730380032,BBC,Matadors,CSN,CSU Northridge,49,834,78,60,18,76.9%,536,62,48,14,77.4%,298,15,11,4,73.3%,1,1,0
+170,730278400,Wildcats,Villanova,Villanova University,Villanova,VILL,BBC,,730278400,BBC,Wildcats,VILL,Villanova,50,830,77,60,17,77.9%,506,69,53,16,76.8%,324,5,4,1,80.0%,0,0,0
+170,730179328,Rams,VCU,Virginia Commonwealth University,VCU,VCU,BBC,,730179328,BBC,Rams,VCU,VCU,54,912,81,60,21,74.1%,555,68,48,20,70.6%,357,6,5,1,83.3%,2,2,0
+174,730372352,Aggies,North Carolina A&T,North Carolina A&T State University,North Carolina A&T,NCAT,BBC,,730372352,BBC,Aggies,NCAT,North Carolina A&T,52,793,80,59,21,73.8%,454,66,48,18,72.7%,339,8,7,1,87.5%,2,0,2
+174,730158336,Blue Raiders,Middle Tennessee State,Middle Tennessee State University,Middle Tennessee State,MTU,BBC,,730158336,BBC,Blue Raiders,MTU,Middle Tennessee State,55,881,77,59,18,76.6%,541,67,52,15,77.6%,340,9,7,2,77.8%,1,0,1
+174,5382,Bears,Missouri State,Missouri State University,Missouri State,MOSU,BBC,,5382,BBC,Bears,MOSU,Missouri State,55,969,75,59,16,78.7%,587,58,46,12,79.3%,382,15,11,4,73.3%,0,0,0
+174,730192640,Seahawks,Wagner,Wagner College,Wagner,WAG,BBC,,730192640,BBC,Seahawks,WAG,Wagner,53,982,69,59,10,85.5%,581,55,46,9,83.6%,401,9,8,1,88.9%,0,0,0
+174,730365696,Dons,San Francisco,University of San Francisco,San Francisco,SF,BBC,,730365696,BBC,Dons,SF,San Francisco,56,936,75,59,16,78.7%,558,58,42,16,72.4%,378,11,11,0,100.0%,0,0,0
+179,730253312,Braves,Bradley,Bradley University,Bradley,BRAD,BBC,,730253312,BBC,Braves,BRAD,Bradley,51,852,73,58,15,79.5%,507,64,50,14,78.1%,345,0,0,0,-,3,2,1
+179,730232064,Tribe,William & Mary,College of William & Mary,William & Mary,WM,BBC,,730232064,BBC,Tribe,WM,William & Mary,56,981,74,58,16,78.4%,598,58,44,14,75.9%,383,8,7,1,87.5%,1,0,1
+181,730192128,Vaqueros,UT Rio Grande Valley,University of Texas Rio Grande Valley,UT Rio Grande Valley,UTRGV,BBC,,730192128,BBC,Vaqueros,UTRGV,UT Rio Grande Valley,54,971,78,57,21,73.1%,560,52,35,17,67.3%,411,11,8,3,72.7%,3,2,1
+181,730231552,Mastodons,Fort Wayne,Fort Wayne,Fort Wayne,PFW,BBC,,730231552,BBC,Mastodons,PFW,Fort Wayne,53,905,73,57,16,78.1%,575,66,52,14,78.8%,330,4,3,1,75.0%,2,1,1
+181,3033,Bears,Baylor,Baylor University,Baylor,BAY,BBC,,3033,BBC,Bears,BAY,Baylor,55,964,73,57,16,78.1%,587,58,43,15,74.1%,377,4,4,0,100.0%,1,0,1
+181,730229248,Scarlet Knights,Rutgers,Rutgers University,Rutgers,RUTG,BBC,,730229248,BBC,Scarlet Knights,RUTG,Rutgers,57,1007,69,57,12,82.6%,578,53,42,11,79.2%,429,6,5,1,83.3%,3,3,0
+181,730350080,Sycamores,Indiana State,Indiana State University,Indiana State,INST,BBC,,730350080,BBC,Sycamores,INST,Indiana State,55,959,74,57,17,77.0%,561,54,38,16,70.4%,398,10,9,1,90.0%,0,0,0
+181,4765,Hornets,Alabama State,Alabama State University,Alabama State,ALST,BBC,,4765,BBC,Hornets,ALST,Alabama State,60,1119,67,57,10,85.1%,642,50,43,7,86.0%,477,7,6,1,85.7%,3,1,2
+181,730157824,Huskies,Houston Christian,Houston Christian University,Houston Christian,HCU,BBC,,730157824,BBC,Huskies,HCU,Houston Christian,57,970,73,57,16,78.1%,588,52,38,14,73.1%,382,15,14,1,93.3%,3,2,1
+188,730172160,Tigers,Memphis,University of Memphis,Memphis,MEM,BBC,,730172160,BBC,Tigers,MEM,Memphis,55,829,78,56,22,71.8%,502,59,40,19,67.8%,327,11,9,2,81.8%,4,3,1
+188,3375,Razorbacks,Arkansas,University of Arkansas,Arkansas,ARK,BBC,,3375,BBC,Razorbacks,ARK,Arkansas,65,1128,71,56,15,78.9%,677,64,51,13,79.7%,451,3,1,2,33.3%,0,0,0
+188,730217472,Trojans,Little Rock,Little Rock,Little Rock,UALR,BBC,,730217472,BBC,Trojans,UALR,Little Rock,61,1030,81,56,25,69.1%,625,61,42,19,68.9%,405,8,5,3,62.5%,3,0,3
+188,730280448,Great Danes,Albany,University at Albany,Albany,ALBY,BBC,,730280448,BBC,Great Danes,ALBY,Albany,54,907,64,56,8,87.5%,531,47,40,7,85.1%,376,7,6,1,85.7%,0,0,0
+188,5047,Trojans,USC,University of Southern California,USC,USC,BBC,,5047,BBC,Trojans,USC,USC,60,1047,67,56,11,83.6%,645,48,39,9,81.3%,402,13,11,2,84.6%,0,0,0
+193,5310,Antelopes,Grand Canyon,Grand Canyon University,Grand Canyon,GC,BBC,,5310,BBC,Antelopes,GC,Grand Canyon,58,1019,65,55,10,84.6%,616,51,41,10,80.4%,403,4,4,0,100.0%,0,0,0
+193,730156544,Purple Eagles,Niagara,Niagara University,Niagara,NIAG,BBC,,730156544,BBC,Purple Eagles,NIAG,Niagara,47,760,74,55,19,74.3%,448,60,44,16,73.3%,312,8,5,3,62.5%,1,1,0
+193,4865,Cornhuskers,Nebraska,University of Nebraska,Nebraska,NEB,BBC,,4865,BBC,Cornhuskers,NEB,Nebraska,62,1079,77,55,22,71.4%,645,64,44,20,68.8%,434,7,5,2,71.4%,1,1,0
+193,5451,Minutemen,UMass,University of Massachusetts,UMass,MASS,BBC,,5451,BBC,Minutemen,MASS,UMass,49,893,70,55,15,78.6%,531,50,37,13,74.0%,362,18,16,2,88.9%,1,1,0
+193,5450,Crimson,Harvard,Harvard University,Harvard,HARV,BBC,,5450,BBC,Crimson,HARV,Harvard,42,620,60,55,5,91.7%,377,50,45,5,90.0%,243,3,3,0,100.0%,1,1,0
+193,730343168,Bison,North Dakota State,North Dakota State University,North Dakota State,NDSU,BBC,,730343168,BBC,Bison,NDSU,North Dakota State,55,921,77,55,22,71.4%,585,52,33,19,63.5%,336,13,10,3,76.9%,0,0,0
+199,730175232,Bears,Central Arkansas,University of Central Arkansas,Central Arkansas,CARK,BBC,,730175232,BBC,Bears,CARK,Central Arkansas,55,993,75,54,21,72.0%,575,65,46,19,70.8%,418,4,3,1,75.0%,1,0,1
+200,730153728,Volunteers,Tennessee,University of Tennessee,Tennessee,TENN,BBC,,730153728,BBC,Volunteers,TENN,Tennessee,65,1102,65,53,12,81.5%,647,42,32,10,76.2%,455,13,11,2,84.6%,0,0,0
+200,730217984,Hornets,Delaware State,Delaware State University,Delaware State,DSU,BBC,,730217984,BBC,Hornets,DSU,Delaware State,41,646,64,53,11,82.8%,407,55,46,9,83.6%,239,8,6,2,75.0%,0,0,0
+200,3374,Bulldogs,Louisiana Tech,Louisiana Tech University,Louisiana Tech,LT,BBC,,3374,BBC,Bulldogs,LT,Louisiana Tech,57,958,69,53,16,76.8%,584,54,38,16,70.4%,374,9,9,0,100.0%,0,0,0
+200,730333184,Mountain Hawks,Lehigh,Lehigh University,Lehigh,LEH,BBC,,730333184,BBC,Mountain Hawks,LEH,Lehigh,50,832,58,53,5,91.4%,475,46,41,5,89.1%,357,8,8,0,100.0%,1,1,0
+200,730281728,Highlanders,UC Riverside,UC Riverside,UC Riverside,UCRV,BBC,,730281728,BBC,Highlanders,UCRV,UC Riverside,52,810,72,53,19,73.6%,469,59,43,16,72.9%,341,5,3,2,60.0%,2,1,1
+205,5324,Mavericks,UT Arlington,University of Texas-Arlington,UT Arlington,UTA,BBC,,5324,BBC,Mavericks,UTA,UT Arlington,54,902,62,52,10,83.9%,530,55,45,10,81.8%,372,0,0,0,-,0,0,0
+205,730384384,Bulldogs,Fresno State,Fresno State,Fresno State,FRES,BBC,,730384384,BBC,Bulldogs,FRES,Fresno State,60,1042,62,52,10,83.9%,610,55,46,9,83.6%,432,1,1,0,100.0%,3,2,1
+205,730206976,Crimson Tide,Alabama,University of Alabama,Alabama,ALA,BBC,,730206976,BBC,Crimson Tide,ALA,Alabama,59,980,58,52,6,89.7%,582,39,34,5,87.2%,398,13,12,1,92.3%,0,0,0
+205,5420,Bobcats,Texas State,Texas State University,Texas State,TXST,BBC,,5420,BBC,Bobcats,TXST,Texas State,58,924,69,52,17,75.4%,568,53,37,16,69.8%,356,10,10,0,100.0%,1,0,1
+205,5424,Panthers,Pittsburgh,University of Pittsburgh,Pittsburgh,PITT,BBC,,5424,BBC,Panthers,PITT,Pittsburgh,55,962,58,52,6,89.7%,579,49,43,6,87.8%,383,4,4,0,100.0%,0,0,0
+205,730332416,Hawks,Saint Joseph's,Saint Joseph's University,Saint Joseph's,JOES,BBC,,730332416,BBC,Hawks,JOES,Saint Joseph's,52,887,63,52,11,82.5%,536,48,37,11,77.1%,351,7,7,0,100.0%,0,0,0
+205,730238464,Stonehill,Stonehill,Stonehill College,Stonehill,SC,BBC,,730238464,BBC,Stonehill,SC,Stonehill,52,927,63,52,11,82.5%,547,49,40,9,81.6%,380,9,9,0,100.0%,2,0,2
+205,2352,Owls,Rice,Rice University,Rice,RICE,BBC,,2352,BBC,Owls,RICE,Rice,57,863,65,52,13,80.0%,542,48,35,13,72.9%,321,14,14,0,100.0%,0,0,0
+205,730166272,Golden Eagles,Tennessee Tech,Tennessee Technological University,Tennessee Tech,TNTC,BBC,,730166272,BBC,Golden Eagles,TNTC,Tennessee Tech,57,1018,59,52,7,88.1%,597,48,43,5,89.6%,421,6,4,2,66.7%,0,0,0
+205,730242048,Gaels,Iona,Iona College,Iona,IONA,BBC,,730242048,BBC,Gaels,IONA,Iona,52,998,64,52,12,81.3%,594,45,34,11,75.6%,404,11,11,0,100.0%,4,3,1
+215,5323,Tigers,Louisiana State,Louisiana State University,Louisiana State,LSU,BBC,,5323,BBC,Tigers,LSU,Louisiana State,68,1244,71,51,20,71.8%,748,51,34,17,66.7%,496,5,4,1,80.0%,3,1,2
+215,5388,Rockets,Toledo,University of Toledo,Toledo,TOL,BBC,,5388,BBC,Rockets,TOL,Toledo,61,996,66,51,15,77.3%,602,62,48,14,77.4%,394,1,1,0,100.0%,1,0,1
+215,2293,Hokies,Virginia Tech,Virginia Tech,Virginia Tech,VT,BBC,,2293,BBC,Hokies,VT,Virginia Tech,56,897,65,51,14,78.5%,529,48,36,12,75.0%,368,4,3,1,75.0%,2,1,1
+215,225,Fighting Irish,Notre Dame,University of Notre Dame,Notre Dame,ND,BBC,,225,BBC,Fighting Irish,ND,Notre Dame,53,960,66,51,15,77.3%,549,51,40,11,78.4%,411,8,6,2,75.0%,2,0,2
+219,730292224,Quakers,Pennsylvania,University of Pennsylvania,Pennsylvania,PENN,BBC,,730292224,BBC,Quakers,PENN,Pennsylvania,41,730,60,50,10,83.3%,427,54,46,8,85.2%,303,6,5,1,83.3%,1,0,1
+219,232,Wildcats,Arizona,University of Arizona,Arizona,ARIZ,BBC,,232,BBC,Wildcats,ARIZ,Arizona,65,1073,71,50,21,70.4%,622,50,31,19,62.0%,451,6,5,1,83.3%,1,0,1
+219,5416,Rattlers,Florida A&M,Florida A&M University,Florida A&M,FAMU,BBC,,5416,BBC,Rattlers,FAMU,Florida A&M,58,968,65,50,15,76.9%,579,55,42,13,76.4%,389,5,4,1,80.0%,3,2,1
+219,730284032,Colonels,Nicholls State,Nicholls State University,Nicholls State,NICH,BBC,,730284032,BBC,Colonels,NICH,Nicholls State,49,811,58,50,8,86.2%,475,49,43,6,87.8%,336,5,4,1,80.0%,1,0,1
+219,1232,Hawkeyes,Iowa,University of Iowa,Iowa,IOWA,BBC,,1232,BBC,Hawkeyes,IOWA,Iowa,56,1024,61,50,11,82.0%,573,48,38,10,79.2%,451,6,5,1,83.3%,2,2,0
+224,730318592,Trailblazers,Utah Tech,Utah Tech University,Utah Tech,UTU,BBC,,730318592,BBC,Trailblazers,UTU,Utah Tech,55,944,65,49,16,75.4%,590,58,42,16,72.4%,354,2,2,0,100.0%,0,0,0
+224,730364160,Gauchos,UC Santa Barbara,UC Santa Barbara,UC Santa Barbara,UCSB,BBC,,730364160,BBC,Gauchos,UCSB,UC Santa Barbara,54,948,58,49,9,84.5%,543,44,35,9,79.5%,405,6,6,0,100.0%,0,0,0
+224,730158080,Eagles,Morehead State,Morehead State University,Morehead State,MORE,BBC,,730158080,BBC,Eagles,MORE,Morehead State,53,923,60,49,11,81.7%,527,56,46,10,82.1%,396,3,2,1,66.7%,0,0,0
+224,730266880,Bulldogs,Bryant,Bryant University,Bryant,BRY,BBC,,730266880,BBC,Bulldogs,BRY,Bryant,56,954,67,49,18,73.1%,528,44,31,13,70.5%,426,8,7,1,87.5%,5,1,4
+228,5385,Eagles,Eastern Michigan,Eastern Michigan University,Eastern Michigan,EMU,BBC,,5385,BBC,Eagles,EMU,Eastern Michigan,52,965,69,48,21,69.6%,578,56,37,19,66.1%,387,12,10,2,83.3%,0,0,0
+228,730289152,Hawks,Maryland Eastern Shore,University of Maryland Eastern Shore,Maryland Eastern Shore,UMES,BBC,,730289152,BBC,Hawks,UMES,Maryland Eastern Shore,48,806,58,48,10,82.8%,445,49,40,9,81.6%,361,4,4,0,100.0%,2,1,1
+228,730354176,Green Wave,Tulane,Tulane University,Tulane,TULN,BBC,,730354176,BBC,Green Wave,TULN,Tulane,58,1004,68,48,20,70.6%,580,53,35,18,66.0%,424,9,7,2,77.8%,0,0,0
+231,730167552,Knights,Bellarmine,Bellarmine University,Bellarmine,BU,BBC,,730167552,BBC,Knights,BU,Bellarmine,55,871,63,47,16,74.6%,518,47,32,15,68.1%,353,10,9,1,90.0%,1,1,0
+231,730298368,Bobcats,Ohio,Ohio University,Ohio,OHIO,BBC,,730298368,BBC,Bobcats,OHIO,Ohio,51,888,59,47,12,79.7%,519,40,30,10,75.0%,369,5,3,2,60.0%,3,3,0
+231,730236160,Bears,Brown,Brown University,Brown,BRWN,BBC,,730236160,BBC,Bears,BRWN,Brown,39,605,58,47,11,81.0%,352,47,38,9,80.9%,253,4,2,2,50.0%,2,2,0
+231,4468,Golden Panthers,Florida International,Florida International University,Florida International,FIU,BBC,,4468,BBC,Golden Panthers,FIU,Florida International,58,977,57,47,10,82.5%,613,42,35,7,83.3%,364,8,6,2,75.0%,2,1,1
+231,730278144,Catamounts,Western Carolina,Western Carolina University,Western Carolina,WCU,BBC,,730278144,BBC,Catamounts,WCU,Western Carolina,58,1028,59,47,12,79.7%,617,43,32,11,74.4%,411,5,4,1,80.0%,1,1,0
+236,730188032,Racers,Murray State,Murray State University,Murray State,MURR,BBC,,730188032,BBC,Racers,MURR,Murray State,61,1161,54,46,8,85.2%,678,48,40,8,83.3%,483,1,1,0,100.0%,0,0,0
+236,730275840,Black Bears,Maine,University of Maine,Maine,ME,BBC,,730275840,BBC,Black Bears,ME,Maine,51,862,59,46,13,78.0%,502,46,35,11,76.1%,360,10,9,1,90.0%,1,0,1
+236,730363136,Wildcats,Davidson,Davidson College,Davidson,DAV,BBC,,730363136,BBC,Wildcats,DAV,Davidson,56,1033,53,46,7,86.8%,600,47,40,7,85.1%,433,5,5,0,100.0%,1,1,0
+236,2290,Wolverines,Michigan,University of Michigan,Michigan,MICH,BBC,,2290,BBC,Wolverines,MICH,Michigan,56,1000,62,46,16,74.2%,604,59,43,16,72.9%,396,0,0,0,-,0,0,0
+236,730235648,Mavericks,Omaha,University of Nebraska-Omaha,Omaha,NEOM,BBC,,730235648,BBC,Mavericks,NEOM,Omaha,50,880,61,46,15,75.4%,523,44,32,12,72.7%,357,10,8,2,80.0%,1,0,1
+241,4866,Hoosiers,Indiana,"Indiana University, Bloomington",Indiana,IND,BBC,,4866,BBC,Hoosiers,IND,Indiana,56,1020,58,45,13,77.6%,604,49,39,10,79.6%,416,8,5,3,62.5%,0,0,0
+241,730336256,Blue Devils,Duke,Duke University,Duke,DUKE,BBC,,730336256,BBC,Blue Devils,DUKE,Duke,62,1127,50,45,5,90.0%,665,41,36,5,87.8%,462,3,3,0,100.0%,1,1,0
+241,4245,Cowboys,Oklahoma State,Oklahoma State University,Oklahoma State,OKST,BBC,,4245,BBC,Cowboys,OKST,Oklahoma State,55,858,55,45,10,81.8%,497,37,29,8,78.4%,361,9,7,2,77.8%,2,2,0
+241,730379264,RedHawks,Miami (OH),Miami University (Ohio),Miami (OH),M-OH,BBC,,730379264,BBC,RedHawks,M-OH,Miami (OH),58,1087,55,45,10,81.8%,652,46,37,9,80.4%,435,7,6,1,85.7%,0,0,0
+241,730266624,Lions,North Alabama,University of North Alabama,North Alabama,UNA,BBC,,730266624,BBC,Lions,UNA,North Alabama,55,912,49,45,4,91.8%,531,42,38,4,90.5%,381,4,4,0,100.0%,0,0,0
+246,730348544,Gamecocks,South Carolina,University of South Carolina,South Carolina,SCAR,BBC,,730348544,BBC,Gamecocks,SCAR,South Carolina,57,909,57,44,13,77.2%,546,52,39,13,75.0%,363,1,1,0,100.0%,0,0,0
+246,730298624,Big Red,Cornell,Cornell University,Cornell,COR,BBC,,730298624,BBC,Big Red,COR,Cornell,34,598,54,44,10,81.5%,366,38,29,9,76.3%,232,6,5,1,83.3%,1,1,0
+246,5487,Mustangs,Cal Poly,Cal Poly,Cal Poly,CP,BBC,,5487,BBC,Mustangs,CP,Cal Poly,62,1113,63,44,19,69.8%,651,43,28,15,65.1%,462,5,3,2,60.0%,5,3,2
+246,730370560,Leathernecks,Western Illinois,Western Illinois University,Western Illinois,WIU,BBC,,730370560,BBC,Leathernecks,WIU,Western Illinois,50,829,52,44,8,84.6%,520,44,36,8,81.8%,309,3,3,0,100.0%,0,0,0
+246,730168576,Redhawks,Southeast Missouri State,Southeast Missouri State University,Southeast Missouri State,SEMO,BBC,,730168576,BBC,Redhawks,SEMO,Southeast Missouri State,55,978,58,44,14,75.9%,600,50,38,12,76.0%,378,2,2,0,100.0%,2,0,2
+251,339,Owls,Florida Atlantic,Florida Atlantic University,Florida Atlantic,FAU,BBC,,339,BBC,Owls,FAU,Florida Atlantic,58,1027,55,43,12,78.2%,631,40,30,10,75.0%,396,7,6,1,85.7%,2,1,1
+251,730224128,49ers,Long Beach State,Long Beach State University,Long Beach State,LBSU,BBC,,730224128,BBC,49ers,LBSU,Long Beach State,53,851,64,43,21,67.2%,514,53,37,16,69.8%,337,10,6,4,60.0%,1,0,1
+251,730218496,Aztecs,San Diego State,San Diego State University,San Diego State,SDSU,BBC,,730218496,BBC,Aztecs,SDSU,San Diego State,59,988,58,43,15,74.1%,575,49,36,13,73.5%,413,6,4,2,66.7%,0,0,0
+251,5320,Toreros,San Diego,University of San Diego,San Diego,USD,BBC,,5320,BBC,Toreros,USD,San Diego,58,1043,60,43,17,71.7%,650,50,34,16,68.0%,393,1,0,1,0.0%,5,5,0
+255,730290176,Red Wolves,Arkansas State,Arkansas State University,Arkansas State,ARST,BBC,,730290176,BBC,Red Wolves,ARST,Arkansas State,54,841,60,42,18,70.0%,513,51,34,17,66.7%,328,3,2,1,66.7%,0,0,0
+255,5080,Bulldogs,Mississippi State,Mississippi State University,Mississippi State,MSST,BBC,,5080,BBC,Bulldogs,MSST,Mississippi State,59,992,49,42,7,85.7%,593,43,36,7,83.7%,399,2,2,0,100.0%,0,0,0
+255,4505,Cougars,Washington State,Washington State University,Washington State,WSU,BBC,,4505,BBC,Cougars,WSU,Washington State,54,974,65,42,23,64.6%,604,60,37,23,61.7%,370,4,4,0,100.0%,0,0,0
+258,3032,Aggies,Texas A&M,Texas A&M University,Texas A&M,TXAM,BBC,,3032,BBC,Aggies,TXAM,Texas A&M,56,856,46,41,5,89.1%,523,32,27,5,84.4%,333,6,6,0,100.0%,0,0,0
+258,730200832,Bulldogs,Gonzaga,Gonzaga University,Gonzaga,GONZ,BBC,,730200832,BBC,Bulldogs,GONZ,Gonzaga,53,937,50,41,9,82.0%,561,38,32,6,84.2%,376,4,4,0,100.0%,5,2,3
+258,730283520,Bulldogs,Butler,Butler University,Butler,BUT,BBC,,730283520,BBC,Bulldogs,BUT,Butler,54,939,52,41,11,78.8%,572,44,33,11,75.0%,367,7,7,0,100.0%,2,2,0
+258,730172928,Terrapins,Maryland,University of Maryland-College Park,Maryland,MD,BBC,,730172928,BBC,Terrapins,MD,Maryland,56,1037,47,41,6,87.2%,641,35,29,6,82.9%,396,9,9,0,100.0%,0,0,0
+262,730257152,Cougars,BYU,Brigham Young University,BYU,BYU,BBC,,730257152,BBC,Cougars,BYU,BYU,55,998,55,40,15,72.7%,622,46,31,15,67.4%,376,2,2,0,100.0%,1,1,0
+262,730382592,Saints,Siena,Siena College,Siena,SIE,BBC,,730382592,BBC,Saints,SIE,Siena,54,983,51,40,11,78.4%,563,43,34,9,79.1%,420,6,4,2,66.7%,1,1,0
+262,730295552,Warriors,Merrimack,Merrimack College,Merrimack,MRMK,BBC,,730295552,BBC,Warriors,MRMK,Merrimack,51,835,54,40,14,74.1%,480,43,30,13,69.8%,355,6,5,1,83.3%,1,1,0
+265,4504,Redhawks,Seattle,Seattle University,Seattle,SEA,BBC,,4504,BBC,Redhawks,SEA,Seattle,52,849,46,39,7,84.8%,528,30,24,6,80.0%,321,10,9,1,90.0%,1,1,0
+265,730206720,Spartans,San Jose State,San Jose State University,San Jose State,SJSU,BBC,,730206720,BBC,Spartans,SJSU,San Jose State,59,940,49,39,10,79.6%,578,40,30,10,75.0%,362,8,8,0,100.0%,1,1,0
+265,730298880,Jaguars,South Alabama,University of South Alabama,South Alabama,USA,BBC,,730298880,BBC,Jaguars,USA,South Alabama,51,901,55,39,16,70.9%,549,50,35,15,70.0%,352,5,4,1,80.0%,0,0,0
+265,1570,Bulldogs,UNC Asheville,UNC Asheville,UNC Asheville,UNCA,BBC,,1570,BBC,Bulldogs,UNCA,UNC Asheville,50,818,50,39,11,78.0%,496,43,33,10,76.7%,322,1,0,1,0.0%,1,1,0
+265,730152448,Golden Bears,California,University of California,California,CAL,BBC,,730152448,BBC,Golden Bears,CAL,California,55,916,50,39,11,78.0%,550,40,31,9,77.5%,366,7,6,1,85.7%,1,0,1
+265,730293760,Hornets,Sacramento State,Sacramento State University,Sacramento State,SAC,BBC,,730293760,BBC,Hornets,SAC,Sacramento State,58,1030,46,39,7,84.8%,599,42,36,6,85.7%,431,4,3,1,75.0%,0,0,0
+265,730319104,Lions,Columbia,Columbia University,Columbia,CLMB,BBC,,730319104,BBC,Lions,CLMB,Columbia,49,935,45,39,6,86.7%,529,28,22,6,78.6%,406,4,4,0,100.0%,4,4,0
+265,730286592,Bears,Northern Colorado,University of Northern Colorado,Northern Colorado,UNCO,BBC,,730286592,BBC,Bears,UNCO,Northern Colorado,51,923,56,39,17,69.6%,573,49,32,17,65.3%,350,3,3,0,100.0%,0,0,0
+273,730323200,Jackrabbits,South Dakota State,South Dakota State University,South Dakota State,SDST,BBC,,730323200,BBC,Jackrabbits,SDST,South Dakota State,52,846,51,38,13,74.5%,522,41,31,10,75.6%,324,6,4,2,66.7%,2,1,1
+273,3111,Beavers,Oregon State,Oregon State University,Oregon State,ORST,BBC,,3111,BBC,Beavers,ORST,Oregon State,65,1191,50,38,12,76.0%,710,41,30,11,73.2%,481,5,4,1,80.0%,0,0,0
+275,754315264,Queens University of Charlotte,Queens University of Charlotte,Queens University of Charlotte,Queens University of Charlotte,QUC,BBC,,754315264,BBC,Queens University of Charlotte,QUC,Queens University of Charlotte,53,781,46,37,9,80.4%,507,34,28,6,82.4%,274,8,6,2,75.0%,1,0,1
+275,730386176,Huskies,Northern Illinois,Northern Illinois University,Northern Illinois,NIU,BBC,,730386176,BBC,Huskies,NIU,Northern Illinois,54,935,42,37,5,88.1%,555,33,28,5,84.8%,380,4,4,0,100.0%,0,0,0
+275,730225152,Cardinals,Incarnate Word,University of the Incarnate Word,Incarnate Word,IW,BBC,,730225152,BBC,Cardinals,IW,Incarnate Word,50,888,47,37,10,78.7%,525,35,25,10,71.4%,363,3,3,0,100.0%,0,0,0
+278,730214144,Bison,Bucknell,Bucknell University,Bucknell,BUCK,BBC,,730214144,BBC,Bison,BUCK,Bucknell,45,772,41,36,5,87.8%,455,34,30,4,88.2%,317,1,1,0,100.0%,2,1,1
+278,730161664,Rebels,UNLV,UNLV,UNLV,UNLV,BBC,,730161664,BBC,Rebels,UNLV,UNLV,54,935,49,36,13,73.5%,568,38,27,11,71.1%,367,2,2,0,100.0%,2,0,2
+280,730331648,Eagles,Georgia Southern,Georgia Southern University,Georgia Southern,GASO,BBC,,730331648,BBC,Eagles,GASO,Georgia Southern,59,980,47,35,12,74.5%,581,40,29,11,72.5%,399,1,1,0,100.0%,1,0,1
+280,5417,Colonels,Eastern Kentucky,Eastern Kentucky University,Eastern Kentucky,EKY,BBC,,5417,BBC,Colonels,EKY,Eastern Kentucky,55,819,48,35,13,72.9%,544,43,30,13,69.8%,275,2,2,0,100.0%,0,0,0
+280,730155776,Bearcats,Binghamton,Binghamton University,Binghamton,BING,BBC,,730155776,BBC,Bearcats,BING,Binghamton,55,990,46,35,11,76.1%,546,35,24,11,68.6%,444,4,4,0,100.0%,0,0,0
+280,5414,Titans,CSU Fullerton,Cal State Fullerton,CSU Fullerton,CSF,BBC,,5414,BBC,Titans,CSF,CSU Fullerton,56,1015,46,35,11,76.1%,588,36,27,9,75.0%,427,5,3,2,60.0%,0,0,0
+280,730198784,Tigers,Princeton,Princeton University,Princeton,PRIN,BBC,,730198784,BBC,Tigers,PRIN,Princeton,43,653,43,35,8,81.4%,418,33,26,7,78.8%,235,7,6,1,85.7%,0,0,0
+280,730209280,Lions,Southeastern Louisiana,Southeastern Louisiana University,Southeastern Louisiana,SELA,BBC,,730209280,BBC,Lions,SELA,Southeastern Louisiana,54,957,37,35,2,94.6%,578,29,28,1,96.6%,379,6,5,1,83.3%,0,0,0
+286,730153472,Lobos,New Mexico,University of New Mexico,New Mexico,UNM,BBC,,730153472,BBC,Lobos,UNM,New Mexico,53,1025,48,34,14,70.8%,601,37,24,13,64.9%,424,5,4,1,80.0%,1,1,0
+286,730240256,Mountaineers,Appalachian State,Appalachian State University,Appalachian State,APP,BBC,,730240256,BBC,Mountaineers,APP,Appalachian State,54,936,48,34,14,70.8%,567,41,28,13,68.3%,369,1,0,1,0.0%,0,0,0
+286,730297600,Broncos,Santa Clara,Santa Clara University,Santa Clara,SCU,BBC,,730297600,BBC,Broncos,SCU,Santa Clara,50,859,54,34,20,63.0%,529,51,32,19,62.7%,330,2,1,1,50.0%,0,0,0
+289,4784,Wolf Pack,Nevada,University of Nevada,Nevada,NEV,BBC,,4784,BBC,Wolf Pack,NEV,Nevada,57,1024,37,32,5,86.5%,597,30,26,4,86.7%,427,6,5,1,83.3%,0,0,0
+289,730216192,Big Green,Dartmouth,Dartmouth College,Dartmouth,DART,BBC,,730216192,BBC,Big Green,DART,Dartmouth,36,576,42,32,10,76.2%,331,34,24,10,70.6%,245,3,3,0,100.0%,0,0,0
+289,730360320,Pilots,Portland,University of Portland,Portland,PORT,BBC,,730360320,BBC,Pilots,PORT,Portland,52,883,43,32,11,74.4%,535,35,24,11,68.6%,348,1,1,0,100.0%,0,0,0
+292,730217728,Leopards,Lafayette,Lafayette College,Lafayette,LAF,BBC,,730217728,BBC,Leopards,LAF,Lafayette,49,822,44,31,13,70.5%,465,36,25,11,69.4%,357,6,4,2,66.7%,0,0,0
+293,730216448,Wolfpack,North Carolina State,North Carolina State University,North Carolina State,NCST,BBC,,730216448,BBC,Wolfpack,NCST,North Carolina State,56,995,36,30,6,83.3%,592,27,23,4,85.2%,403,7,6,1,85.7%,1,0,1
+294,730338304,Waves,Pepperdine,Pepperdine University,Pepperdine,PEPP,BBC,,730338304,BBC,Waves,PEPP,Pepperdine,54,814,49,29,20,59.2%,495,44,25,19,56.8%,319,1,1,0,100.0%,2,1,1
+295,730203904,Shockers,Wichita State,Wichita State University,Wichita State,WICH,BBC,,730203904,BBC,Shockers,WICH,Wichita State,56,968,36,28,8,77.8%,573,30,22,8,73.3%,395,4,4,0,100.0%,0,0,0
+296,730348032,Tritons,UC San Diego,UC San Diego,UC San Diego,UCSD,BBC,,730348032,BBC,Tritons,UCSD,UC San Diego,51,940,37,27,10,73.0%,559,26,17,9,65.4%,381,4,4,0,100.0%,1,0,1
+296,5380,Privateers,New Orleans,University of New Orleans,New Orleans,UNO,BBC,,5380,BBC,Privateers,UNO,New Orleans,54,911,44,27,17,61.4%,551,35,19,16,54.3%,360,3,2,1,66.7%,3,3,0
+298,730247680,Wildcats,Northwestern,Northwestern University,Northwestern,NW,BBC,,730247680,BBC,Wildcats,NW,Northwestern,52,815,34,26,8,76.5%,481,32,24,8,75.0%,334,2,2,0,100.0%,0,0,0
+299,730369536,Crusaders,Valparaiso,Valparaiso University,Valparaiso,VALP,BBC,,730369536,BBC,Crusaders,VALP,Valparaiso,50,747,30,25,5,83.3%,435,25,20,5,80.0%,312,1,1,0,100.0%,0,0,0
+300,730360064,Jayhawks,Kansas,University of Kansas,Kansas,KU,BBC,,730360064,BBC,Jayhawks,KU,Kansas,60,1116,26,24,2,92.3%,659,21,19,2,90.5%,457,1,1,0,100.0%,0,0,0
+301,730153984,Aggies,UC Davis,UC Davis,UC Davis,UCD,BBC,,730153984,BBC,Aggies,UCD,UC Davis,55,974,34,22,12,64.7%,600,30,18,12,60.0%,374,4,4,0,100.0%,0,0,0
+302,730251264,Cardinal,Stanford,Stanford University,Stanford,STAN,BBC,,730251264,BBC,Cardinal,STAN,Stanford,52,866,43,21,22,48.8%,529,34,14,20,41.2%,337,3,1,2,33.3%,0,0,0
+302,730214400,49ers,Charlotte,UNC Charlotte,Charlotte,CHAR,BBC,,730214400,BBC,49ers,CHAR,Charlotte,58,994,33,21,12,63.6%,622,27,16,11,59.3%,372,2,1,1,50.0%,1,1,0
+304,3031,Anteaters,UC Irvine,UC Irvine,UC Irvine,UCI,BBC,,3031,BBC,Anteaters,UCI,UC Irvine,60,1172,30,18,12,60.0%,705,28,17,11,60.7%,467,1,1,0,100.0%,1,0,1
+305,730180096,Golden Eagles,Oral Roberts,Oral Roberts University,Oral Roberts,ORU,BBC,,730180096,BBC,Golden Eagles,ORU,Oral Roberts,59,1037,27,17,10,63.0%,630,24,14,10,58.3%,407,0,0,0,-,0,0,0
+305,730246656,Golden Eagles,Southern Miss,The University of Southern Mississippi,Southern Miss,USM,BBC,,730246656,BBC,Golden Eagles,USM,Southern Miss,63,1137,27,17,10,63.0%,671,22,12,10,54.5%,466,0,0,0,-,0,0,0
+305,730194176,Eagles,Coppin State,Coppin State University,Coppin State,COPP,BBC,,730194176,BBC,Eagles,COPP,Coppin State,49,814,28,17,11,60.7%,462,27,16,11,59.3%,352,1,1,0,100.0%,0,0,0
