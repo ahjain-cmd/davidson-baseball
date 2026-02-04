@@ -71,27 +71,26 @@ def _build_3pitch_sequences(sorted_ps, hd, tun_df, seq_df):
         best_path = None
         best_path_score = -1
         for p2 in pitches:
-            if p2 == p3:
-                t_self, _ = _lookup_tunnel(p2, p3, tun_df)
-                if pd.isna(t_self) or t_self <= 50:
-                    continue
+            # Allow same-pitch sequences (e.g., FB→FB→SL) - treat tunnel as neutral
+            is_same_p2_p3 = (p2 == p3)
             for p1 in setup_candidates:  # P1 restricted to primary pitches
                 if p1 == p2:
                     continue
                 t12, g12 = _lookup_tunnel(p1, p2, tun_df)
                 t23, g23 = _lookup_tunnel(p2, p3, tun_df)
-                t12_bad = pd.isna(t12) or t12 < 25
-                t23_bad = pd.isna(t23) or t23 < 25
-                if t12_bad and t23_bad:
-                    continue
+                # For same-pitch pairs, use neutral tunnel score (50) since tunnel doesn't apply
+                if is_same_p2_p3:
+                    t23 = 50.0
+                # Use neutral score (50) when tunnel is missing, so outcomes can still surface
+                t12_use = t12 if pd.notna(t12) else 50.0
+                t23_use = t23 if pd.notna(t23) else 50.0
                 sw12, ch12 = _lookup_seq(p1, p2, seq_df)
                 sw23, ch23 = _lookup_seq(p2, p3, seq_df)
                 parts, wts = [], []
                 # Tunnel quality (30%): t12 weight=12, t23 weight=18
-                if not pd.isna(t12):
-                    parts.append(t12); wts.append(12)
-                if not pd.isna(t23):
-                    parts.append(t23); wts.append(18)
+                # Always include tunnel scores (using neutral 50 when missing)
+                parts.append(t12_use); wts.append(12)
+                parts.append(t23_use); wts.append(18)
                 # Outcome effectiveness (55%): sw23=35, sw12=12, ch23=8
                 if not pd.isna(sw23):
                     parts.append(min(sw23 / 50 * 100, 100)); wts.append(35)

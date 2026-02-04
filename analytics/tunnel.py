@@ -96,7 +96,9 @@ def _load_pair_outcomes():
                 WHEN TaggedPitchType < prev_type THEN TaggedPitchType || '/' || prev_type
                 ELSE prev_type || '/' || TaggedPitchType
             END AS pair_type,
-            PitchCall
+            PitchCall,
+            CASE WHEN PitchCall IN ('StrikeSwinging', 'InPlay', 'FoulBall', 'FoulBallNotFieldable', 'FoulBallFieldable') THEN 1 ELSE 0 END AS is_swing,
+            CASE WHEN PitchCall = 'StrikeSwinging' THEN 1 ELSE 0 END AS is_whiff
         FROM (
             SELECT *,
                    LAG(TaggedPitchType) OVER (
@@ -109,7 +111,8 @@ def _load_pair_outcomes():
     )
     SELECT pair_type,
            COUNT(*) AS n_pairs,
-           AVG(CASE WHEN PitchCall='StrikeSwinging' THEN 1 ELSE 0 END) * 100 AS whiff_rate
+           SUM(is_swing) AS n_swings,
+           CASE WHEN SUM(is_swing) >= 5 THEN SUM(is_whiff) * 100.0 / SUM(is_swing) ELSE NULL END AS whiff_rate
     FROM pairs
     GROUP BY pair_type
     """
@@ -119,8 +122,12 @@ def _load_pair_outcomes():
         return {}, None
     if df.empty:
         return {}, None
-    baselines = {r["pair_type"]: float(r["whiff_rate"]) for _, r in df.iterrows()}
-    global_whiff = float(np.average(df["whiff_rate"], weights=df["n_pairs"]))
+    # Filter to pairs with valid whiff rates (enough swings to compute)
+    df_valid = df[df["whiff_rate"].notna()].copy()
+    if df_valid.empty:
+        return {}, None
+    baselines = {r["pair_type"]: float(r["whiff_rate"]) for _, r in df_valid.iterrows()}
+    global_whiff = float(np.average(df_valid["whiff_rate"], weights=df_valid["n_swings"]))
     return baselines, global_whiff
 
 
@@ -581,13 +588,19 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
             if len(pbp_pairs) >= 8:
                 # Aggregate per-pair metrics
                 metrics = []
-                whiff_flags = []
+                swing_count = 0
+                whiff_count = 0
                 for prow, crow in pbp_pairs:
                     try:
                         m = _score_single_pair_from_rows(prow, crow)
                         if m is not None:
                             metrics.append(m)
-                            whiff_flags.append(crow.get("PitchCall") == "StrikeSwinging")
+                            pitch_call = crow.get("PitchCall")
+                            # Track swings (all swing types) and whiffs for proper whiff%
+                            if pitch_call in SWING_CALLS:
+                                swing_count += 1
+                                if pitch_call == "StrikeSwinging":
+                                    whiff_count += 1
                     except Exception:
                         continue
                 if len(metrics) >= 5:
@@ -598,7 +611,8 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
                     move_div = float(np.median(arr[:, 3]))
                     velo_gap = float(np.median(arr[:, 4]))
                     rel_angle_sep = float(np.nanmedian(arr[:, 5]))
-                    pair_whiff = float(np.mean(whiff_flags)) * 100 if whiff_flags else np.nan
+                    # Whiff% = StrikeSwinging / Swings (not per all pitches)
+                    pair_whiff = float(whiff_count / swing_count * 100) if swing_count >= 5 else np.nan
                     n_pairs_used = len(metrics)
                 else:
                     result = _score_single_pair_from_rows(a, b)
@@ -662,7 +676,9 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
 
             # 3. RELEASE CONSISTENCY (10% weight)
             # Lower effective_rel_sep → better
-            rel_pct = max(0, 100 - effective_rel_sep * 12)
+            # Note: effective_rel_sep is already in inches (no conversion needed)
+            # Scale: 0" → 100, 8" → 0 (typical range is 1-5")
+            rel_pct = max(0, 100 - effective_rel_sep * 12.5)
 
             # 4. RELEASE ANGLE SEPARATION (8% weight)
             # Lower rel_angle_sep → better (similar launch angles = harder to read)
