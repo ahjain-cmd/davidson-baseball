@@ -1076,7 +1076,7 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
     section_header("Swing Decision Zone Maps")
     st.caption(
         "Where should this hitter swing vs. where they actually swing? Mismatch = coaching opportunity. "
-        "Should Swing score blends EV (45%), contact rate (35%), and in‑play rate (20%), "
+        "Should Swing score blends EV (60%), contact rate (30%), and in‑play rate (10%), "
         "then shrinks toward 50 with small samples (based on swing count)."
     )
 
@@ -1116,7 +1116,7 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
                     ev_score = min(max((avg_ev - 70) / 30 * 100, 0), 100) if not pd.isna(avg_ev) else 30
                     contact_score = contact_rate * 100
                     inplay_score = inplay_rate * 100
-                    raw_should = ev_score * 0.45 + contact_score * 0.35 + inplay_score * 0.20
+                    raw_should = ev_score * 0.60 + contact_score * 0.30 + inplay_score * 0.10
                     shrink_w = min(len(cell_swings) / 15, 1.0)
                     should_score = 50 * (1 - shrink_w) + raw_should * shrink_w
                     should_swing[vi, hi] = should_score
@@ -1147,6 +1147,15 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
         mismatch_in = mismatch[1:4, 1:4]
 
         map1, map2, map3 = st.columns(3)
+        def _add_zone_box_3x3(fig):
+            # px.imshow uses categorical positions 0..2 for 3 columns/rows
+            fig.add_shape(
+                type="rect",
+                x0=-0.5, x1=2.5,
+                y0=-0.5, y1=2.5,
+                line=dict(color="black", width=2.5),
+            )
+
         with map1:
             st.markdown("**Should Swing**")
             st.caption("Green = good outcomes when swinging here")
@@ -1156,7 +1165,7 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
                 x=h_labels_in, y=list(reversed(v_labels_in)),
                 labels=dict(color="Score"), aspect="auto",
             )
-            _add_grid_zone_outline(fig_should)
+            _add_zone_box_3x3(fig_should)
             fig_should.update_layout(height=320, coloraxis_showscale=False, **CHART_LAYOUT)
             _plotly_chart_bats(fig_should, use_container_width=True, key="sdl_should")
 
@@ -1169,7 +1178,7 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
                 x=h_labels_in, y=list(reversed(v_labels_in)),
                 labels=dict(color="Swing%"), aspect="auto",
             )
-            _add_grid_zone_outline(fig_actual)
+            _add_zone_box_3x3(fig_actual)
             fig_actual.update_layout(height=320, coloraxis_showscale=False, **CHART_LAYOUT)
             _plotly_chart_bats(fig_actual, use_container_width=True, key="sdl_actual")
 
@@ -1191,7 +1200,7 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
                 zmin=-50, zmax=50,
             )
             fig_mm.update_traces(text=mm_text, texttemplate="%{text}")
-            _add_grid_zone_outline(fig_mm)
+            _add_zone_box_3x3(fig_mm)
             fig_mm.update_layout(height=320, coloraxis_showscale=False, **CHART_LAYOUT)
             _plotly_chart_bats(fig_mm, use_container_width=True, key="sdl_mismatch")
 
