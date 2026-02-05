@@ -1036,7 +1036,8 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
     if n_pitches >= 2:
         st.markdown("")
         section_header("Best Pitch Pairs & Sequences (Composite)")
-        tunnel_pop = build_tunnel_population_pop()
+        pitch_types = tuple(sorted(pdf["TaggedPitchType"].dropna().unique()))
+        tunnel_pop = build_tunnel_population_pop(pitch_types=pitch_types)
         tunnel_df = _compute_tunnel_score(pdf, tunnel_pop=tunnel_pop)
         pair_df = _compute_pitch_pair_results(pdf, data, tunnel_df=tunnel_df if not tunnel_df.empty else None)
         pitch_metrics = _build_pitch_metric_map(pdf, stuff_df, cmd_df)
@@ -1498,7 +1499,8 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
 
     # Pre-compute shared data
     try:
-        tunnel_pop = build_tunnel_population_pop()
+        pitch_types = tuple(sorted(pdf["TaggedPitchType"].dropna().unique()))
+        tunnel_pop = build_tunnel_population_pop(pitch_types=pitch_types)
         tunnel_df = _compute_tunnel_score(pdf, tunnel_pop=tunnel_pop)
     except Exception as e:
         st.warning(f"Could not compute tunnel scores: {e}")
@@ -2067,7 +2069,8 @@ def _pitching_lab_content(data, pitcher, season_filter, pdf, stuff_df,
     pdf_tunnel = filter_minor_pitches(pdf, min_pct=MIN_PITCH_USAGE_PCT)
     if pdf_tunnel.empty:
         pdf_tunnel = pdf
-    tunnel_pop = build_tunnel_population_pop()
+    pitch_types = tuple(sorted(pdf["TaggedPitchType"].dropna().unique()))
+    tunnel_pop = build_tunnel_population_pop(pitch_types=pitch_types)
     tunnel_df = _compute_tunnel_score(pdf_tunnel, tunnel_pop=tunnel_pop)
 
     # ═══════════════════════════════════════════
@@ -2919,7 +2922,8 @@ def _game_planning_content(data, pitcher=None, season_filter=None, pdf=None, key
         st.caption("Sequence effectiveness combined with physics-based tunnel analysis — the best sequences are ones that tunnel well AND produce whiffs")
 
         # Compute tunnel scores for this pitcher
-        tunnel_pop = build_tunnel_population_pop()
+        pitch_types = tuple(sorted(pdf["TaggedPitchType"].dropna().unique()))
+        tunnel_pop = build_tunnel_population_pop(pitch_types=pitch_types)
         tunnel_df = _compute_tunnel_score(pdf, tunnel_pop=tunnel_pop)
         tunnel_lookup = {}
         if not tunnel_df.empty:

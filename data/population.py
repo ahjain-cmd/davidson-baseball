@@ -999,11 +999,28 @@ def compute_stuff_baselines():
             "velo_diff_stats": velo_diff_stats}
 
 
-def _build_tunnel_population_pop(con=None):
+def _build_tunnel_population_pop(con=None, pitch_types=None):
     """Build tunnel population from pitch-level kinematics for accurate physics.
-    Returns dict: pair_type -> sorted array of raw tunnel scores."""
+    Returns dict: pair_type -> sorted array of raw tunnel scores.
+
+    If pitch_types is provided, only load those pair types from the precompute DB
+    to avoid heavy full-table scans at runtime.
+    """
     if con is None and _precompute_table_exists("tunnel_population"):
-        df = _read_precompute_table("tunnel_population")
+        where = None
+        if pitch_types:
+            uniq = sorted({p for p in pitch_types if isinstance(p, str) and p})
+            if len(uniq) < 2:
+                return {}
+            pairs = []
+            for i, a in enumerate(uniq):
+                for b in uniq[i + 1:]:
+                    pair = f"{a}/{b}" if a < b else f"{b}/{a}"
+                    pairs.append(pair)
+            if pairs:
+                pair_sql = ", ".join(f"'{p.replace(chr(39), chr(39)+chr(39))}'" for p in pairs)
+                where = f"pair_type IN ({pair_sql})"
+        df = _read_precompute_table("tunnel_population", where=where)
         if not df.empty and {"pair_type", "score"}.issubset(set(df.columns)):
             pop = {}
             for pair, grp in df.groupby("pair_type"):
@@ -1334,5 +1351,5 @@ def _build_tunnel_population_pop(con=None):
 
 
 @st.cache_data(show_spinner="Building tunnel population database...")
-def build_tunnel_population_pop():
-    return _build_tunnel_population_pop()
+def build_tunnel_population_pop(pitch_types=None):
+    return _build_tunnel_population_pop(pitch_types=pitch_types)
