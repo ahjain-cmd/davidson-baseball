@@ -1070,7 +1070,6 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
                     "K/Putaway%": f"{r['K%']:.1f}" if pd.notna(r["K%"]) else "-",
                     "Avg EV": f"{r['Avg EV']:.1f}" if pd.notna(r["Avg EV"]) else "-",
                     "Tag": r.get("Tag", ""),
-                    "Deception": _deception_flag(r.get("Tunnel", np.nan)),
                 })
                 detail.append({
                     "Pair": r["Pair"],
@@ -1102,7 +1101,6 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
                     "K/Putaway%": f"{r['K%']:.1f}" if pd.notna(r["K%"]) else "-",
                     "Avg EV": f"{r['Avg EV']:.1f}" if pd.notna(r["Avg EV"]) else "-",
                     "Tag": r.get("Tag", ""),
-                    "Deception": _deception_flag(r.get("Tunnel", np.nan)),
                 })
                 detail.append({
                     "Sequence": r["Seq"],
@@ -1134,7 +1132,6 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
                     "K/Putaway%": f"{r['K%']:.1f}" if pd.notna(r["K%"]) else "-",
                     "Avg EV": f"{r['Avg EV']:.1f}" if pd.notna(r["Avg EV"]) else "-",
                     "Tag": r.get("Tag", ""),
-                    "Deception": _deception_flag(r.get("Tunnel", np.nan)),
                 })
                 detail.append({
                     "Sequence": r["Seq"],
@@ -1154,13 +1151,13 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
 
         # ── Best Tunnel Pairs (pure deception ranking) ──
         if isinstance(tunnel_df, pd.DataFrame) and not tunnel_df.empty and "Tunnel Score" in tunnel_df.columns:
-            # Sort by tunnel score descending, take top 2
-            tunnel_sorted = tunnel_df.sort_values("Tunnel Score", ascending=False).head(2)
+            # Sort by tunnel score descending, take top 1
+            tunnel_sorted = tunnel_df.sort_values("Tunnel Score", ascending=False).head(1)
             # Only show section if there's at least one pair with a passing grade (C or better = score >= 40)
             best_score = tunnel_sorted["Tunnel Score"].max() if not tunnel_sorted.empty else 0
             if best_score >= 40:
                 st.markdown("---")
-                st.markdown("**Best Tunnel Pairs (Deception Only)**")
+                st.markdown("**Best Tunnel Pair (Deception Only)**")
                 st.caption(
                     "Ranked purely by tunnel score — how deceptive two pitches look out of the hand. "
                     "Tunnel score measures: (1) **Commit separation** at 280ms before plate — how far apart "
@@ -1326,7 +1323,10 @@ def _compute_pitch_recommendations(pdf, data, tunnel_df):
     # Determine pitcher handedness sign for HorzBreak:
     # RHP → positive HB = arm-side run; LHP → negative HB = arm-side run.
     throws = pdf["PitcherThrows"].mode()
-    is_lhp = (throws.iloc[0] == "Left") if len(throws) > 0 else False
+    if len(throws) > 0:
+        is_lhp = str(throws.iloc[0]).lower().startswith("l")
+    else:
+        is_lhp = False
     hb_sign = -1.0 if is_lhp else 1.0  # multiplier to convert raw ↔ arm-side-positive
 
     # Pre-compute baseline per pitch type using arm-side positive HB (hand-aware)
@@ -1571,7 +1571,6 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
                 "K/Putaway%": f"{r['K%']:.1f}" if pd.notna(r["K%"]) else "-",
                 "Avg EV": f"{r['Avg EV']:.1f}" if pd.notna(r["Avg EV"]) else "-",
                 "Tag": r.get("Tag", ""),
-                "Deception": _deception_flag(r.get("Tunnel", np.nan)),
             })
             detail.append({
                 "Pair": r["Pair"],
@@ -1603,7 +1602,6 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
                 "K/Putaway%": f"{r['K%']:.1f}" if pd.notna(r["K%"]) else "-",
                 "Avg EV": f"{r['Avg EV']:.1f}" if pd.notna(r["Avg EV"]) else "-",
                 "Tag": r.get("Tag", ""),
-                "Deception": _deception_flag(r.get("Tunnel", np.nan)),
             })
             detail.append({
                 "Sequence": r["Seq"],
@@ -1635,7 +1633,6 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
                 "K/Putaway%": f"{r['K%']:.1f}" if pd.notna(r["K%"]) else "-",
                 "Avg EV": f"{r['Avg EV']:.1f}" if pd.notna(r["Avg EV"]) else "-",
                 "Tag": r.get("Tag", ""),
-                "Deception": _deception_flag(r.get("Tunnel", np.nan)),
             })
             detail.append({
                 "Sequence": r["Seq"],
