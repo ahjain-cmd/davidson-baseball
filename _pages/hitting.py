@@ -1158,33 +1158,37 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
 
         with map1:
             st.markdown("**Should Swing**")
-            st.caption("Green = good outcomes when swinging here")
+            st.caption("Score (0–100). Green = good outcomes when swinging here.")
             fig_should = px.imshow(
                 np.flipud(should_in), text_auto=".0f",
                 color_continuous_scale=[[0, "#ef4444"], [0.5, "#fbbf24"], [1, "#22c55e"]],
                 x=h_labels_in, y=list(reversed(v_labels_in)),
                 labels=dict(color="Score"), aspect="auto",
+                zmin=0, zmax=100,
             )
+            fig_should.update_traces(textfont=dict(size=14))
             _add_zone_box_3x3(fig_should)
             fig_should.update_layout(height=320, coloraxis_showscale=False, **CHART_LAYOUT)
             _plotly_chart_bats(fig_should, use_container_width=True, key="sdl_should")
 
         with map2:
             st.markdown("**Actually Swings**")
-            st.caption("Swing rate by zone cell")
+            st.caption("Swing% by zone cell (0–100).")
             fig_actual = px.imshow(
                 np.flipud(actual_in), text_auto=".0f",
                 color_continuous_scale="YlOrRd",
                 x=h_labels_in, y=list(reversed(v_labels_in)),
                 labels=dict(color="Swing%"), aspect="auto",
+                zmin=0, zmax=100,
             )
+            fig_actual.update_traces(textfont=dict(size=14))
             _add_zone_box_3x3(fig_actual)
             fig_actual.update_layout(height=320, coloraxis_showscale=False, **CHART_LAYOUT)
             _plotly_chart_bats(fig_actual, use_container_width=True, key="sdl_actual")
 
         with map3:
             st.markdown("**Mismatch**")
-            st.caption("Red = swings too much, Blue = should swing more")
+            st.caption("Over/Under (percentage points). Red = swings too much, Blue = should swing more.")
             mm_rounded = np.round(mismatch_in)
             mm_text = []
             for row in np.flipud(mm_rounded):
@@ -1200,6 +1204,7 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
                 zmin=-50, zmax=50,
             )
             fig_mm.update_traces(text=mm_text, texttemplate="%{text}")
+            fig_mm.update_traces(textfont=dict(size=14))
             _add_zone_box_3x3(fig_mm)
             fig_mm.update_layout(height=320, coloraxis_showscale=False, **CHART_LAYOUT)
             _plotly_chart_bats(fig_mm, use_container_width=True, key="sdl_mismatch")
@@ -1223,8 +1228,10 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
             def _fmt_zone(c):
                 return f'{c["v"]} / {c["h"]} ({c["m"]:+.0f})'
 
-            more_txt = ", ".join(_fmt_zone(c) for c in more) if more else "None"
-            less_txt = ", ".join(_fmt_zone(c) for c in less) if less else "None"
+            def _fmt_zone_short(c):
+                return f'{c["v"]} / {c["h"]}'
+            more_txt = ", ".join(_fmt_zone_short(c) for c in more) if more else "None"
+            less_txt = ", ".join(_fmt_zone_short(c) for c in less) if less else "None"
             st.markdown(
                 f'<div style="padding:12px 16px;margin-top:8px;font-size:14px;line-height:1.5;'
                 f'background:#f8fafc;border-radius:8px;border-left:4px solid #334155;">'
