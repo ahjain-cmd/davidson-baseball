@@ -1081,8 +1081,9 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
     )
     st.markdown(
         "<style>"
+        ".sdl-head{min-height:72px;}"
         ".sdl-title{font-weight:700;font-size:20px;margin-bottom:4px;}"
-        ".sdl-sub{min-height:44px;color:#6b7280;margin-bottom:8px;}"
+        ".sdl-sub{color:#6b7280;margin-bottom:8px;}"
         "</style>",
         unsafe_allow_html=True,
     )
@@ -1188,6 +1189,15 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
         swing_pct = _to_percentiles(actual_in)
         mismatch_in = swing_pct - should_pct
 
+        # Drop zones where both percentiles are low
+        drop_mask = (should_pct < 40) & (swing_pct < 40)
+        should_pct = should_pct.copy()
+        swing_pct = swing_pct.copy()
+        mismatch_in = mismatch_in.copy()
+        should_pct[drop_mask] = np.nan
+        swing_pct[drop_mask] = np.nan
+        mismatch_in[drop_mask] = np.nan
+
         map1, map2, map3 = st.columns(3)
         def _add_zone_box_3x3(fig):
             # px.imshow uses categorical positions 0..2 for 3 columns/rows
@@ -1199,8 +1209,10 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
             )
 
         with map1:
-            st.markdown('<div class="sdl-title">Should Swing</div>'
-                        '<div class="sdl-sub">Percentile (0–100) across zones. Green = best swing quality.</div>',
+            st.markdown('<div class="sdl-head">'
+                        '<div class="sdl-title">Should Swing</div>'
+                        '<div class="sdl-sub">Percentile (0–100) across zones. Green = best swing quality.</div>'
+                        '</div>',
                         unsafe_allow_html=True)
             fig_should = px.imshow(
                 np.flipud(should_pct), text_auto=".0f",
@@ -1215,8 +1227,10 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
             _plotly_chart_bats(fig_should, use_container_width=True, key="sdl_should")
 
         with map2:
-            st.markdown('<div class="sdl-title">Actually Swings</div>'
-                        '<div class="sdl-sub">Swing percentile (0–100) across zones.</div>',
+            st.markdown('<div class="sdl-head">'
+                        '<div class="sdl-title">Actually Swings</div>'
+                        '<div class="sdl-sub">Swing percentile (0–100) across zones.</div>'
+                        '</div>',
                         unsafe_allow_html=True)
             fig_actual = px.imshow(
                 np.flipud(swing_pct), text_auto=".0f",
@@ -1231,8 +1245,10 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
             _plotly_chart_bats(fig_actual, use_container_width=True, key="sdl_actual")
 
         with map3:
-            st.markdown('<div class="sdl-title">Mismatch</div>'
-                        '<div class="sdl-sub">Percentile gap (Swing − Should). Red = swings too much, Blue = should swing more.</div>',
+            st.markdown('<div class="sdl-head">'
+                        '<div class="sdl-title">Mismatch</div>'
+                        '<div class="sdl-sub">Percentile gap (Swing − Should). Red = swings too much, Blue = should swing more.</div>'
+                        '</div>',
                         unsafe_allow_html=True)
             mm_rounded = np.round(mismatch_in)
             mm_text = []
