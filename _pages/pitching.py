@@ -220,87 +220,111 @@ def _rank_pairs(tunnel_df, pair_df, pitch_metrics, top_n=2):
     return result[:top_n]
 
 
-def _rank_sequences(pair_df, pitch_metrics, length=3, top_n=2):
-    if not isinstance(pair_df, pd.DataFrame) or pair_df.empty:
+def _rank_sequences_from_pdf(pdf, pitch_metrics, tunnel_df=None, length=3, top_n=2, min_n=10):
+    """Rank sequences using *actual* historical sequences in the pitch stream.
+    Score is outcomes-first (whiff/K/EV) with tunnel as a secondary signal.
+    """
+    if not isinstance(pdf, pd.DataFrame) or pdf.empty:
         return []
-    df = pair_df.copy()
-    df["Count"] = pd.to_numeric(df.get("Count"), errors="coerce").fillna(0)
-    df["Whiff%"] = pd.to_numeric(df.get("Whiff%"), errors="coerce")
-    df["K%"] = pd.to_numeric(df.get("K%"), errors="coerce")
-    df["Putaway%"] = pd.to_numeric(df.get("Putaway%"), errors="coerce")
-    df["Avg EV"] = pd.to_numeric(df.get("Avg EV"), errors="coerce")
-    df["Tunnel Score"] = pd.to_numeric(df.get("Tunnel Score"), errors="coerce")
-    df = df.dropna(subset=["Tunnel Score"])
-    if df.empty:
+    pdf = filter_minor_pitches(pdf, min_pct=MIN_PITCH_USAGE_PCT)
+    if pdf.empty:
         return []
 
-    pair_map = {}
-    valid_pitches = set(pitch_metrics.keys())
-    for _, r in df.iterrows():
-        if r["Setup Pitch"] not in valid_pitches or r["Follow Pitch"] not in valid_pitches:
+    sort_cols = [c for c in ["GameID", "Batter", "PAofInning", "PitchNo"] if c in pdf.columns]
+    group_cols = [c for c in ["GameID", "Batter", "PAofInning"] if c in pdf.columns]
+    if len(sort_cols) < 2 or len(group_cols) < 2:
+        return []
+
+    pdf_s = pdf.sort_values(sort_cols).copy()
+    pdf_s = pdf_s.dropna(subset=["TaggedPitchType"])
+
+    # Tunnel lookup map (unordered pairs). Missing tunnel → neutral 50.
+    tunnel_map = {}
+    if isinstance(tunnel_df, pd.DataFrame) and not tunnel_df.empty:
+        for _, r in tunnel_df.iterrows():
+            key = tuple(sorted([r["Pitch A"], r["Pitch B"]]))
+            tunnel_map[key] = pd.to_numeric(r.get("Tunnel Score"), errors="coerce")
+
+    def _pair_tunnel(a, b):
+        val = tunnel_map.get(tuple(sorted([a, b])), np.nan)
+        return 50.0 if pd.isna(val) else float(val)
+
+    # Aggregate sequence outcomes based on final pitch in sequence
+    seq_stats = {}
+    for _, g in pdf_s.groupby(group_cols):
+        if len(g) < length:
             continue
-        pair_map[(r["Setup Pitch"], r["Follow Pitch"])] = {
-            "whiff": r["Whiff%"],
-            "k": r["K%"] if pd.notna(r["K%"]) else r["Putaway%"],
-            "ev": r["Avg EV"],
-            "tunnel": r["Tunnel Score"],
-            "count": r["Count"],
-        }
-
-    out_map = {}
-    for (a, b), stats in pair_map.items():
-        out_map.setdefault(a, []).append((b, stats))
-
-    def _wavg(vals, wts):
-        mask = [pd.notna(v) for v in vals]
-        if not any(mask):
-            return np.nan
-        v = [val for val, m in zip(vals, mask) if m]
-        w = [wt for wt, m in zip(wts, mask) if m]
-        return float(np.average(v, weights=w))
-
-    def _seq_stats(pairs):
-        counts = [max(p["count"], 1) for p in pairs]
-        whiff_avg = _wavg([p["whiff"] for p in pairs], counts)
-        k_avg = _wavg([p["k"] for p in pairs], counts)
-        ev_avg = _wavg([p["ev"] for p in pairs], counts)
-        tunnel_avg = _wavg([p["tunnel"] for p in pairs], counts)
-        return whiff_avg, k_avg, ev_avg, tunnel_avg, int(np.sum(counts))
+        pitches = g["TaggedPitchType"].tolist()
+        rows = list(g.itertuples(index=False))
+        for i in range(len(pitches) - length + 1):
+            seq = tuple(pitches[i:i + length])
+            last = rows[i + length - 1]
+            stats = seq_stats.setdefault(seq, {
+                "n": 0, "sw": 0, "wh": 0, "k": 0,
+                "two_strike": 0, "putaway": 0,
+                "ev_sum": 0.0, "ev_n": 0,
+            })
+            stats["n"] += 1
+            pitch_call = getattr(last, "PitchCall", None)
+            if pitch_call in SWING_CALLS:
+                stats["sw"] += 1
+                if pitch_call == "StrikeSwinging":
+                    stats["wh"] += 1
+            # K%: use KorBB if available, else PlayResult
+            korbb = getattr(last, "KorBB", None)
+            if korbb in ("Strikeout", "K"):
+                stats["k"] += 1
+            else:
+                play = getattr(last, "PlayResult", None)
+                if play in ("Strikeout", "K"):
+                    stats["k"] += 1
+            # Putaway: 2-strike pitch resulting in called/swinging strike
+            strikes = getattr(last, "Strikes", None)
+            if strikes == 2:
+                stats["two_strike"] += 1
+                if pitch_call in ("StrikeSwinging", "StrikeCalled"):
+                    stats["putaway"] += 1
+            # Avg EV from in-play on final pitch
+            if pitch_call == "InPlay":
+                ev = getattr(last, "ExitSpeed", None)
+                if ev is not None and pd.notna(ev):
+                    stats["ev_sum"] += float(ev)
+                    stats["ev_n"] += 1
 
     results = []
-    if length == 3:
-        for a, outs in out_map.items():
-            for b, s1 in outs:
-                for c, s2 in out_map.get(b, []):
-                    wh, k, ev, tn, n = _seq_stats([s1, s2])
-                    pitches = [a, b, c]
-                    stuff_avg = np.nanmean([pitch_metrics.get(p, {}).get("stuff", np.nan) for p in pitches])
-                    cmd_avg = np.nanmean([pitch_metrics.get(p, {}).get("cmd", np.nan) for p in pitches])
-                    score = _weighted_score(
-                        [_score_whiff(wh), _score_k(k), _score_ev(ev), tn],
-                        [0.35, 0.25, 0.25, 0.15],
-                    )
-                    results.append({"Seq": f"{a} → {b} → {c}", "Tunnel": tn, "Whiff%": wh,
-                                    "K%": k, "Avg EV": ev, "Stuff+": stuff_avg,
-                                    "Cmd+": cmd_avg, "Score": score, "Pairs": n})
-    elif length == 4:
-        for a, outs in out_map.items():
-            for b, s1 in outs:
-                for c, s2 in out_map.get(b, []):
-                    for d, s3 in out_map.get(c, []):
-                        wh, k, ev, tn, n = _seq_stats([s1, s2, s3])
-                        pitches = [a, b, c, d]
-                        stuff_avg = np.nanmean([pitch_metrics.get(p, {}).get("stuff", np.nan) for p in pitches])
-                        cmd_avg = np.nanmean([pitch_metrics.get(p, {}).get("cmd", np.nan) for p in pitches])
-                        score = _weighted_score(
-                            [_score_whiff(wh), _score_k(k), _score_ev(ev), tn],
-                            [0.35, 0.25, 0.25, 0.15],
-                        )
-                        results.append({"Seq": f"{a} → {b} → {c} → {d}", "Tunnel": tn, "Whiff%": wh,
-                                        "K%": k, "Avg EV": ev, "Stuff+": stuff_avg,
-                                        "Cmd+": cmd_avg, "Score": score, "Pairs": n})
-    else:
-        return []
+    for seq, s in seq_stats.items():
+        if s["n"] < min_n:
+            continue
+        whiff = s["wh"] / max(s["sw"], 1) * 100
+        k_pct = s["k"] / max(s["n"], 1) * 100
+        putaway = s["putaway"] / max(s["two_strike"], 1) * 100 if s["two_strike"] else np.nan
+        ev = s["ev_sum"] / s["ev_n"] if s["ev_n"] else np.nan
+        k_use = k_pct if pd.notna(k_pct) else putaway
+
+        # Tunnel = average across consecutive pairs (neutral 50 if missing)
+        tunnels = []
+        for a, b in zip(seq[:-1], seq[1:]):
+            tunnels.append(_pair_tunnel(a, b))
+        tunnel_avg = float(np.mean(tunnels)) if tunnels else np.nan
+
+        stuff_avg = np.nanmean([pitch_metrics.get(p, {}).get("stuff", np.nan) for p in seq])
+        cmd_avg = np.nanmean([pitch_metrics.get(p, {}).get("cmd", np.nan) for p in seq])
+        score = _weighted_score(
+            [_score_whiff(whiff), _score_k(k_use), _score_ev(ev), tunnel_avg],
+            [0.35, 0.25, 0.25, 0.15],
+        )
+        results.append({
+            "Seq": " → ".join(seq),
+            "Tunnel": tunnel_avg,
+            "Whiff%": whiff,
+            "K%": k_use,
+            "Avg EV": ev,
+            "Stuff+": stuff_avg,
+            "Cmd+": cmd_avg,
+            "Score": score,
+            "Pairs": s["n"],
+        })
+
     results.sort(key=lambda x: (x["Score"] if pd.notna(x["Score"]) else -1), reverse=True)
     return results[:top_n]
 
@@ -1043,16 +1067,17 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
         pitch_metrics = _build_pitch_metric_map(pdf, stuff_df, cmd_df)
         top_pairs = _rank_pairs(tunnel_df, pair_df, pitch_metrics, top_n=2)
         top_seq3 = _filter_redundant_sequences(
-            _rank_sequences(pair_df, pitch_metrics, length=3, top_n=5),
+            _rank_sequences_from_pdf(pdf, pitch_metrics, tunnel_df=tunnel_df, length=3, top_n=5),
             min_unique=2, max_keep=2,
         )
         top_seq4 = _filter_redundant_sequences(
-            _rank_sequences(pair_df, pitch_metrics, length=4, top_n=5),
+            _rank_sequences_from_pdf(pdf, pitch_metrics, tunnel_df=tunnel_df, length=4, top_n=5),
             min_unique=2, max_keep=2,
         )
 
         st.caption(
             "Outcomes-first (Whiff, K/Putaway, EV) with Tunnel as a secondary signal. "
+            "Sequences are ranked from actual in-game sequences; outcomes use the final pitch. "
             "Tunnel score = same-pair D1 percentile using commit separation (55%), plate separation (19%), "
             "release consistency (10%), release angle similarity (8%), movement divergence (6%), velo gap (2%). "
             "Pairs are unordered (FB/SL = SL/FB). Details in checkbox."
@@ -1545,17 +1570,18 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
     section_header("Best Pairs & Sequences (Composite)")
     st.caption(
         "Outcomes-first (Whiff, K/Putaway, EV) with Tunnel as a secondary signal. "
+        "Sequences are ranked from actual in-game sequences; outcomes use the final pitch. "
         "Tunnel score = same-pair D1 percentile using commit separation (55%), plate separation (19%), "
         "release consistency (10%), release angle similarity (8%), movement divergence (6%), velo gap (2%). "
         "Pairs are unordered (FB/SL = SL/FB). Details in checkbox."
     )
     top_pairs = _rank_pairs(tunnel_df, pair_df, pitch_metrics, top_n=2)
     top_seq3 = _filter_redundant_sequences(
-        _rank_sequences(pair_df, pitch_metrics, length=3, top_n=5),
+        _rank_sequences_from_pdf(pdf, pitch_metrics, tunnel_df=tunnel_df, length=3, top_n=5),
         min_unique=2, max_keep=2,
     )
     top_seq4 = _filter_redundant_sequences(
-        _rank_sequences(pair_df, pitch_metrics, length=4, top_n=5),
+        _rank_sequences_from_pdf(pdf, pitch_metrics, tunnel_df=tunnel_df, length=4, top_n=5),
         min_unique=2, max_keep=2,
     )
 
@@ -1656,7 +1682,7 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
     # SECTION A: Arsenal Overview with Improvement Targets
     # ═══════════════════════════════════════════
     section_header("Arsenal Overview & Improvement Targets")
-    st.caption("Current pitch profiles compared to database averages. Top 3 recommendations prioritize biggest gaps and tunnel impact.")
+    st.caption("Current pitch profiles compared to database averages. Top 3 lowest-percentile traits (Stuff+ impact).")
 
     try:
         recommendations = _compute_pitch_recommendations(pdf, data, tunnel_df)
@@ -1744,15 +1770,12 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
     if top_recs:
         st.markdown("**Top 3 Improvement Targets**")
         for rec in top_recs:
+            label = rec.get("label", rec.get("metric", "Metric"))
             pctl_str = f"{rec['good_pctl']:.0f}th pctl"
-            tun_str = f" — {rec['tunnel_benefit']}" if rec.get("tunnel_benefit") else ""
             st.markdown(
                 f'<div style="padding:6px 12px;margin:4px 0;font-size:12px;'
                 f'background:#fff8e1;border-radius:4px;border-left:3px solid #f59e0b;">'
-                f'<b>{rec["pitch"]}</b>: {rec["direction"]} '
-                f'(currently {rec["current"]} {rec["unit"]}, target {rec["target"]} {rec["unit"]}, '
-                f'{rec["delta"]}, {pctl_str})'
-                f'{tun_str}'
+                f'<b>{rec["pitch"]}</b>: {label} — {pctl_str}'
                 f'</div>', unsafe_allow_html=True)
     else:
         st.markdown(
