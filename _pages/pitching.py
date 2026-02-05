@@ -1308,19 +1308,19 @@ def _compute_pitch_recommendations(pdf, data, tunnel_df):
     # For HorzBreak the weight sign describes *magnitude* direction after
     # taking abs(); positive weight → more arm-side run is better.
     weights = {
-        "Fastball":       {"RelSpeed": 2.0, "InducedVertBreak": 2.5, "HorzBreak": 0.3, "Extension": 0.5, "VertApprAngle": 2.5, "SpinRate": 1.0},
-        "Sinker":         {"RelSpeed": 2.5, "InducedVertBreak": -0.5, "HorzBreak": 1.5, "Extension": 0.5, "VertApprAngle": -1.5, "SpinRate": 0.8},
-        "Cutter":         {"RelSpeed": 0.8, "InducedVertBreak": 0.3, "HorzBreak": -1.5, "Extension": -1.0, "VertApprAngle": -0.5, "SpinRate": 2.0},
-        "Slider":         {"RelSpeed": 1.0, "InducedVertBreak": -0.5, "HorzBreak": 1.0, "Extension": 0.3, "VertApprAngle": -2.5, "SpinRate": 1.5},
-        "Curveball":      {"RelSpeed": 1.5, "InducedVertBreak": -1.5, "HorzBreak": -1.5, "Extension": -1.5, "VertApprAngle": -2.0, "SpinRate": 0.5},
-        "Changeup":       {"RelSpeed": 0.5, "InducedVertBreak": 1.5, "HorzBreak": 1.0, "Extension": 0.5, "VertApprAngle": -2.5, "SpinRate": 1.0},
-        "Sweeper":        {"RelSpeed": 1.5, "InducedVertBreak": -1.0, "HorzBreak": 2.0, "Extension": 0.8, "VertApprAngle": -1.5, "SpinRate": 0.5},
-        "Splitter":       {"RelSpeed": 1.0, "InducedVertBreak": -2.0, "HorzBreak": 0.5, "Extension": 1.0, "VertApprAngle": -2.0, "SpinRate": -0.3},
-        "Knuckle Curve":  {"RelSpeed": 1.5, "InducedVertBreak": -1.5, "HorzBreak": -1.5, "Extension": -1.5, "VertApprAngle": -2.0, "SpinRate": 0.5},
+        "Fastball":       {"RelSpeed": 2.0, "InducedVertBreak": 2.5, "HorzBreak": 0.3, "Extension": 0.5, "SpinRate": 1.0},
+        "Sinker":         {"RelSpeed": 2.5, "InducedVertBreak": -0.5, "HorzBreak": 1.5, "Extension": 0.5, "SpinRate": 0.8},
+        "Cutter":         {"RelSpeed": 0.8, "InducedVertBreak": 0.3, "HorzBreak": -1.5, "Extension": -1.0, "SpinRate": 2.0},
+        "Slider":         {"RelSpeed": 1.0, "InducedVertBreak": -0.5, "HorzBreak": 1.0, "Extension": 0.3, "SpinRate": 1.5},
+        "Curveball":      {"RelSpeed": 1.5, "InducedVertBreak": -1.5, "HorzBreak": -1.5, "Extension": -1.5, "SpinRate": 0.5},
+        "Changeup":       {"RelSpeed": 0.5, "InducedVertBreak": 1.5, "HorzBreak": 1.0, "Extension": 0.5, "SpinRate": 1.0},
+        "Sweeper":        {"RelSpeed": 1.5, "InducedVertBreak": -1.0, "HorzBreak": 2.0, "Extension": 0.8, "SpinRate": 0.5},
+        "Splitter":       {"RelSpeed": 1.0, "InducedVertBreak": -2.0, "HorzBreak": 0.5, "Extension": 1.0, "SpinRate": -0.3},
+        "Knuckle Curve":  {"RelSpeed": 1.5, "InducedVertBreak": -1.5, "HorzBreak": -1.5, "Extension": -1.5, "SpinRate": 0.5},
     }
 
     base = data.dropna(subset=["RelSpeed", "TaggedPitchType"]).copy()
-    metrics = ["RelSpeed", "InducedVertBreak", "HorzBreak", "SpinRate", "VertApprAngle", "Extension"]
+    metrics = ["RelSpeed", "InducedVertBreak", "HorzBreak", "SpinRate", "Extension"]
 
     # Determine pitcher handedness sign for HorzBreak:
     # RHP → positive HB = arm-side run; LHP → negative HB = arm-side run.
@@ -1456,8 +1456,6 @@ def _compute_pitch_recommendations(pdf, data, tunnel_df):
                         tunnel_benefit = f"Helps separation vs {tunnel_partner}"
                     elif m == "RelSpeed":
                         tunnel_benefit = f"Improves velo gap vs {tunnel_partner}"
-                    elif m == "VertApprAngle":
-                        tunnel_benefit = f"Helps deception with {tunnel_partner}"
 
             # Priority: worse percentile + metric weight + tunnel bonus + magnitude
             tunnel_bonus = 0

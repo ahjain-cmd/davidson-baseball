@@ -895,6 +895,11 @@ def compute_stuff_baselines():
                         stats[metric] = (float(mean), float(std))
                 baseline_stats[pt] = stats
 
+            # Require handedness-normalized HB in precompute; otherwise recompute from population
+            has_hb_adj = any("HorzBreakAdj" in stats for stats in baseline_stats.values())
+            if not has_hb_adj:
+                base_df = pd.DataFrame()
+
             fb_velo_by_pitcher = {}
             if not fb_df.empty and "Pitcher" in fb_df.columns and "fb_velo" in fb_df.columns:
                 fb_velo_by_pitcher = dict(zip(fb_df["Pitcher"], fb_df["fb_velo"]))
@@ -908,13 +913,14 @@ def compute_stuff_baselines():
                     if pt and pd.notna(mean) and pd.notna(std):
                         velo_diff_stats[pt] = (float(mean), float(std))
 
-            return {
-                "baseline_stats": baseline_stats,
-                "fb_velo_by_pitcher": fb_velo_by_pitcher,
-                "velo_diff_stats": velo_diff_stats,
-            }
+            if not base_df.empty:
+                return {
+                    "baseline_stats": baseline_stats,
+                    "fb_velo_by_pitcher": fb_velo_by_pitcher,
+                    "velo_diff_stats": velo_diff_stats,
+                }
 
-    base_cols = ["RelSpeed", "InducedVertBreak", "HorzBreak", "Extension", "VertApprAngle", "SpinRate"]
+    base_cols = ["RelSpeed", "InducedVertBreak", "HorzBreakAdj", "Extension", "VertApprAngle", "SpinRate"]
     agg_exprs = []
     for col in base_cols:
         agg_exprs.append(f"AVG({col}) AS {col}_mean")
@@ -925,6 +931,7 @@ def compute_stuff_baselines():
         SELECT pt_norm AS TaggedPitchType, {agg_str}, COUNT(*) as n
         FROM (
             SELECT *,
+                CASE WHEN PitcherThrows IN ('Left','L') THEN -HorzBreak ELSE HorzBreak END AS HorzBreakAdj,
                 CASE TaggedPitchType
                     WHEN 'FourSeamFastBall' THEN 'Fastball'
                     WHEN 'OneSeamFastBall' THEN 'Sinker'
@@ -935,6 +942,7 @@ def compute_stuff_baselines():
             FROM trackman
             WHERE TaggedPitchType NOT IN ('Other','Undefined','Knuckleball')
               AND RelSpeed IS NOT NULL
+              AND PitcherThrows IS NOT NULL
         )
         GROUP BY pt_norm
     """

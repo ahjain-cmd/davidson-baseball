@@ -7,9 +7,9 @@ from scipy.stats import percentileofscore
 
 from config import (
     in_zone_mask, SWING_CALLS, filter_minor_pitches,
-    normalize_pitch_types, filter_davidson, MIN_PITCH_USAGE_PCT,
+    MIN_PITCH_USAGE_PCT, PLATE_SIDE_MAX, PLATE_HEIGHT_MIN, PLATE_HEIGHT_MAX,
 )
-from data.loader import load_davidson_data
+from data.loader import query_population
 
 
 def _compute_command_plus(pdf, data=None):
@@ -18,7 +18,12 @@ def _compute_command_plus(pdf, data=None):
     Returns empty DataFrame if insufficient data."""
     cmd_rows = []
     for pt in sorted(pdf["TaggedPitchType"].unique()):
-        ptd = pdf[pdf["TaggedPitchType"] == pt].dropna(subset=["PlateLocSide", "PlateLocHeight"])
+        ptd = pdf[pdf["TaggedPitchType"] == pt].dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
+        # Filter to valid location bounds to avoid outlier bias
+        ptd = ptd[
+            ptd["PlateLocSide"].between(-PLATE_SIDE_MAX, PLATE_SIDE_MAX)
+            & ptd["PlateLocHeight"].between(PLATE_HEIGHT_MIN, PLATE_HEIGHT_MAX)
+        ]
         if len(ptd) < 10:
             continue
         loc_std_h = ptd["PlateLocHeight"].std()
@@ -50,27 +55,57 @@ def _compute_command_plus(pdf, data=None):
     if not cmd_rows:
         return pd.DataFrame()
     cmd_df = pd.DataFrame(cmd_rows)
-    dav_data = data if data is not None else load_davidson_data()
-    all_dav = filter_davidson(dav_data, role="pitcher")
-    all_dav = normalize_pitch_types(all_dav)
+    # NCAA D1 baseline via population table (DuckDB)
+    pitch_types = sorted(cmd_df["Pitch"].unique())
+    if pitch_types:
+        pt_sql = ", ".join(f"'{p.replace(chr(39), chr(39)+chr(39))}'" for p in pitch_types)
+        sql = f"""
+            WITH t AS (
+                SELECT Pitcher,
+                       PlateLocSide,
+                       PlateLocHeight,
+                       CASE TaggedPitchType
+                           WHEN 'FourSeamFastBall' THEN 'Fastball'
+                           WHEN 'OneSeamFastBall' THEN 'Sinker'
+                           WHEN 'TwoSeamFastBall' THEN 'Sinker'
+                           WHEN 'ChangeUp' THEN 'Changeup'
+                           ELSE TaggedPitchType
+                       END AS pt_norm
+                FROM trackman
+                WHERE TaggedPitchType NOT IN ('Other','Undefined','Knuckleball')
+                  AND PlateLocSide BETWEEN -{PLATE_SIDE_MAX} AND {PLATE_SIDE_MAX}
+                  AND PlateLocHeight BETWEEN {PLATE_HEIGHT_MIN} AND {PLATE_HEIGHT_MAX}
+            )
+            SELECT pt_norm AS PitchType,
+                   Pitcher,
+                   STDDEV(PlateLocHeight) AS std_h,
+                   STDDEV(PlateLocSide) AS std_s,
+                   COUNT(*) AS n
+            FROM t
+            WHERE pt_norm IN ({pt_sql})
+            GROUP BY pt_norm, Pitcher
+            HAVING COUNT(*) >= 10
+        """
+        baseline_df = query_population(sql)
+    else:
+        baseline_df = pd.DataFrame()
+
     cmd_scores = []
     for _, row in cmd_df.iterrows():
         pt = row["Pitch"]
-        all_pt = all_dav[all_dav["TaggedPitchType"] == pt].dropna(
-            subset=["PlateLocSide", "PlateLocHeight"])
-        if len(all_pt) < 20:
+        if baseline_df.empty:
             cmd_scores.append(100.0)
             continue
-        pitcher_spreads = []
-        for p, pg in all_pt.groupby("Pitcher"):
-            if len(pg) < 10:
-                continue
-            sp = np.sqrt(pg["PlateLocHeight"].std()**2 + pg["PlateLocSide"].std()**2)
-            pitcher_spreads.append(sp)
-        if len(pitcher_spreads) < 3:
+        pt_df = baseline_df[baseline_df["PitchType"] == pt].copy()
+        if pt_df.empty:
             cmd_scores.append(100.0)
             continue
-        pctl = 100 - percentileofscore(pitcher_spreads, row["Loc Spread (ft)"], kind="rank")
+        spreads = np.sqrt(pt_df["std_h"].astype(float)**2 + pt_df["std_s"].astype(float)**2)
+        spreads = spreads.replace([np.inf, -np.inf], np.nan).dropna()
+        if len(spreads) < 3 or pd.isna(row["Loc Spread (ft)"]):
+            cmd_scores.append(100.0)
+            continue
+        pctl = 100 - percentileofscore(spreads, row["Loc Spread (ft)"], kind="rank")
         cmd_scores.append(round(100 + (pctl - 50) * 0.4, 0))
     cmd_df["Command+"] = cmd_scores
     cmd_df = cmd_df.sort_values("Command+", ascending=False)

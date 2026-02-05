@@ -325,7 +325,7 @@ def _create_pitcher_stats_pop(con):
 
 
 def _create_stuff_baselines(con):
-    base_cols = ["RelSpeed", "InducedVertBreak", "HorzBreak", "Extension", "VertApprAngle", "SpinRate"]
+    base_cols = ["RelSpeed", "InducedVertBreak", "HorzBreakAdj", "Extension", "VertApprAngle", "SpinRate"]
     agg_exprs = []
     for col in base_cols:
         agg_exprs.append(f"AVG({col}) AS {col}_mean")
@@ -336,6 +336,7 @@ def _create_stuff_baselines(con):
         SELECT pt_norm AS TaggedPitchType, {agg_str}, COUNT(*) as n
         FROM (
             SELECT *,
+                CASE WHEN PitcherThrows IN ('Left','L') THEN -HorzBreak ELSE HorzBreak END AS HorzBreakAdj,
                 CASE TaggedPitchType
                     WHEN 'FourSeamFastBall' THEN 'Fastball'
                     WHEN 'OneSeamFastBall' THEN 'Sinker'
@@ -346,6 +347,7 @@ def _create_stuff_baselines(con):
             FROM trackman
             WHERE TaggedPitchType NOT IN ('Other','Undefined','Knuckleball')
               AND RelSpeed IS NOT NULL
+              AND PitcherThrows IS NOT NULL
         )
         GROUP BY pt_norm
     """

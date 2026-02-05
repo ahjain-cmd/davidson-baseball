@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 
 from data.population import compute_stuff_baselines
+from config import normalize_pitch_types
 
 
 def _compute_stuff_plus(data, baseline=None, baselines_dict=None):
@@ -24,7 +25,7 @@ def _compute_stuff_plus(data, baseline=None, baselines_dict=None):
     if "StuffPlus" in data.columns:
         return data
 
-    base_df = data.copy()
+    base_df = normalize_pitch_types(data.copy())
     df = base_df.dropna(subset=["RelSpeed", "TaggedPitchType"]).copy()
     if df.empty:
         base_df["StuffPlus"] = np.nan
@@ -52,6 +53,15 @@ def _compute_stuff_plus(data, baseline=None, baselines_dict=None):
     default_w = {"RelSpeed": 1.0, "InducedVertBreak": 1.0, "HorzBreak": 1.0, "Extension": 1.0, "VertApprAngle": 1.0, "SpinRate": 1.0}
 
     stuff_scores = []
+    # Handedness-normalized horizontal break (arm-side positive for both hands)
+    if "HorzBreak" in df.columns:
+        throws = df.get("PitcherThrows")
+        if throws is not None:
+            is_l = throws.astype(str).str.lower().str.startswith("l")
+            df["_HB_ADJ"] = np.where(is_l, -df["HorzBreak"].astype(float), df["HorzBreak"].astype(float))
+        else:
+            df["_HB_ADJ"] = df["HorzBreak"].astype(float)
+
     for pt, grp in df.groupby("TaggedPitchType"):
         w = weights.get(pt, default_w)
         bstats = baseline_stats.get(pt, {})
@@ -70,12 +80,20 @@ def _compute_stuff_plus(data, baseline=None, baselines_dict=None):
                 z_total += z.fillna(0) * weight
                 w_total += abs(weight)
                 continue
-            if col not in grp.columns or col not in bstats:
-                continue
-            mu, sigma = bstats[col]
+            if col == "HorzBreak":
+                # Use handedness-normalized baseline + values
+                bkey = "HorzBreakAdj" if "HorzBreakAdj" in bstats else "HorzBreak"
+                if bkey not in bstats or "_HB_ADJ" not in grp.columns:
+                    continue
+                mu, sigma = bstats[bkey]
+                vals = grp["_HB_ADJ"].astype(float)
+            else:
+                if col not in grp.columns or col not in bstats:
+                    continue
+                mu, sigma = bstats[col]
+                vals = grp[col].astype(float)
             if sigma == 0 or pd.isna(sigma) or pd.isna(mu):
                 continue
-            vals = grp[col].astype(float)
             z = (vals - mu) / sigma
             z_total += z.fillna(0) * weight
             w_total += abs(weight)
