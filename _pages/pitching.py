@@ -180,13 +180,20 @@ def _rank_pairs(tunnel_df, pair_df, pitch_metrics, top_n=2):
 
     out = list(best_by_key.values())
     out = sorted(out, key=lambda x: (x["Score"] if pd.notna(x["Score"]) else -1), reverse=True)
-    for r in out:
-        r.pop("_key", None)
+
+    def _pair_parts(label):
+        if " / " in label:
+            parts = label.split(" / ")
+        elif " → " in label:
+            parts = label.split(" → ")
+        else:
+            parts = [label]
+        return [p.strip() for p in parts if p.strip()]
 
     # Prioritize diverse pairs: ensure at least one different-pitch pair in top results
     # Split into different-pitch and same-pitch pairs
-    different_pairs = [r for r in out if " → " in r["Pair"] and r["Pair"].split(" → ")[0] != r["Pair"].split(" → ")[1]]
-    same_pairs = [r for r in out if " → " in r["Pair"] and r["Pair"].split(" → ")[0] == r["Pair"].split(" → ")[1]]
+    different_pairs = [r for r in out if len(_pair_parts(r["Pair"])) == 2 and _pair_parts(r["Pair"])[0] != _pair_parts(r["Pair"])[1]]
+    same_pairs = [r for r in out if len(_pair_parts(r["Pair"])) == 2 and _pair_parts(r["Pair"])[0] == _pair_parts(r["Pair"])[1]]
 
     # Build result: prioritize different-pitch pairs, but include same-pitch if score is significantly higher
     result = []
@@ -208,6 +215,8 @@ def _rank_pairs(tunnel_df, pair_df, pitch_metrics, top_n=2):
         # Only same-pitch pairs available
         result = same_pairs[:top_n]
 
+    for r in out:
+        r.pop("_key", None)
     return result[:top_n]
 
 
