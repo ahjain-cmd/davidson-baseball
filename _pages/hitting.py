@@ -1169,7 +1169,24 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
         # Use only the in-zone 3x3 for display
         should_in = should_swing[1:4, 1:4]
         actual_in = actually_swings[1:4, 1:4]
-        mismatch_in = mismatch[1:4, 1:4]
+
+        # Convert both maps to within-hitter percentiles for apples-to-apples mismatch
+        def _to_percentiles(mat):
+            vals = mat[~np.isnan(mat)]
+            if len(vals) == 0:
+                return mat.copy()
+            out = mat.copy()
+            for vi in range(mat.shape[0]):
+                for hi in range(mat.shape[1]):
+                    v = mat[vi, hi]
+                    if pd.isna(v):
+                        continue
+                    out[vi, hi] = (np.sum(vals <= v) / len(vals)) * 100
+            return out
+
+        should_pct = _to_percentiles(should_in)
+        swing_pct = _to_percentiles(actual_in)
+        mismatch_in = swing_pct - should_pct
 
         map1, map2, map3 = st.columns(3)
         def _add_zone_box_3x3(fig):
@@ -1183,13 +1200,13 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
 
         with map1:
             st.markdown('<div class="sdl-title">Should Swing</div>'
-                        '<div class="sdl-sub">Score (0–100). Green = good outcomes when swinging here.</div>',
+                        '<div class="sdl-sub">Percentile (0–100) across zones. Green = best swing quality.</div>',
                         unsafe_allow_html=True)
             fig_should = px.imshow(
-                np.flipud(should_in), text_auto=".0f",
+                np.flipud(should_pct), text_auto=".0f",
                 color_continuous_scale=[[0, "#ef4444"], [0.5, "#fbbf24"], [1, "#22c55e"]],
                 x=h_labels_in, y=list(reversed(v_labels_in)),
-                labels=dict(color="Score"), aspect="auto",
+                labels=dict(color="Pct"), aspect="auto",
                 zmin=0, zmax=100,
             )
             fig_should.update_traces(textfont=dict(size=14))
@@ -1199,13 +1216,13 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
 
         with map2:
             st.markdown('<div class="sdl-title">Actually Swings</div>'
-                        '<div class="sdl-sub">Swing% by zone cell (0–100).</div>',
+                        '<div class="sdl-sub">Swing percentile (0–100) across zones.</div>',
                         unsafe_allow_html=True)
             fig_actual = px.imshow(
-                np.flipud(actual_in), text_auto=".0f",
+                np.flipud(swing_pct), text_auto=".0f",
                 color_continuous_scale="YlOrRd",
                 x=h_labels_in, y=list(reversed(v_labels_in)),
-                labels=dict(color="Swing%"), aspect="auto",
+                labels=dict(color="Pct"), aspect="auto",
                 zmin=0, zmax=100,
             )
             fig_actual.update_traces(textfont=dict(size=14))
@@ -1215,7 +1232,7 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
 
         with map3:
             st.markdown('<div class="sdl-title">Mismatch</div>'
-                        '<div class="sdl-sub">Over/Under (percentage points). Red = swings too much, Blue = should swing more.</div>',
+                        '<div class="sdl-sub">Percentile gap (Swing − Should). Red = swings too much, Blue = should swing more.</div>',
                         unsafe_allow_html=True)
             mm_rounded = np.round(mismatch_in)
             mm_text = []
@@ -1237,7 +1254,7 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
             fig_mm.update_layout(height=320, coloraxis_showscale=False, **CHART_LAYOUT)
             _plotly_chart_bats(fig_mm, use_container_width=True, key="sdl_mismatch")
 
-        # Summary blurb: where to swing more/less (largest mismatches)
+        # Summary blurb: where to swing more/less (largest percentile mismatches)
         cells = []
         for vi in range(3):
             for hi in range(3):
@@ -1250,6 +1267,8 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
                     "m": float(val),
                 })
         if cells:
+            MISMATCH_MIN = 10
+            cells = [c for c in cells if abs(c["m"]) >= MISMATCH_MIN]
             more = sorted([c for c in cells if c["m"] < 0], key=lambda x: x["m"])[:2]
             less = sorted([c for c in cells if c["m"] > 0], key=lambda x: -x["m"])[:2]
 
