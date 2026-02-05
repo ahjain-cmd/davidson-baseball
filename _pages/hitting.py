@@ -14,7 +14,7 @@ from config import (
     in_zone_mask, is_barrel_mask, display_name, get_percentile, _is_position_player,
 )
 from data.loader import get_all_seasons, _load_truemedia, _tm_player, _safe_val, _safe_pct, _safe_num, _tm_pctile
-from data.stats import compute_batter_stats, _build_batter_zones
+from data.stats import compute_batter_stats, _build_batter_zones, compute_swing_path_metrics
 from data.population import compute_batter_stats_pop
 from viz.layout import CHART_LAYOUT, section_header
 from viz.charts import (
@@ -356,61 +356,18 @@ def _hitter_card_content(data, batter, season_filter, bdf, batted, pr, all_batte
 
     with col_swing:
         section_header("Swing Path Profile")
-        inplay_full = in_play.dropna(subset=["Angle", "ExitSpeed", "PlateLocHeight"]).copy()
-        if len(inplay_full) >= 10:
-            from scipy import stats as sp_stats
-            ev_75 = inplay_full["ExitSpeed"].quantile(0.75)
-            hard_hit = inplay_full[inplay_full["ExitSpeed"] >= ev_75].copy()
-            attack_angle = hard_hit["Angle"].median()
-            avg_la_all = inplay_full["Angle"].median()
-
-            # Vertical path adjustment
-            if len(hard_hit) >= 3:
-                v_slope, v_int, _, _, _ = sp_stats.linregress(
-                    hard_hit["PlateLocHeight"].values, hard_hit["Angle"].values)
-                mid_zone_aa = v_int + v_slope * 2.5
-            else:
-                v_slope = 0
-                mid_zone_aa = attack_angle
-
-            # Bat speed proxy — empirical model calibrated to sensor data
-            # EV ≈ 0.2 * pitch_speed + 1.2 * bat_speed
-            bat_speed_avg = np.nan
-            if "RelSpeed" in hard_hit.columns and hard_hit["RelSpeed"].notna().any():
-                hard_hit["BatSpeedProxy"] = (hard_hit["ExitSpeed"] - 0.2 * hard_hit["RelSpeed"]) / 1.2
-                bat_speed_avg = hard_hit["BatSpeedProxy"].mean()
-
-            # Contact depth
-            depth_label = None
-            if "EffectiveVelo" in hard_hit.columns and hard_hit["EffectiveVelo"].notna().any():
-                contact_depth = (hard_hit["EffectiveVelo"] - hard_hit["RelSpeed"]).mean()
-                if contact_depth > 0:
-                    depth_label = "Out Front"
-                elif contact_depth > -1.5:
-                    depth_label = "Neutral"
-                else:
-                    depth_label = "Deep Contact"
-
-            # Classification
-            if mid_zone_aa > 14:
-                swing_type = "Uppercut / Lift"
-            elif mid_zone_aa > 6:
-                swing_type = "Positive / Line-Drive"
-            elif mid_zone_aa > -2:
-                swing_type = "Level"
-            else:
-                swing_type = "Negative / Chop"
-
+        sp = compute_swing_path_metrics(bdf)
+        if sp is not None:
             # Display as metric cards
             cards = [
-                ("Attack Angle", f"{mid_zone_aa:.1f}\u00b0", swing_type),
-                ("Path Adjust", f"{v_slope:.1f}\u00b0/ft", "Low = flat, High = adaptable"),
-                ("Median LA", f"{avg_la_all:.1f}\u00b0", f"Hard-hit: {attack_angle:.1f}\u00b0"),
+                ("Attack Angle", f"{sp['attack_angle']:.1f}\u00b0", sp.get("swing_type", "")),
+                ("Path Adjust", f"{sp['path_adjust']:.1f}\u00b0/ft", "Low = flat, High = adaptable"),
+                ("Median LA", f"{sp['avg_la_all']:.1f}\u00b0", f"Hard-hit: {sp['attack_angle_raw']:.1f}\u00b0"),
             ]
-            if not pd.isna(bat_speed_avg):
-                cards.append(("Bat Speed (est)", f"{bat_speed_avg:.1f} mph", "Top-25% EV proxy"))
-            if depth_label:
-                cards.append(("Contact Depth", depth_label, "Where bat meets ball"))
+            if not pd.isna(sp.get("bat_speed_avg", np.nan)):
+                cards.append(("Bat Speed (est)", f"{sp['bat_speed_avg']:.1f} mph", "Top-25% EV proxy"))
+            if sp.get("depth_label"):
+                cards.append(("Contact Depth", sp["depth_label"], "Where bat meets ball"))
 
             for label, val, desc in cards:
                 st.markdown(
@@ -1117,7 +1074,11 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
     # ═══════════════════════════════════════════
     st.markdown("---")
     section_header("Swing Decision Zone Maps")
-    st.caption("Where should this hitter swing vs. where they actually swing? Mismatch = coaching opportunity.")
+    st.caption(
+        "Where should this hitter swing vs. where they actually swing? Mismatch = coaching opportunity. "
+        "Should Swing score blends EV (45%), contact rate (35%), and in‑play rate (20%), "
+        "then shrinks toward 50 with small samples (based on swing count)."
+    )
 
     loc_data = bdf.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
     _bs = safe_mode(bdf["BatterSide"], "Right") if "BatterSide" in bdf.columns else "Right"
@@ -1150,10 +1111,14 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
                 cell_whiffs = cell[cell["PitchCall"] == "StrikeSwinging"]
                 if len(cell_swings) >= 2:
                     contact_rate = 1 - len(cell_whiffs) / len(cell_swings) if len(cell_swings) > 0 else 0
+                    inplay_rate = len(cell_ip) / len(cell_swings) if len(cell_swings) > 0 else 0
                     avg_ev = cell_ip["ExitSpeed"].mean() if len(cell_ip) >= 2 else 70
                     ev_score = min(max((avg_ev - 70) / 30 * 100, 0), 100) if not pd.isna(avg_ev) else 30
                     contact_score = contact_rate * 100
-                    should_score = ev_score * 0.6 + contact_score * 0.4
+                    inplay_score = inplay_rate * 100
+                    raw_should = ev_score * 0.45 + contact_score * 0.35 + inplay_score * 0.20
+                    shrink_w = min(len(cell_swings) / 15, 1.0)
+                    should_score = 50 * (1 - shrink_w) + raw_should * shrink_w
                     should_swing[vi, hi] = should_score
                     mismatch[vi, hi] = swing_rate - should_score
 

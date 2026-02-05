@@ -4,6 +4,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from scipy.stats import percentileofscore
+from scipy import stats as sp_stats
 
 from config import (
     ZONE_HEIGHT_BOT,
@@ -19,6 +20,94 @@ from config import (
     is_barrel_mask,
     normalize_pitch_types,
 )
+
+
+def compute_swing_path_metrics(bdf):
+    """Compute attack-angle proxy and swing path metrics from pitch-level data.
+
+    Shared by Davidson hitters and opposition hitters to ensure identical logic.
+    """
+    if bdf is None or bdf.empty or "PitchCall" not in bdf.columns:
+        return None
+
+    inplay_full = bdf[bdf["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"]).copy()
+    inplay_la = inplay_full.dropna(subset=["Angle"]).copy()
+    if len(inplay_la) < 10:
+        return None
+
+    ev_75 = inplay_la["ExitSpeed"].quantile(0.75)
+    hard_hit = inplay_la[inplay_la["ExitSpeed"] >= ev_75].copy()
+    if len(hard_hit) < 5:
+        return None
+
+    sp = {}
+    attack_angle_raw = hard_hit["Angle"].median()
+    avg_la_all = inplay_la["Angle"].median()
+
+    # Vertical path adjustment: LA vs pitch height, evaluated at mid-zone (~2.5 ft)
+    mid_zone_aa = attack_angle_raw
+    v_slope = 0.0
+    hh_loc = hard_hit.dropna(subset=["PlateLocHeight"]).copy()
+    if len(hh_loc) >= 8:
+        v_slope, v_int, _, _, _ = sp_stats.linregress(
+            hh_loc["PlateLocHeight"].values, hh_loc["Angle"].values
+        )
+        mid_zone_aa = v_int + v_slope * 2.5
+
+    sp["attack_angle"] = mid_zone_aa
+    sp["attack_angle_raw"] = attack_angle_raw
+    sp["avg_la_all"] = avg_la_all
+    sp["path_adjust"] = v_slope  # degrees per foot
+    sp["n_inplay"] = len(inplay_full)
+    sp["n_hard_hit"] = len(hard_hit)
+
+    # Swing type classification
+    aa = sp["attack_angle"]
+    if aa > 14:
+        sp["swing_type"] = "Uppercut / Lift"
+    elif aa > 6:
+        sp["swing_type"] = "Positive / Line-Drive"
+    elif aa > -2:
+        sp["swing_type"] = "Level"
+    else:
+        sp["swing_type"] = "Negative / Chop"
+
+    # Bat speed proxy — empirical: EV ≈ 0.2*PS + 1.2*BS
+    if "RelSpeed" in hard_hit.columns:
+        hh_sp = hard_hit.dropna(subset=["RelSpeed"])
+        if len(hh_sp) > 0:
+            bs = (hh_sp["ExitSpeed"] - 0.2 * hh_sp["RelSpeed"]) / 1.2
+            sp["bat_speed_avg"] = bs.mean()
+            sp["bat_speed_max"] = bs.max()
+
+    # Contact depth
+    if "EffectiveVelo" in hard_hit.columns and "RelSpeed" in hard_hit.columns:
+        cd_df = hard_hit.dropna(subset=["EffectiveVelo", "RelSpeed"])
+        if len(cd_df) > 0:
+            depth_val = (cd_df["EffectiveVelo"] - cd_df["RelSpeed"]).mean()
+            sp["contact_depth"] = depth_val
+            sp["depth_label"] = "Out Front" if depth_val > 1.5 else ("Deep Contact" if depth_val < -1.5 else "Neutral")
+        else:
+            sp["contact_depth"] = np.nan
+            sp["depth_label"] = "Unknown"
+
+    # Per-pitch-type swing path
+    sp_by_pt = {}
+    if "TaggedPitchType" in hard_hit.columns:
+        for pt_name, ptg in hard_hit.groupby("TaggedPitchType"):
+            if len(ptg) < 3:
+                continue
+            pt_ip = ptg.dropna(subset=["ExitSpeed"])
+            sp_by_pt[pt_name] = {
+                "hard_hit_la": ptg["Angle"].median(),
+                "hard_hit_ev": pt_ip["ExitSpeed"].mean() if len(pt_ip) > 0 else np.nan,
+            }
+            if "RelSpeed" in ptg.columns:
+                ptg_sp = ptg.dropna(subset=["RelSpeed"])
+                if len(ptg_sp) > 0:
+                    sp_by_pt[pt_name]["bat_speed"] = ((ptg_sp["ExitSpeed"] - 0.2 * ptg_sp["RelSpeed"]) / 1.2).mean()
+    sp["by_pitch_type"] = sp_by_pt
+    return sp
 
 
 @st.cache_data(show_spinner=False)

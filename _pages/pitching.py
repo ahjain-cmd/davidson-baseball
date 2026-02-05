@@ -112,7 +112,9 @@ def _pair_stats(pair_df, a, b):
 
 
 def _rank_pairs(tunnel_df, pair_df, pitch_metrics, top_n=2):
-    """Rank pitch pairs using outcomes-first score; include same-pitch pairs."""
+    """Rank pitch pairs using outcomes-first score; include same-pitch pairs.
+    Pairs are treated as unordered (FB/SL == SL/FB).
+    """
     if not isinstance(pair_df, pd.DataFrame) or pair_df.empty:
         return []
     # candidate pairs from pair_df (includes same-pitch)
@@ -147,16 +149,14 @@ def _rank_pairs(tunnel_df, pair_df, pitch_metrics, top_n=2):
         ev = ps.get("ev", np.nan)
         count_ab = ps.get("count_ab", 0)
         count_ba = ps.get("count_ba", 0)
-        if count_ab == count_ba:
-            label_a, label_b = sorted([a, b])
-        else:
-            label_a, label_b = (a, b) if count_ab >= count_ba else (b, a)
+        # Always present pairs as unordered to avoid duplication
+        label_a, label_b = sorted([a, b])
         score = _weighted_score(
             [_score_whiff(whiff), _score_k(k_pct), _score_ev(ev), tunnel],
             [0.35, 0.25, 0.25, 0.15],
         )
         row = {
-            "Pair": f"{label_a} → {label_b}",
+            "Pair": f"{label_a} / {label_b}",
             "Tunnel": tunnel,
             "Whiff%": whiff,
             "K%": k_pct,
@@ -1041,7 +1041,12 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
             min_unique=2, max_keep=2,
         )
 
-        st.caption("Outcomes-first (Whiff, K/Putaway, EV) with Tunnel as a secondary signal. Details in checkbox.")
+        st.caption(
+            "Outcomes-first (Whiff, K/Putaway, EV) with Tunnel as a secondary signal. "
+            "Tunnel score = same-pair D1 percentile using commit separation (55%), plate separation (19%), "
+            "release consistency (10%), release angle similarity (8%), movement divergence (6%), velo gap (2%). "
+            "Pairs are unordered (FB/SL = SL/FB). Details in checkbox."
+        )
 
         if top_pairs:
             top_pairs = _assign_tactical_tags(top_pairs)
@@ -1152,13 +1157,12 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
                     "pitches are when hitter must decide to swing (55% weight); (2) **Plate separation** — "
                     "how much pitches diverge at the plate (19%); (3) **Release point consistency** (10%); "
                     "(4) **Release angle similarity** (8%); (5) **Movement divergence** (6%); (6) **Velo gap** (2%). "
-                    "Graded vs all D1 pitchers throwing the same pitch pair."
+                    "Percentile vs all D1 pitchers throwing the same pitch pair."
                 )
                 tunnel_rows = []
                 for _, r in tunnel_sorted.iterrows():
                     tunnel_rows.append({
-                        "Pair": f"{r['Pitch A']} → {r['Pitch B']}",
-                        "Grade": r.get("Grade", "-"),
+                        "Pair": f"{r['Pitch A']} / {r['Pitch B']}",
                         "Tunnel Score": f"{r['Tunnel Score']:.0f}" if pd.notna(r.get("Tunnel Score")) else "-",
                         "Commit Sep": f"{r['Commit Sep (in)']:.1f}\"" if pd.notna(r.get("Commit Sep (in)")) else "-",
                         "Plate Sep": f"{r['Plate Sep (in)']:.1f}\"" if pd.notna(r.get("Plate Sep (in)")) else "-",
@@ -1336,8 +1340,9 @@ def _compute_pitch_recommendations(pdf, data, tunnel_df):
     if isinstance(tunnel_df, pd.DataFrame) and not tunnel_df.empty:
         for _, trow in tunnel_df.iterrows():
             a, b = trow["Pitch A"], trow["Pitch B"]
-            tunnel_partners.setdefault(a, []).append((b, trow.get("Grade", "-"), trow.get("Tunnel Score", np.nan)))
-            tunnel_partners.setdefault(b, []).append((a, trow.get("Grade", "-"), trow.get("Tunnel Score", np.nan)))
+            score = pd.to_numeric(trow.get("Tunnel Score"), errors="coerce")
+            tunnel_partners.setdefault(a, []).append((b, score))
+            tunnel_partners.setdefault(b, []).append((a, score))
 
     recommendations = []
     for pt in sorted(pdf["TaggedPitchType"].unique()):
@@ -1426,27 +1431,30 @@ def _compute_pitch_recommendations(pdf, data, tunnel_df):
                 display_target = target_abs
                 delta_display = delta_val
 
-            # Cross-reference with tunnel partners
+            # Cross-reference with tunnel partners (no grades shown)
             tunnel_benefit = ""
             tunnel_partner = ""
-            tunnel_grade = ""
+            tunnel_score = np.nan
             partners = tunnel_partners.get(pt, [])
             if partners:
-                # Find a partner where improving this metric would help
-                for partner_pt, tgrade, tscore in partners:
-                    if tgrade in ("D", "F", "C"):
-                        if m == "InducedVertBreak":
-                            tunnel_benefit = f"Improves tunnel with {partner_pt} (currently grade {tgrade})"
-                        elif m == "HorzBreak":
-                            tunnel_benefit = f"Creates better separation from {partner_pt} (currently grade {tgrade})"
-                        elif m == "RelSpeed":
-                            tunnel_benefit = f"Affects velo gap with {partner_pt} (currently grade {tgrade})"
-                        elif m == "VertApprAngle":
-                            tunnel_benefit = f"Helps deception against {partner_pt} (currently grade {tgrade})"
-                        if tunnel_benefit:
-                            tunnel_partner = partner_pt
-                            tunnel_grade = tgrade
-                            break
+                # Choose lowest tunnel score partner (biggest deception need)
+                partners_sorted = sorted([p for p in partners if pd.notna(p[1])], key=lambda x: x[1])
+                if partners_sorted:
+                    tunnel_partner, tunnel_score = partners_sorted[0]
+                    if m == "InducedVertBreak":
+                        tunnel_benefit = f"Helps deception with {tunnel_partner}"
+                    elif m == "HorzBreak":
+                        tunnel_benefit = f"Helps separation vs {tunnel_partner}"
+                    elif m == "RelSpeed":
+                        tunnel_benefit = f"Improves velo gap vs {tunnel_partner}"
+                    elif m == "VertApprAngle":
+                        tunnel_benefit = f"Helps deception with {tunnel_partner}"
+
+            # Priority: worse percentile + metric weight + tunnel bonus + magnitude
+            tunnel_bonus = 0
+            if pd.notna(tunnel_score) and tunnel_score < 55:
+                tunnel_bonus = (55 - tunnel_score) * 0.5
+            priority = (60 - g["good_pctl"]) * g["abs_weight"] + tunnel_bonus + min(abs(delta_display), 5)
 
             recommendations.append({
                 "pitch": pt,
@@ -1460,7 +1468,8 @@ def _compute_pitch_recommendations(pdf, data, tunnel_df):
                 "good_pctl": round(g["good_pctl"], 0),
                 "tunnel_benefit": tunnel_benefit,
                 "tunnel_partner": tunnel_partner,
-                "tunnel_grade": tunnel_grade,
+                "tunnel_score": tunnel_score,
+                "priority": priority,
             })
 
     return recommendations
@@ -1503,7 +1512,12 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
     # BEST PAIRS & SEQUENCES (COMPOSITE)
     # ═══════════════════════════════════════════
     section_header("Best Pairs & Sequences (Composite)")
-    st.caption("Outcomes-first (Whiff, K/Putaway, EV) with Tunnel as a secondary signal. Details in checkbox.")
+    st.caption(
+        "Outcomes-first (Whiff, K/Putaway, EV) with Tunnel as a secondary signal. "
+        "Tunnel score = same-pair D1 percentile using commit separation (55%), plate separation (19%), "
+        "release consistency (10%), release angle similarity (8%), movement divergence (6%), velo gap (2%). "
+        "Pairs are unordered (FB/SL = SL/FB). Details in checkbox."
+    )
     top_pairs = _rank_pairs(tunnel_df, pair_df, pitch_metrics, top_n=2)
     top_seq3 = _filter_redundant_sequences(
         _rank_sequences(pair_df, pitch_metrics, length=3, top_n=5),
@@ -1614,15 +1628,13 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
     # SECTION A: Arsenal Overview with Improvement Targets
     # ═══════════════════════════════════════════
     section_header("Arsenal Overview & Improvement Targets")
-    st.caption("Current pitch profiles compared to database averages. Recommendations based on Stuff+ weight directions and tunnel partners.")
+    st.caption("Current pitch profiles compared to database averages. Top 3 recommendations prioritize biggest gaps and tunnel impact.")
 
     try:
         recommendations = _compute_pitch_recommendations(pdf, data, tunnel_df)
     except Exception:
         recommendations = []
-    rec_by_pitch = {}
-    for r in recommendations:
-        rec_by_pitch.setdefault(r["pitch"], []).append(r)
+    top_recs = sorted(recommendations, key=lambda r: r.get("priority", 0), reverse=True)[:3]
 
     # Split toggle for outcomes/targets
     split_mode = st.radio("Split View", ["All", "vs LHB", "vs RHB"], horizontal=True, key="pl_split_view")
@@ -1698,34 +1710,28 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
         _outcome_cell(oc2, "CSW%", csw_pct)
         _outcome_cell(oc3, "HardHit%", hh_pct)
 
-        # Recommendations for this pitch
-        recs = rec_by_pitch.get(pt, [])
-        if recs:
-            for rec in recs:
-                pctl_str = f"{rec['good_pctl']:.0f}th pctl"
-                basis_str = f"Target basis: D1 {pctl_str}"
-                proj_grade = ""
-                if rec.get("tunnel_grade"):
-                    next_grade = {"F": "D", "D": "C", "C": "B", "B": "A"}.get(rec["tunnel_grade"], rec["tunnel_grade"])
-                    proj_grade = f"Tunnel impact: {rec['tunnel_grade']} → {next_grade} (heuristic)"
-                tun_str = f" — {rec['tunnel_benefit']}" if rec['tunnel_benefit'] else ""
-                st.markdown(
-                    f'<div style="padding:4px 12px;margin:2px 0;font-size:12px;'
-                    f'background:#fff8e1;border-radius:4px;border-left:3px solid #f59e0b;">'
-                    f'<b>{rec["direction"].capitalize()}</b>: '
-                    f'currently {rec["current"]} {rec["unit"]} ({pctl_str}), '
-                    f'target {rec["target"]} {rec["unit"]} ({rec["delta"]})'
-                    f'{tun_str}'
-                    f'<div style="font-size:11px;color:#555;margin-top:2px;">{basis_str}'
-                    f'{(" · " + proj_grade) if proj_grade else ""}</div>'
-                    f'</div>', unsafe_allow_html=True)
-        else:
-            st.markdown(
-                '<div style="padding:4px 12px;margin:2px 0;font-size:12px;'
-                'background:#e8f5e9;border-radius:4px;border-left:3px solid #22c55e;">'
-                'No major improvement targets — pitch metrics are solid relative to peers.'
-                '</div>', unsafe_allow_html=True)
+        # No per-pitch recs here; summary shown below
 
+    # Top 3 improvement recommendations (tunnel-aware)
+    if top_recs:
+        st.markdown("**Top 3 Improvement Targets**")
+        for rec in top_recs:
+            pctl_str = f"{rec['good_pctl']:.0f}th pctl"
+            tun_str = f" — {rec['tunnel_benefit']}" if rec.get("tunnel_benefit") else ""
+            st.markdown(
+                f'<div style="padding:6px 12px;margin:4px 0;font-size:12px;'
+                f'background:#fff8e1;border-radius:4px;border-left:3px solid #f59e0b;">'
+                f'<b>{rec["pitch"]}</b>: {rec["direction"]} '
+                f'(currently {rec["current"]} {rec["unit"]}, target {rec["target"]} {rec["unit"]}, '
+                f'{rec["delta"]}, {pctl_str})'
+                f'{tun_str}'
+                f'</div>', unsafe_allow_html=True)
+    else:
+        st.markdown(
+            '<div style="padding:6px 12px;margin:4px 0;font-size:12px;'
+            'background:#e8f5e9;border-radius:4px;border-left:3px solid #22c55e;">'
+            'No major improvement targets — pitch metrics are solid relative to peers.'
+            '</div>', unsafe_allow_html=True)
     # ═══════════════════════════════════════════
     # SECTION C: Sequencing Playbook
     # ═══════════════════════════════════════════
