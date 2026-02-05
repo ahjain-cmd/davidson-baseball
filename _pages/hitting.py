@@ -1134,18 +1134,26 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
         # LHH: 3B side = away  → labels left-to-right: Away … In
         if is_rhh:
             h_labels = ["In", "In-Mid", "Mid", "Away-Mid", "Away"]
+            h_labels_in = ["In", "Mid", "Away"]
         else:
             h_labels = ["Away", "Away-Mid", "Mid", "In-Mid", "In"]
+            h_labels_in = ["Away", "Mid", "In"]
         v_labels = ["Low", "Low-Mid", "Mid", "Up-Mid", "Up"]
+        v_labels_in = ["Low", "Mid", "Up"]
+
+        # Use only the in-zone 3x3 for display
+        should_in = should_swing[1:4, 1:4]
+        actual_in = actually_swings[1:4, 1:4]
+        mismatch_in = mismatch[1:4, 1:4]
 
         map1, map2, map3 = st.columns(3)
         with map1:
             st.markdown("**Should Swing**")
             st.caption("Green = good outcomes when swinging here")
             fig_should = px.imshow(
-                np.flipud(should_swing), text_auto=".0f",
+                np.flipud(should_in), text_auto=".0f",
                 color_continuous_scale=[[0, "#ef4444"], [0.5, "#fbbf24"], [1, "#22c55e"]],
-                x=h_labels, y=list(reversed(v_labels)),
+                x=h_labels_in, y=list(reversed(v_labels_in)),
                 labels=dict(color="Score"), aspect="auto",
             )
             _add_grid_zone_outline(fig_should)
@@ -1156,9 +1164,9 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
             st.markdown("**Actually Swings**")
             st.caption("Swing rate by zone cell")
             fig_actual = px.imshow(
-                np.flipud(actually_swings), text_auto=".0f",
+                np.flipud(actual_in), text_auto=".0f",
                 color_continuous_scale="YlOrRd",
-                x=h_labels, y=list(reversed(v_labels)),
+                x=h_labels_in, y=list(reversed(v_labels_in)),
                 labels=dict(color="Swing%"), aspect="auto",
             )
             _add_grid_zone_outline(fig_actual)
@@ -1168,7 +1176,7 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
         with map3:
             st.markdown("**Mismatch**")
             st.caption("Red = swings too much, Blue = should swing more")
-            mm_rounded = np.round(mismatch)
+            mm_rounded = np.round(mismatch_in)
             mm_text = []
             for row in np.flipud(mm_rounded):
                 row_text = []
@@ -1178,7 +1186,7 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
             fig_mm = px.imshow(
                 np.flipud(mm_rounded),
                 color_continuous_scale=[[0, "#3b82f6"], [0.5, "white"], [1, "#ef4444"]],
-                x=h_labels, y=list(reversed(v_labels)),
+                x=h_labels_in, y=list(reversed(v_labels_in)),
                 labels=dict(color="Over/Under"), aspect="auto",
                 zmin=-50, zmax=50,
             )
@@ -1189,14 +1197,14 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
 
         # Summary blurb: where to swing more/less (largest mismatches)
         cells = []
-        for vi in range(5):
-            for hi in range(5):
-                val = mismatch[vi, hi]
+        for vi in range(3):
+            for hi in range(3):
+                val = mismatch_in[vi, hi]
                 if pd.isna(val):
                     continue
                 cells.append({
-                    "v": v_labels[vi],
-                    "h": h_labels[hi],
+                    "v": v_labels_in[vi],
+                    "h": h_labels_in[hi],
                     "m": float(val),
                 })
         if cells:
