@@ -12,7 +12,7 @@ from config import (
     SWING_CALLS, CONTACT_CALLS, TM_PITCH_PCT_COLS,
     ZONE_SIDE, ZONE_HEIGHT_BOT, ZONE_HEIGHT_TOP,
     PLATE_SIDE_MAX, PLATE_HEIGHT_MIN, PLATE_HEIGHT_MAX, MIN_PITCH_USAGE_PCT,
-    filter_davidson, filter_minor_pitches, normalize_pitch_types,
+    filter_davidson, filter_minor_pitches, normalize_pitch_types, PITCH_TYPES_TO_DROP,
     in_zone_mask, is_barrel_mask, display_name, get_percentile,
     safe_mode, _is_position_player, tm_name_to_trackman,
 )
@@ -27,7 +27,7 @@ from data.truemedia_api import (
     fetch_team_all_pitches_trackman, fetch_hitter_count_splits,
     clear_league_cache, get_league_cache_info,
 )
-from data.stats import compute_batter_stats, compute_pitcher_stats, _build_batter_zones
+from data.stats import compute_batter_stats, compute_pitcher_stats, _build_batter_zones, compute_swing_path_metrics
 from data.population import (
     compute_batter_stats_pop, compute_pitcher_stats_pop, compute_stuff_baselines,
     build_tunnel_population_pop,
@@ -91,7 +91,11 @@ def _filter_pitch_types_global(pitch_df, min_pct=MIN_PITCH_USAGE_PCT):
         return pitch_df
     df = normalize_pitch_types(pitch_df.copy())
     df = df.dropna(subset=["TaggedPitchType"])
-    df = df[~df["TaggedPitchType"].isin(["Undefined", "Other"])]
+    # Hard-drop undefined/unknown labels from TrueMedia payloads.
+    bad_pitch_labels = {"UN", "UNK", "UNKNOWN", "UNDEFINED", "OTHER", "NONE", "NULL", "NAN", ""}
+    bad_pitch_labels |= {str(v).strip().upper() for v in PITCH_TYPES_TO_DROP}
+    pt_upper = df["TaggedPitchType"].astype(str).str.strip().str.upper()
+    df = df[~pt_upper.isin(bad_pitch_labels)]
     if df.empty:
         return df
     vc = df["TaggedPitchType"].value_counts()
@@ -183,7 +187,10 @@ def _pitch_type_entropy_by_count(pitch_df, min_pitches=20):
     if df.empty:
         return pd.DataFrame()
     df = normalize_pitch_types(df)
-    df = df[~df["TaggedPitchType"].isin(["Undefined", "Other"])]
+    bad_pitch_labels = {"UN", "UNK", "UNKNOWN", "UNDEFINED", "OTHER", "NONE", "NULL", "NAN", ""}
+    bad_pitch_labels |= {str(v).strip().upper() for v in PITCH_TYPES_TO_DROP}
+    pt_upper = df["TaggedPitchType"].astype(str).str.strip().str.upper()
+    df = df[~pt_upper.isin(bad_pitch_labels)]
     if df.empty:
         return pd.DataFrame()
     usage = df["TaggedPitchType"].value_counts(normalize=True) * 100
@@ -344,94 +351,19 @@ def _get_opp_hitter_profile(tm, hitter, team, pitch_df=None):
         "swing_vs_ch": _safe_num(fp, "Swing% vs CH"),
         "pitch_type_pcts": {},
     }
+    bad_pitch_labels = {"UN", "UNK", "UNKNOWN", "UNDEFINED", "OTHER", "NONE", "NULL", "NAN", ""}
+    bad_pitch_labels |= {str(v).strip().upper() for v in PITCH_TYPES_TO_DROP}
     if not pt.empty:
         for tm_col, trackman_name in TM_PITCH_PCT_COLS.items():
             v = _safe_num(pt, tm_col)
-            if not pd.isna(v) and v > 0:
+            if not pd.isna(v) and v > 0 and str(trackman_name).strip().upper() not in bad_pitch_labels:
                 profile["pitch_type_pcts"][trackman_name] = v
     return profile
 
 
 def _compute_swing_path(bdf):
-    """Compute attack-angle proxy and swing path metrics from pitch-level data."""
-    if bdf is None or bdf.empty or "PitchCall" not in bdf.columns:
-        return None
-    inplay_full = bdf[bdf["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
-    inplay_la = inplay_full.dropna(subset=["Angle"])
-    if len(inplay_la) < 10:
-        return None
-    ev_75 = inplay_la["ExitSpeed"].quantile(0.75)
-    hard_hit = inplay_la[inplay_la["ExitSpeed"] >= ev_75]
-    if len(hard_hit) < 5:
-        return None
-
-    sp = {}
-    attack_angle_raw = hard_hit["Angle"].median()
-    avg_la_all = inplay_la["Angle"].median()
-    # Vertical path adjustment: LA vs pitch height, evaluated at mid-zone (~2.5 ft)
-    mid_zone_aa = attack_angle_raw
-    v_slope = 0.0
-    hh_loc = hard_hit.dropna(subset=["PlateLocHeight"])
-    if len(hh_loc) >= 8:
-        from scipy import stats as sp_stats
-        v_slope, v_int, _, _, _ = sp_stats.linregress(
-            hh_loc["PlateLocHeight"].values, hh_loc["Angle"].values
-        )
-        mid_zone_aa = v_int + v_slope * 2.5
-
-    sp["attack_angle"] = mid_zone_aa
-    sp["attack_angle_raw"] = attack_angle_raw
-    sp["avg_la_all"] = avg_la_all
-    sp["path_adjust"] = v_slope  # degrees per foot
-    sp["n_inplay"] = len(inplay_full)
-    sp["n_hard_hit"] = len(hard_hit)
-
-    # Swing type classification (same thresholds as Hitter Card)
-    aa = sp["attack_angle"]
-    if aa > 14:
-        sp["swing_type"] = "Uppercut / Lift"
-    elif aa > 6:
-        sp["swing_type"] = "Positive / Line-Drive"
-    elif aa > -2:
-        sp["swing_type"] = "Level"
-    else:
-        sp["swing_type"] = "Negative / Chop"
-
-    # Bat speed proxy — empirical: EV ≈ 0.2*PS + 1.2*BS
-    if "RelSpeed" in hard_hit.columns:
-        hh_sp = hard_hit.dropna(subset=["RelSpeed"])
-        if len(hh_sp) > 0:
-            bs = (hh_sp["ExitSpeed"] - 0.2 * hh_sp["RelSpeed"]) / 1.2
-            sp["bat_speed_avg"] = bs.mean()
-            sp["bat_speed_max"] = bs.max()
-
-    # Contact depth
-    if "EffectiveVelo" in hard_hit.columns and "RelSpeed" in hard_hit.columns:
-        cd_df = hard_hit.dropna(subset=["EffectiveVelo", "RelSpeed"])
-        if len(cd_df) > 0:
-            depth_val = (cd_df["EffectiveVelo"] - cd_df["RelSpeed"]).mean()
-            sp["contact_depth"] = depth_val
-            sp["depth_label"] = "Out Front" if depth_val > 1.5 else ("Deep Contact" if depth_val < -1.5 else "Neutral")
-        else:
-            sp["contact_depth"] = np.nan
-            sp["depth_label"] = "Unknown"
-
-    # Per-pitch-type swing path
-    sp_by_pt = {}
-    for pt_name2, ptg in hard_hit.groupby("TaggedPitchType"):
-        if len(ptg) < 3:
-            continue
-        pt_ip = ptg.dropna(subset=["ExitSpeed"])
-        sp_by_pt[pt_name2] = {
-            "hard_hit_la": ptg["Angle"].median(),
-            "hard_hit_ev": pt_ip["ExitSpeed"].mean() if len(pt_ip) > 0 else np.nan,
-        }
-        if "RelSpeed" in ptg.columns:
-            ptg_sp = ptg.dropna(subset=["RelSpeed"])
-            if len(ptg_sp) > 0:
-                sp_by_pt[pt_name2]["bat_speed"] = ((ptg_sp["ExitSpeed"] - 0.2 * ptg_sp["RelSpeed"]) / 1.2).mean()
-    sp["by_pitch_type"] = sp_by_pt
-    return sp
+    """Compute attack-angle proxy and swing path metrics (shared logic)."""
+    return compute_swing_path_metrics(bdf)
 
 
 def _get_our_pitcher_arsenal(data, pitcher_name, season_filter=None, tunnel_pop=None):
@@ -583,10 +515,12 @@ def _get_opp_pitcher_profile(tm, pitcher_name, team, pitch_df=None):
         "total_pitches": _safe_num(pc, "P"),
     }
     # Build pitch mix
+    bad_pitch_labels = {"UN", "UNK", "UNKNOWN", "UNDEFINED", "OTHER", "NONE", "NULL", "NAN", ""}
+    bad_pitch_labels |= {str(v).strip().upper() for v in PITCH_TYPES_TO_DROP}
     if not pt.empty:
         for tm_col, trackman_name in TM_PITCH_PCT_COLS.items():
             v = _safe_num(pt, tm_col)
-            if not pd.isna(v) and v >= MIN_PITCH_USAGE_PCT:
+            if not pd.isna(v) and v >= MIN_PITCH_USAGE_PCT and str(trackman_name).strip().upper() not in bad_pitch_labels:
                 profile["pitch_mix"][trackman_name] = v
     # Derive: primary pitch (highest usage)
     if profile["pitch_mix"]:
@@ -5237,7 +5171,6 @@ def _zone_heatmap_layout(fig, title, bats=None, show_inside_away=True, is_switch
             else:  # LHH
                 left_label, right_label = "<b>← AWAY</b>", "<b>INSIDE →</b>"
             left_color, right_color = "#c0392b", "#2874a6"
-            add_view_badge(fig, "Catcher")
 
         fig.add_annotation(
             x=-1.5, y=0.2, xref="x", yref="y",
@@ -5261,8 +5194,17 @@ def _zone_heatmap_layout(fig, title, bats=None, show_inside_away=True, is_switch
             text="<b>DOWN</b>", showarrow=False, textangle=-90,
             font=dict(size=10, color="#666"),
         )
-    else:
-        add_view_badge(fig, "Catcher")
+    # Keep view badge in top-left to avoid overlap with x-axis labels.
+    fig.add_annotation(
+        x=0.01, y=0.98, xref="paper", yref="paper",
+        text="Catcher View",
+        showarrow=False, xanchor="left", yanchor="top",
+        font=dict(size=10, color="#666"),
+        bgcolor="rgba(255,255,255,0.70)",
+        bordercolor="rgba(0,0,0,0.05)",
+        borderwidth=1,
+        borderpad=2,
+    )
 
     # Add handedness badge showing hitter's batting side (top-right to avoid label overlap)
     if bats_label != "?":
@@ -6822,11 +6764,13 @@ def _scouting_pitcher_report(tm, team, trackman_data, league_pitchers=None):
     # ══════════════════════════════════════════════════════════
     # SECTION 2B: TRACKMAN MOVEMENT, HEATMAPS & ARSENAL DETAIL
     # ══════════════════════════════════════════════════════════
+    p_tm_for_cmd = pd.DataFrame()
     if not trackman_data.empty:
         tm_only = _prefer_truemedia_pitch_data(trackman_data)
         src_label = _pitch_source_label(tm_only)
         p_tm_raw = _match_pitcher_trackman(tm_only, pitcher)
         p_tm = _filter_pitch_types_global(p_tm_raw, MIN_PITCH_USAGE_PCT)
+        p_tm_for_cmd = p_tm.copy() if p_tm is not None else pd.DataFrame()
         if not p_tm.empty and len(p_tm) >= 20:
             # ── Movement Profile ──
             if "HorzBreak" in p_tm.columns and "InducedVertBreak" in p_tm.columns:
@@ -6838,7 +6782,11 @@ def _scouting_pitcher_report(tm, team, trackman_data, league_pitchers=None):
 
             # ── Per-Pitch Location Heatmaps ──
             if "TaggedPitchType" in p_tm.columns:
-                pitch_types_avail = p_tm["TaggedPitchType"].dropna().value_counts()
+                bad_pitch_labels = {"UN", "UNK", "UNKNOWN", "UNDEFINED", "OTHER", "NONE", "NULL", "NAN", ""}
+                bad_pitch_labels |= {str(v).strip().upper() for v in PITCH_TYPES_TO_DROP}
+                pt_clean = p_tm["TaggedPitchType"].dropna()
+                pt_clean = pt_clean[~pt_clean.astype(str).str.strip().str.upper().isin(bad_pitch_labels)]
+                pitch_types_avail = pt_clean.value_counts()
                 pitch_types_avail = pitch_types_avail[pitch_types_avail >= 10].index.tolist()
                 if pitch_types_avail:
                     section_header(f"Pitch Location Heatmaps ({src_label})")
@@ -6901,23 +6849,32 @@ def _scouting_pitcher_report(tm, team, trackman_data, league_pitchers=None):
                         n = int(row["N"])
 
                         st.markdown(f"**{count_str} vs {side_label}**")
-                        st.metric(pitch, f"{pct:.0f}%", delta=f"n={n}", delta_color="off")
+                        st.metric(pitch, f"{pct:.0f}%")
+                        st.caption(f"n={n}")
 
                         # Filter pitches for this count/side and show location
                         if {"Balls", "Strikes", "BatterSide", "PlateLocSide", "PlateLocHeight"}.issubset(p_tm.columns):
                             balls, strikes = int(count_str.split("-")[0]), int(count_str.split("-")[1])
-                            side_map = p_tm["BatterSide"].replace({"R": "Right", "L": "Left", "S": "Both"})
-                            side_val = "Left" if side == "L" else ("Right" if side == "R" else "Both")
+                            side_map = p_tm["BatterSide"].astype(str).str.strip().str.upper().str[0]
+                            if side in {"L", "R"}:
+                                side_mask = side_map == side
+                            else:
+                                side_mask = side_map.notna()
                             count_pitches = p_tm[
                                 (p_tm["Balls"] == balls) &
                                 (p_tm["Strikes"] == strikes) &
-                                (side_map == side_val)
+                                side_mask
                             ]
                             if len(count_pitches) >= 15:
-                                bats = "L" if side == "L" else "R"
-                                fig = _zone_freq_heatmap(count_pitches, f"{count_str} Location", bats=bats, hitter_relative=False)
+                                bats = "L" if side == "L" else ("R" if side == "R" else None)
+                                fig = _zone_freq_heatmap(
+                                    count_pitches,
+                                    f"{count_str} Location",
+                                    bats=bats,
+                                    hitter_relative=False,
+                                )
                                 if fig is not None:
-                                    fig.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10))
+                                    fig.update_layout(height=340)
                                     st.plotly_chart(fig, use_container_width=True)
 
         elif p_tm_raw.empty:
@@ -6935,51 +6892,56 @@ def _scouting_pitcher_report(tm, team, trackman_data, league_pitchers=None):
 
         with cmd_col1:
             # 3x3 Heatmap
-            if not ploc.empty:
-                high = _safe_num(ploc, "High%")
-                vmid = _safe_num(ploc, "VMid%")
-                low = _safe_num(ploc, "Low%")
-                inside = _safe_num(ploc, "Inside%")
-                hmid = _safe_num(ploc, "HMid%")
-                outside = _safe_num(ploc, "Outside%")
-                vert = [high, vmid, low]
-                horiz = [inside, hmid, outside]
-                if all(not pd.isna(v) for v in vert) and all(not pd.isna(v) for v in horiz):
-                    vert_total = sum(vert)
-                    horiz_total = sum(horiz)
+            rendered_cmd_heatmap = False
+            if not p_tm_for_cmd.empty and {"PlateLocSide", "PlateLocHeight"}.issubset(p_tm_for_cmd.columns):
+                cmd_loc = p_tm_for_cmd.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
+                if len(cmd_loc) >= 30:
+                    x_edges = np.array([-1.5, -0.5, 0.5, 1.5])
+                    y_edges = np.array([0.5, 2.0, 3.0, 4.5])
+                    cmd_loc["xbin"] = np.clip(np.digitize(cmd_loc["PlateLocSide"], x_edges) - 1, 0, 2)
+                    cmd_loc["ybin"] = np.clip(np.digitize(cmd_loc["PlateLocHeight"], y_edges) - 1, 0, 2)
                     z_matrix = []
-                    for v_val in vert:
+                    total = len(cmd_loc)
+                    for yi in range(2, -1, -1):
                         row = []
-                        for h_val in horiz:
-                            cell_val = (v_val / max(vert_total, 1)) * (h_val / max(horiz_total, 1)) * 100
-                            row.append(round(cell_val, 1))
+                        for xi in range(3):
+                            cnt = len(cmd_loc[(cmd_loc["xbin"] == xi) & (cmd_loc["ybin"] == yi)])
+                            row.append(round(cnt / max(total, 1) * 100, 1))
                         z_matrix.append(row)
                     fig_hm = go.Figure(data=go.Heatmap(
                         z=z_matrix,
-                        x=["Outside", "Middle", "Inside"],
+                        x=["3B Side", "Middle", "1B Side"],
                         y=["High", "Middle", "Low"],
                         colorscale=[[0, "#f0f4f8"], [0.5, "#3d7dab"], [1, "#14365d"]],
                         showscale=False,
                         text=[[f"{v:.1f}%" for v in row] for row in z_matrix],
                         texttemplate="%{text}",
                         textfont=dict(size=14, color="white"),
-                        hovertemplate="Zone: %{y} %{x}<br>Frequency: %{text}<extra></extra>",
+                        hovertemplate="Zone: %{y} / %{x}<br>Frequency: %{text}<extra></extra>",
                     ))
-                    fig_hm.add_shape(type="rect", x0=-0.5, y0=-0.5, x1=2.5, y1=2.5,
-                                     line=dict(color="#000000", width=3))
+                    fig_hm.add_shape(
+                        type="rect", x0=-0.5, y0=-0.5, x1=2.5, y1=2.5,
+                        line=dict(color="#000000", width=3),
+                    )
                     fig_hm.update_layout(
                         **CHART_LAYOUT, height=280,
                         xaxis=dict(side="bottom"), yaxis=dict(autorange="reversed"),
+                        margin=dict(l=60, r=10, t=10, b=40),
                     )
-                    fig_hm.update_layout(margin=dict(l=60, r=10, t=10, b=40))
                     st.plotly_chart(fig_hm, use_container_width=True)
+                    st.caption("Catcher-view location frequency from pitch-level TrueMedia data (absolute 3B-side -> 1B-side, not hitter-relative inside/away).")
+                    rendered_cmd_heatmap = True
+
+            # Do not approximate a 3x3 joint map from API marginals (can be misleading).
+            if not rendered_cmd_heatmap:
+                st.info("Command heatmap unavailable: pitch-level location data is required for an accurate 3x3 map.")
 
         with cmd_col2:
             # Command rates with percentiles
             cmd_data = []
             # From pitch rates
             for lbl, src, col in [
-                ("In Zone %", ploc, "InZone%"), ("CompLoc %", pr, "CompLoc%"),
+                ("In Zone %", pr, "InZone%"), ("CompLoc %", pr, "CompLoc%"),
                 ("Chase %", pr, "Chase%"), ("SwStrk %", pr, "SwStrk%"),
                 ("Miss %", pr, "Miss%"), ("FPStk %", pr, "FPStk%"),
             ]:
@@ -6993,7 +6955,7 @@ def _scouting_pitcher_report(tm, team, trackman_data, league_pitchers=None):
                 st.dataframe(pd.DataFrame(cmd_data), use_container_width=True, hide_index=True)
 
             # Command narrative
-            inzone = _safe_num(ploc, "InZone%") if not ploc.empty else np.nan
+            inzone = _safe_num(pr, "InZone%") if not pr.empty else np.nan
             chase = _safe_num(pr, "Chase%") if not pr.empty else np.nan
             comploc = _safe_num(pr, "CompLoc%") if not pr.empty else np.nan
             if not pd.isna(inzone) and not pd.isna(chase):
