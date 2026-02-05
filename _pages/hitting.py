@@ -1209,10 +1209,11 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
             more_txt = ", ".join(_fmt_zone(c) for c in more) if more else "None"
             less_txt = ", ".join(_fmt_zone(c) for c in less) if less else "None"
             st.markdown(
-                f'<div style="padding:8px 12px;margin-top:6px;font-size:12px;'
-                f'background:#f8fafc;border-radius:6px;border-left:3px solid #94a3b8;">'
-                f'<b>Summary:</b> Swing more in: {more_txt}. '
-                f'Swing less in: {less_txt}.'
+                f'<div style="padding:12px 16px;margin-top:8px;font-size:14px;line-height:1.5;'
+                f'background:#f8fafc;border-radius:8px;border-left:4px solid #334155;">'
+                f'<b>Summary:</b><br>'
+                f'• <b>Swing more</b> in: {more_txt}<br>'
+                f'• <b>Swing less</b> in: {less_txt}'
                 f'</div>', unsafe_allow_html=True
             )
     else:
