@@ -1122,6 +1122,12 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
                     should_swing[vi, hi] = should_score
                     mismatch[vi, hi] = swing_rate - should_score
 
+        # Hide cells outside the strike zone (only show center 3x3)
+        keep_mask = np.zeros((5, 5), dtype=bool)
+        keep_mask[1:4, 1:4] = True
+        for arr in (should_swing, actually_swings, mismatch):
+            arr[~keep_mask] = np.nan
+
         # Label columns relative to batter handedness.
         # Trackman: col 0 = most negative PlateLocSide = 3B side.
         # RHH: 3B side = inside → labels left-to-right: In … Away
@@ -1180,6 +1186,35 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
             _add_grid_zone_outline(fig_mm)
             fig_mm.update_layout(height=320, coloraxis_showscale=False, **CHART_LAYOUT)
             _plotly_chart_bats(fig_mm, use_container_width=True, key="sdl_mismatch")
+
+        # Summary blurb: where to swing more/less (largest mismatches)
+        cells = []
+        for vi in range(5):
+            for hi in range(5):
+                val = mismatch[vi, hi]
+                if pd.isna(val):
+                    continue
+                cells.append({
+                    "v": v_labels[vi],
+                    "h": h_labels[hi],
+                    "m": float(val),
+                })
+        if cells:
+            more = sorted([c for c in cells if c["m"] < 0], key=lambda x: x["m"])[:2]
+            less = sorted([c for c in cells if c["m"] > 0], key=lambda x: -x["m"])[:2]
+
+            def _fmt_zone(c):
+                return f'{c["v"]} / {c["h"]} ({c["m"]:+.0f})'
+
+            more_txt = ", ".join(_fmt_zone(c) for c in more) if more else "None"
+            less_txt = ", ".join(_fmt_zone(c) for c in less) if less else "None"
+            st.markdown(
+                f'<div style="padding:8px 12px;margin-top:6px;font-size:12px;'
+                f'background:#f8fafc;border-radius:6px;border-left:3px solid #94a3b8;">'
+                f'<b>Summary:</b> Swing more in: {more_txt}. '
+                f'Swing less in: {less_txt}.'
+                f'</div>', unsafe_allow_html=True
+            )
     else:
         st.info("Not enough location data for zone maps (need 30+ pitches).")
 
