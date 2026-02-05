@@ -1358,8 +1358,12 @@ def _compute_pitch_recommendations(pdf, data, tunnel_df):
             tunnel_partners.setdefault(b, []).append((a, score))
 
     recommendations = []
+    mov_df = pdf.dropna(subset=["HorzBreak", "InducedVertBreak"])
+    mov_df = filter_minor_pitches(mov_df) if not mov_df.empty else mov_df
+
     for pt in sorted(pdf["TaggedPitchType"].unique()):
         pt_d = pdf[pdf["TaggedPitchType"] == pt]
+        pt_mov = mov_df[mov_df["TaggedPitchType"] == pt] if not mov_df.empty else pd.DataFrame()
         if len(pt_d) < 10:
             continue
         w = weights.get(pt, {})
@@ -1377,14 +1381,20 @@ def _compute_pitch_recommendations(pdf, data, tunnel_df):
             if bs["std"] == 0 or pd.isna(bs["std"]):
                 continue
 
-            # For HorzBreak, use arm-side positive value so LHP/RHP are on the same scale
+            # For HorzBreak/IVB, use the same filtered sample as movement profile
             if m == "HorzBreak":
-                if "PitcherThrows" in pt_d.columns:
-                    is_l_pt = pt_d["PitcherThrows"].astype(str).str.lower().str.startswith("l")
-                    hb_adj = np.where(is_l_pt, -pt_d[m].astype(float), pt_d[m].astype(float))
+                if pt_mov.empty:
+                    continue
+                if "PitcherThrows" in pt_mov.columns:
+                    is_l_pt = pt_mov["PitcherThrows"].astype(str).str.lower().str.startswith("l")
+                    hb_adj = np.where(is_l_pt, -pt_mov[m].astype(float), pt_mov[m].astype(float))
                     pitcher_val = pd.Series(hb_adj).dropna().mean()
                 else:
-                    pitcher_val = pt_d[m].astype(float).dropna().mean()
+                    pitcher_val = pt_mov[m].astype(float).dropna().mean()
+            elif m == "InducedVertBreak":
+                if pt_mov.empty:
+                    continue
+                pitcher_val = pt_mov[m].astype(float).dropna().mean()
             else:
                 pitcher_val = pt_d[m].astype(float).dropna().mean()
             if pd.isna(pitcher_val):
