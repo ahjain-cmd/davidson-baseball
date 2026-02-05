@@ -186,12 +186,21 @@ def make_movement_profile(pdf, height=520):
     fig.add_hline(y=0, line_color="#bbb", line_width=1)
     fig.add_vline(x=0, line_color="#bbb", line_width=1)
 
-    # Negate HorzBreak for Savant convention:
-    # Trackman: positive HB = glove-side (toward 3B for RHP)
-    # Savant chart: LEFT = toward 1B (arm-side), RIGHT = toward 3B (glove-side)
-    # So we negate HB so that glove-side (positive trackman) plots LEFT (negative x)
+    # Catcher-view orientation (field-side):
+    # LEFT = 3B side, RIGHT = 1B side.
+    # Trackman HB: positive = glove-side (toward 3B for RHP, toward 1B for LHP).
+    # Therefore:
+    #   RHP: positive HB -> 3B side -> LEFT (negate)
+    #   LHP: positive HB -> 1B side -> RIGHT (no negate)
     mov = mov.copy()
-    mov["HB_plot"] = -mov["HorzBreak"]
+    throws = mov.get("PitcherThrows")
+    is_lhp = False
+    if throws is not None and not throws.dropna().empty:
+        mode_throw = throws.mode()
+        if len(mode_throw) > 0:
+            is_lhp = str(mode_throw.iloc[0]).lower().startswith("l")
+    hb_sign = 1.0 if is_lhp else -1.0
+    mov["HB_plot"] = mov["HorzBreak"] * hb_sign
 
     # Plot each pitch type as cluster
     pitch_types = sorted(mov["TaggedPitchType"].dropna().unique())
@@ -208,18 +217,26 @@ def make_movement_profile(pdf, height=520):
             customdata=sub["HorzBreak"],
         ))
 
-    # Axis labels — Savant convention: 1B ◄ MOVES TOWARD ► 3B
+    # Axis labels — Catcher view: 3B ◄ MOVES TOWARD ► 1B
     fig.add_annotation(x=0, y=27, text="MORE RISE", showarrow=False,
                        font=dict(size=9, color="#666", family="Inter"), yshift=5)
     fig.add_annotation(x=0, y=-27, text="MORE DROP", showarrow=False,
                        font=dict(size=9, color="#666", family="Inter"), yshift=-5)
-    fig.add_annotation(x=-27, y=0, text="1B SIDE", showarrow=False,
+    fig.add_annotation(x=-27, y=0, text="3B SIDE", showarrow=False,
                        font=dict(size=9, color="#666", family="Inter"), xshift=-10)
-    fig.add_annotation(x=27, y=0, text="3B SIDE", showarrow=False,
+    fig.add_annotation(x=27, y=0, text="1B SIDE", showarrow=False,
                        font=dict(size=9, color="#666", family="Inter"), xshift=10)
     # Direction arrow
-    fig.add_annotation(x=0, y=29, text="1B ◄  MOVES TOWARD  ► 3B", showarrow=False,
+    fig.add_annotation(x=0, y=29, text="3B ◄  MOVES TOWARD  ► 1B", showarrow=False,
                        font=dict(size=8, color="#999", family="Inter"), yshift=12)
+    # Catcher view badge
+    fig.add_annotation(
+        x=0.98, y=0.04, xref="paper", yref="paper",
+        text="Catcher View", showarrow=False,
+        font=dict(size=10, color="#111", family="Inter"),
+        bgcolor="white", bordercolor="#e0e0e0", borderwidth=1,
+        align="center"
+    )
 
     max_r = 28
     fig.update_layout(
