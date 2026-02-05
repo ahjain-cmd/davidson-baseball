@@ -1077,7 +1077,14 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
     st.caption(
         "Where should this hitter swing vs. where they actually swing? Mismatch = coaching opportunity. "
         "Should Swing score blends EV (60%), contact rate (30%), and in‑play rate (10%), "
-        "then shrinks toward 50 with small samples (based on swing count)."
+        "then shrinks toward the hitter's overall baseline with small samples (based on swing count)."
+    )
+    st.markdown(
+        "<style>"
+        ".sdl-title{font-weight:700;font-size:20px;margin-bottom:4px;}"
+        ".sdl-sub{min-height:44px;color:#6b7280;margin-bottom:8px;}"
+        "</style>",
+        unsafe_allow_html=True,
     )
 
     loc_data = bdf.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
@@ -1092,6 +1099,22 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
         actually_swings = np.full((5, 5), np.nan)
         mismatch = np.full((5, 5), np.nan)
 
+        # Overall baseline (hitter-wide) for shrinkage anchor
+        all_swings = loc_data[loc_data["PitchCall"].isin(SWING_CALLS)]
+        all_whiffs = loc_data[loc_data["PitchCall"] == "StrikeSwinging"]
+        all_inplay = loc_data[(loc_data["PitchCall"] == "InPlay") & loc_data["ExitSpeed"].notna()]
+        if len(all_swings) >= 5:
+            avg_ev_all = all_inplay["ExitSpeed"].mean() if len(all_inplay) >= 2 else 70
+            ev_score_all = min(max((avg_ev_all - 70) / 30 * 100, 0), 100) if not pd.isna(avg_ev_all) else 50
+            contact_rate_all = 1 - len(all_whiffs) / len(all_swings) if len(all_swings) > 0 else 0
+            inplay_rate_all = len(all_inplay) / len(all_swings) if len(all_swings) > 0 else 0
+            overall_raw = ev_score_all * 0.60 + contact_rate_all * 0.30 + inplay_rate_all * 0.10
+            overall_anchor = overall_raw
+        else:
+            overall_anchor = 50
+
+        MIN_SWINGS_CELL = 6
+
         for vi in range(5):
             for hi in range(5):
                 mask = (
@@ -1104,6 +1127,8 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
                 if len(cell) < 3:
                     continue
                 cell_swings = cell[cell["PitchCall"].isin(SWING_CALLS)]
+                if len(cell_swings) < MIN_SWINGS_CELL:
+                    continue
                 swing_rate = len(cell_swings) / len(cell) * 100
                 actually_swings[vi, hi] = swing_rate
 
@@ -1118,7 +1143,7 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
                     inplay_score = inplay_rate * 100
                     raw_should = ev_score * 0.60 + contact_score * 0.30 + inplay_score * 0.10
                     shrink_w = min(len(cell_swings) / 15, 1.0)
-                    should_score = 50 * (1 - shrink_w) + raw_should * shrink_w
+                    should_score = overall_anchor * (1 - shrink_w) + raw_should * shrink_w
                     should_swing[vi, hi] = should_score
                     mismatch[vi, hi] = swing_rate - should_score
 
@@ -1157,8 +1182,9 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
             )
 
         with map1:
-            st.markdown("**Should Swing**")
-            st.caption("Score (0–100). Green = good outcomes when swinging here.")
+            st.markdown('<div class="sdl-title">Should Swing</div>'
+                        '<div class="sdl-sub">Score (0–100). Green = good outcomes when swinging here.</div>',
+                        unsafe_allow_html=True)
             fig_should = px.imshow(
                 np.flipud(should_in), text_auto=".0f",
                 color_continuous_scale=[[0, "#ef4444"], [0.5, "#fbbf24"], [1, "#22c55e"]],
@@ -1172,8 +1198,9 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
             _plotly_chart_bats(fig_should, use_container_width=True, key="sdl_should")
 
         with map2:
-            st.markdown("**Actually Swings**")
-            st.caption("Swing% by zone cell (0–100).")
+            st.markdown('<div class="sdl-title">Actually Swings</div>'
+                        '<div class="sdl-sub">Swing% by zone cell (0–100).</div>',
+                        unsafe_allow_html=True)
             fig_actual = px.imshow(
                 np.flipud(actual_in), text_auto=".0f",
                 color_continuous_scale="YlOrRd",
@@ -1187,8 +1214,9 @@ def _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter
             _plotly_chart_bats(fig_actual, use_container_width=True, key="sdl_actual")
 
         with map3:
-            st.markdown("**Mismatch**")
-            st.caption("Over/Under (percentage points). Red = swings too much, Blue = should swing more.")
+            st.markdown('<div class="sdl-title">Mismatch</div>'
+                        '<div class="sdl-sub">Over/Under (percentage points). Red = swings too much, Blue = should swing more.</div>',
+                        unsafe_allow_html=True)
             mm_rounded = np.round(mismatch_in)
             mm_text = []
             for row in np.flipud(mm_rounded):
