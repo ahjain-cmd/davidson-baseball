@@ -1325,18 +1325,21 @@ def _compute_pitch_recommendations(pdf, data, tunnel_df):
 
     # Determine pitcher handedness sign for HorzBreak:
     # RHP → positive HB = arm-side run; LHP → negative HB = arm-side run.
-    # We normalise to abs(HB) so comparisons are hand-agnostic.
     throws = pdf["PitcherThrows"].mode()
     is_lhp = (throws.iloc[0] == "Left") if len(throws) > 0 else False
-    hb_sign = -1.0 if is_lhp else 1.0  # multiplier to convert raw → abs convention
+    hb_sign = -1.0 if is_lhp else 1.0  # multiplier to convert raw ↔ arm-side-positive
 
-    # Pre-compute baseline per pitch type using abs(HorzBreak)
-    base["_AbsHB"] = base["HorzBreak"].abs() if "HorzBreak" in base.columns else np.nan
+    # Pre-compute baseline per pitch type using arm-side positive HB (hand-aware)
+    if "HorzBreak" in base.columns and "PitcherThrows" in base.columns:
+        is_l_base = base["PitcherThrows"].astype(str).str.lower().str.startswith("l")
+        base["_HB_ADJ"] = np.where(is_l_base, -base["HorzBreak"].astype(float), base["HorzBreak"].astype(float))
+    else:
+        base["_HB_ADJ"] = np.nan
     baseline = {}
     for pt, grp in base.groupby("TaggedPitchType"):
         stats = {}
         for m in metrics:
-            col = "_AbsHB" if m == "HorzBreak" else m
+            col = "_HB_ADJ" if m == "HorzBreak" else m
             if col in grp.columns:
                 vals = grp[col].astype(float).dropna()
                 if len(vals) >= 10:
@@ -1374,9 +1377,14 @@ def _compute_pitch_recommendations(pdf, data, tunnel_df):
             if bs["std"] == 0 or pd.isna(bs["std"]):
                 continue
 
-            # For HorzBreak, use absolute value so LHP/RHP are on the same scale
+            # For HorzBreak, use arm-side positive value so LHP/RHP are on the same scale
             if m == "HorzBreak":
-                pitcher_val = pt_d[m].astype(float).dropna().abs().mean()
+                if "PitcherThrows" in pt_d.columns:
+                    is_l_pt = pt_d["PitcherThrows"].astype(str).str.lower().str.startswith("l")
+                    hb_adj = np.where(is_l_pt, -pt_d[m].astype(float), pt_d[m].astype(float))
+                    pitcher_val = pd.Series(hb_adj).dropna().mean()
+                else:
+                    pitcher_val = pt_d[m].astype(float).dropna().mean()
             else:
                 pitcher_val = pt_d[m].astype(float).dropna().mean()
             if pd.isna(pitcher_val):
@@ -1384,9 +1392,9 @@ def _compute_pitch_recommendations(pdf, data, tunnel_df):
 
             weight_sign = 1 if w[m] > 0 else -1
 
-            # Percentile of pitcher vs abs-HB baseline (or normal baseline)
+            # Percentile of pitcher vs HB-adjusted baseline (or normal baseline)
             if m == "HorzBreak":
-                all_vals = base[base["TaggedPitchType"] == pt]["_AbsHB"].astype(float).dropna()
+                all_vals = base[base["TaggedPitchType"] == pt]["_HB_ADJ"].astype(float).dropna()
             else:
                 all_vals = base[base["TaggedPitchType"] == pt][m].astype(float).dropna()
             if len(all_vals) < 10:
@@ -1419,27 +1427,31 @@ def _compute_pitch_recommendations(pdf, data, tunnel_df):
             m = g["metric"]
             label = _METRIC_LABELS.get(m, m)
             unit = _METRIC_UNITS.get(m, "")
-            current_abs = g["current"]  # already abs for HB
-            target_abs = g["target"]
+            current_val = g["current"]
+            target_val = g["target"]
             ws = g["weight_sign"]
 
-            if ws > 0:
-                delta_val = target_abs - current_abs
-                direction = f"more {label.lower()}" if delta_val > 0 else f"maintain {label.lower()}"
+            # Direction text (hand-aware for HB and clearer for IVB)
+            if m == "InducedVertBreak":
+                direction = "more IVB (more ride)" if ws > 0 else "less IVB (more drop)"
+            elif m == "HorzBreak":
+                direction = "more run" if ws > 0 else "more cut"
             else:
-                delta_val = current_abs - target_abs
-                direction = f"{'steeper' if m == 'VertApprAngle' else 'more'} {label.lower()}" if delta_val > 0 else f"reduce {label.lower()}"
+                if ws > 0:
+                    direction = f"more {label.lower()}"
+                else:
+                    direction = f"less {label.lower()}"
 
             # For display: convert HorzBreak back to the pitcher's sign convention
             if m == "HorzBreak":
-                display_current = current_abs * hb_sign
-                display_target = target_abs * hb_sign
-                # Delta is always in magnitude terms (positive = more break)
-                delta_display = target_abs - current_abs
+                display_current = current_val * hb_sign
+                display_target = target_val * hb_sign
             else:
-                display_current = current_abs
-                display_target = target_abs
-                delta_display = delta_val
+                display_current = current_val
+                display_target = target_val
+
+            # Always show signed delta (target - current)
+            delta_display = display_target - display_current
 
             # Cross-reference with tunnel partners (no grades shown)
             tunnel_benefit = ""
