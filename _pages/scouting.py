@@ -1,5 +1,7 @@
 """Opponent Scouting — game plans, pitcher/hitter reports, scoring engine."""
 import math
+import os
+import re
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -203,7 +205,8 @@ def _pitch_type_entropy_by_count(pitch_df, min_pitches=20, min_pitch_usage_pct=0
     balls_num = pd.to_numeric(df["Balls"], errors="coerce")
     strikes_num = pd.to_numeric(df["Strikes"], errors="coerce")
     side_norm = df["BatterSide"].astype(str).str.strip().str.upper().str[0]
-    valid = balls_num.notna() & strikes_num.notna() & side_norm.isin(["L", "R", "S"])
+    # Hand-specific predictability only (LHH/RHH).
+    valid = balls_num.notna() & strikes_num.notna() & side_norm.isin(["L", "R"])
     df = df[valid].copy()
     if df.empty:
         return pd.DataFrame()
@@ -3584,8 +3587,8 @@ def page_scouting(data):
     except Exception:
         count_splits = {}
 
-    tab_overview, tab_hitters, tab_pitchers, tab_catchers, tab_baserunning = st.tabs([
-        "Team Overview", "Their Hitters", "Their Pitchers", "Their Catchers", "Baserunning"
+    tab_overview, tab_hitters, tab_pitchers, tab_catchers = st.tabs([
+        "Team Overview", "Their Hitters", "Their Pitchers", "Their Catchers"
     ])
 
     # ── Tab 1: Team Overview ──
@@ -3603,10 +3606,6 @@ def page_scouting(data):
     # ── Tab 4: Their Catchers ──
     with tab_catchers:
         _scouting_catcher_report(tm, team)
-
-    # ── Tab 5: Baserunning Intelligence ──
-    with tab_baserunning:
-        _scouting_baserunning_report(tm, team, opp_pitches, season_year)
 
 
 def _scouting_team_overview(tm, team, season_year=2026):
@@ -6780,9 +6779,10 @@ def _scouting_pitcher_report(tm, team, trackman_data, league_pitchers=None):
         src_label = _pitch_source_label(tm_only)
         p_tm_raw = _match_pitcher_trackman(tm_only, pitcher)
         p_tm = _filter_pitch_types_global(p_tm_raw, MIN_PITCH_USAGE_PCT)
-        # For predictability/entropy, keep all defined pitch types (drop only undefined labels).
+        # For predictability/entropy and command maps, keep all defined pitch types
+        # (drop only undefined labels; do not min-usage filter).
         p_tm_predict = _filter_pitch_types_global(p_tm_raw, min_pct=0.0)
-        p_tm_for_cmd = p_tm.copy() if p_tm is not None else pd.DataFrame()
+        p_tm_for_cmd = p_tm_predict.copy() if p_tm_predict is not None else pd.DataFrame()
         if not p_tm.empty and len(p_tm) >= 20:
             # ── Movement Profile ──
             if "HorzBreak" in p_tm.columns and "InducedVertBreak" in p_tm.columns:
@@ -6914,26 +6914,33 @@ def _scouting_pitcher_report(tm, team, trackman_data, league_pitchers=None):
         cmd_col1, cmd_col2 = st.columns([3, 2])
 
         with cmd_col1:
-            # 3x3 Heatmap
+            # 3x3 Heatmaps split by hitter hand (vs RHH / vs LHH)
             rendered_cmd_heatmap = False
             if not p_tm_for_cmd.empty and {"PlateLocSide", "PlateLocHeight"}.issubset(p_tm_for_cmd.columns):
                 cmd_loc = p_tm_for_cmd.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
-                if len(cmd_loc) >= 30:
+
+                def _render_cmd_heatmap_side(df_side, bats_side, label):
+                    if len(df_side) < 20:
+                        st.info(f"Not enough pitch-level samples {label}.")
+                        return False
                     x_edges = np.array([-1.5, -0.5, 0.5, 1.5])
                     y_edges = np.array([0.5, 2.0, 3.0, 4.5])
-                    cmd_loc["xbin"] = np.clip(np.digitize(cmd_loc["PlateLocSide"], x_edges) - 1, 0, 2)
-                    cmd_loc["ybin"] = np.clip(np.digitize(cmd_loc["PlateLocHeight"], y_edges) - 1, 0, 2)
+                    df_side = df_side.copy()
+                    # Use hitter-relative bins for consistency with other scouting visuals.
+                    xbin_abs = np.clip(np.digitize(df_side["PlateLocSide"], x_edges) - 1, 0, 2)
+                    df_side["xbin"] = [_rel_xbin(int(xb), bats_side) for xb in xbin_abs]
+                    df_side["ybin"] = np.clip(np.digitize(df_side["PlateLocHeight"], y_edges) - 1, 0, 2)
                     z_matrix = []
-                    total = len(cmd_loc)
+                    total = len(df_side)
                     for yi in range(2, -1, -1):
                         row = []
                         for xi in range(3):
-                            cnt = len(cmd_loc[(cmd_loc["xbin"] == xi) & (cmd_loc["ybin"] == yi)])
+                            cnt = len(df_side[(df_side["xbin"] == xi) & (df_side["ybin"] == yi)])
                             row.append(round(cnt / max(total, 1) * 100, 1))
                         z_matrix.append(row)
                     fig_hm = go.Figure(data=go.Heatmap(
                         z=z_matrix,
-                        x=["3B Side", "Middle", "1B Side"],
+                        x=["Inside", "Middle", "Away"],
                         y=["High", "Middle", "Low"],
                         colorscale=[[0, "#f0f4f8"], [0.5, "#3d7dab"], [1, "#14365d"]],
                         showscale=False,
@@ -6952,13 +6959,31 @@ def _scouting_pitcher_report(tm, team, trackman_data, league_pitchers=None):
                         xaxis=dict(side="bottom"), yaxis=dict(autorange="reversed"),
                         margin=dict(l=60, r=10, t=10, b=40),
                     )
+                    st.markdown(f"**{label}**")
                     st.plotly_chart(fig_hm, use_container_width=True)
-                    st.caption("Catcher-view location frequency from pitch-level TrueMedia data (absolute 3B-side -> 1B-side, not hitter-relative inside/away).")
-                    rendered_cmd_heatmap = True
+                    st.caption(f"n={total}")
+                    return True
+
+                side_map = pd.Series(index=cmd_loc.index, dtype=object)
+                if "BatterSide" in cmd_loc.columns:
+                    side_map = cmd_loc["BatterSide"].astype(str).str.strip().str.upper().str[0]
+
+                cmd_r = cmd_loc[side_map == "R"] if not side_map.empty else pd.DataFrame()
+                cmd_l = cmd_loc[side_map == "L"] if not side_map.empty else pd.DataFrame()
+
+                col_rhh, col_lhh = st.columns(2)
+                with col_rhh:
+                    ok_r = _render_cmd_heatmap_side(cmd_r, "R", "vs RHH")
+                with col_lhh:
+                    ok_l = _render_cmd_heatmap_side(cmd_l, "L", "vs LHH")
+
+                rendered_cmd_heatmap = bool(ok_r or ok_l)
+                if rendered_cmd_heatmap:
+                    st.caption("Catcher-view location frequency from pitch-level TrueMedia data, shown hitter-relative as Inside/Middle/Away for each hand split.")
 
             # Do not approximate a 3x3 joint map from API marginals (can be misleading).
             if not rendered_cmd_heatmap:
-                st.info("Command heatmap unavailable: pitch-level location data is required for an accurate 3x3 map.")
+                st.info("Command heatmap unavailable by hand: pitch-level data with BatterSide and location is required.")
 
         with cmd_col2:
             # Command rates with percentiles
@@ -7125,10 +7150,237 @@ def _scouting_pitcher_report(tm, team, trackman_data, league_pitchers=None):
                 for pn in plat_narratives:
                     st.caption(pn)
 
+    # ══════════════════════════════════════════════════════════
+    # SECTION 3C: BASERUNNING VS THIS PITCHER
+    # ══════════════════════════════════════════════════════════
+    _scouting_pitcher_baserunning_panel(tm, team, pitcher, trackman_data)
+
     # ── Pitch-Level Overlay (prefer TrueMedia) ──
     pitch_df = _prefer_truemedia_pitch_data(trackman_data) if trackman_data is not None else pd.DataFrame()
     src_label = _pitch_source_label(pitch_df)
     _trackman_pitcher_overlay(pitch_df, pitcher, src_label)
+
+
+def _name_variants(name):
+    """Generate normalized name variants for robust cross-source joins."""
+    if name is None or (isinstance(name, float) and pd.isna(name)):
+        return set()
+    raw = str(name).strip()
+    if not raw:
+        return set()
+
+    def _clean(s):
+        s = re.sub(r"[^a-zA-Z, ]+", " ", str(s)).lower()
+        return re.sub(r"\s+", " ", s).strip()
+
+    out = set()
+    n = _clean(raw)
+    if not n:
+        return out
+    out.add(n.replace(",", " "))
+    out.add(re.sub(r"\s+", " ", n.replace(",", " ")).strip())
+
+    if "," in n:
+        left, right = n.split(",", 1)
+        left = left.strip()
+        right = right.strip()
+        if left and right:
+            out.add(f"{right} {left}".strip())
+            out.add(f"{left} {right}".strip())
+    else:
+        parts = n.split()
+        if len(parts) >= 2:
+            first = parts[0]
+            last = parts[-1]
+            out.add(f"{first} {last}".strip())
+            out.add(f"{last} {first}".strip())
+    return {re.sub(r"\s+", " ", x).strip() for x in out if x}
+
+
+def _filter_local_team_rows(df, team):
+    """Filter local CSV rows to the target opponent team."""
+    if df is None or df.empty:
+        return pd.DataFrame()
+    if "newestTeamName" not in df.columns:
+        return df
+    team_norm = str(team).strip().lower()
+    out = df[df["newestTeamName"].astype(str).str.strip().str.lower() == team_norm].copy()
+    if not out.empty:
+        return out
+    first_token = team_norm.split()[0] if team_norm else ""
+    if not first_token:
+        return df
+    return df[df["newestTeamName"].astype(str).str.lower().str.contains(first_token, na=False)].copy()
+
+
+def _match_local_player_rows(df, player_name):
+    """Match rows for a player using name variants across common name columns."""
+    if df is None or df.empty:
+        return pd.DataFrame()
+    keys = _name_variants(player_name)
+    if not keys:
+        return pd.DataFrame()
+
+    name_cols = [c for c in ["playerFullName", "abbrevName", "player"] if c in df.columns]
+    if not name_cols:
+        return pd.DataFrame()
+
+    masks = []
+    for col in name_cols:
+        col_keys = df[col].apply(lambda x: any(v in _name_variants(x) for v in keys))
+        masks.append(col_keys)
+    if not masks:
+        return pd.DataFrame()
+
+    m = masks[0]
+    for extra in masks[1:]:
+        m = m | extra
+    return df[m].copy()
+
+
+def _pitcher_steal_window_counts(pitch_df):
+    """Return count-level windows where steals are most likely to succeed."""
+    req = {"Balls", "Strikes", "TaggedPitchType", "RelSpeed"}
+    if pitch_df is None or pitch_df.empty or not req.issubset(pitch_df.columns):
+        return pd.DataFrame()
+    df = pitch_df.copy()
+    df = df.dropna(subset=["Balls", "Strikes", "TaggedPitchType"])
+    if df.empty:
+        return pd.DataFrame()
+
+    df["Balls"] = pd.to_numeric(df["Balls"], errors="coerce")
+    df["Strikes"] = pd.to_numeric(df["Strikes"], errors="coerce")
+    df = df[df["Balls"].notna() & df["Strikes"].notna()].copy()
+    if df.empty:
+        return pd.DataFrame()
+
+    df["Balls"] = df["Balls"].astype(int)
+    df["Strikes"] = df["Strikes"].astype(int)
+    df["Count"] = df["Balls"].astype(str) + "-" + df["Strikes"].astype(str)
+    df["RelSpeed"] = pd.to_numeric(df["RelSpeed"], errors="coerce")
+
+    fb_tokens = {"FASTBALL", "FOUR-SEAM", "4-SEAM", "SINKER", "2-SEAM", "TWO-SEAM", "CUTTER"}
+    pt_norm = df["TaggedPitchType"].astype(str).str.strip().str.upper()
+    df["is_fastball"] = pt_norm.apply(lambda x: any(tok in x for tok in fb_tokens)).astype(int)
+
+    agg = (
+        df.groupby("Count", as_index=False)
+        .agg(
+            N=("Count", "size"),
+            FastballPct=("is_fastball", "mean"),
+            AvgVelo=("RelSpeed", "mean"),
+        )
+    )
+    agg = agg[agg["N"] >= 12].copy()
+    if agg.empty:
+        return agg
+    agg["FastballPct"] = agg["FastballPct"] * 100
+
+    # Lower fastball share + lower avg velo = better steal window.
+    agg["RunWindowScore"] = (100 - agg["FastballPct"]) * 0.7 + np.clip((90 - agg["AvgVelo"]) * 5, 0, 30)
+    agg = agg.sort_values(["RunWindowScore", "N"], ascending=[False, False]).head(4)
+    return agg.reset_index(drop=True)
+
+
+def _scouting_pitcher_baserunning_panel(tm, team, pitcher, trackman_data):
+    """Pitcher-specific baserunning scouting: steal risk, pickoff risk, and count windows."""
+    section_header("Baserunning vs This Pitcher")
+    st.caption("Actionable steal windows for this specific pitcher (local baserunning CSVs + TrueMedia pitch-level counts).")
+
+    p_sb = _filter_local_team_rows(_load_local_pitcher_baserunning(), team)
+    p_pk = _filter_local_team_rows(_load_local_pickoffs(), team)
+    p_sb = _match_local_player_rows(p_sb, pitcher)
+    p_pk = _match_local_player_rows(p_pk, pitcher)
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.markdown("**Steal Success Allowed**")
+        if not p_sb.empty:
+            row = p_sb.sort_values("SBOpp", ascending=False).iloc[0]
+            sb = pd.to_numeric(pd.Series([row.get("SB")]), errors="coerce").iloc[0]
+            cs = pd.to_numeric(pd.Series([row.get("CS")]), errors="coerce").iloc[0]
+            sba = pd.to_numeric(pd.Series([row.get("SBA")]), errors="coerce").iloc[0]
+            sb_pct = pd.to_numeric(pd.Series([row.get("SB%")]), errors="coerce").iloc[0]
+            if pd.isna(sb_pct) and (not pd.isna(sb)) and (not pd.isna(cs)) and (sb + cs) > 0:
+                sb_pct = (sb / (sb + cs)) * 100
+
+            if pd.notna(sb_pct):
+                st.metric("Runner Success%", f"{sb_pct:.1f}%")
+            if pd.notna(sb) and pd.notna(cs):
+                st.caption(f"SB/CS: {int(sb)} / {int(cs)}")
+            if pd.notna(sba):
+                st.caption(f"SBA: {int(sba)}")
+
+            if pd.notna(sb_pct):
+                if sb_pct >= 85:
+                    st.caption("Signal: High steal vulnerability.")
+                elif sb_pct >= 72:
+                    st.caption("Signal: Moderate steal vulnerability.")
+                else:
+                    st.caption("Signal: Lower steal vulnerability.")
+        else:
+            st.caption("No pitcher SB/CS row found.")
+
+    with col2:
+        st.markdown("**Pickoff Profile**")
+        if not p_pk.empty:
+            row = p_pk.sort_values("PMenOn", ascending=False).iloc[0]
+            men_on = pd.to_numeric(pd.Series([row.get("PMenOn")]), errors="coerce").iloc[0]
+            pk_att = pd.to_numeric(pd.Series([row.get("PitcherPKAtt")]), errors="coerce").iloc[0]
+            pk = pd.to_numeric(pd.Series([row.get("PitcherPK")]), errors="coerce").iloc[0]
+            men_per_att = pd.to_numeric(pd.Series([row.get("P/PKAtt")]), errors="coerce").iloc[0]
+
+            if pd.notna(pk_att):
+                st.metric("Pickoff Attempts", f"{int(pk_att)}")
+            if pd.notna(pk):
+                st.caption(f"Pickoffs: {int(pk)}")
+            if pd.notna(men_per_att):
+                st.caption(f"Men-on per attempt: {men_per_att:.1f}")
+            elif pd.notna(men_on) and pd.notna(pk_att) and pk_att > 0:
+                st.caption(f"Men-on per attempt: {men_on / pk_att:.1f}")
+
+            if pd.notna(men_per_att):
+                if men_per_att <= 7:
+                    st.caption("Signal: Aggressive pickoff threat.")
+                elif men_per_att <= 14:
+                    st.caption("Signal: Moderate pickoff threat.")
+                else:
+                    st.caption("Signal: Lower pickoff threat.")
+        else:
+            st.caption("No pickoff row found.")
+
+    with col3:
+        st.markdown("**Best Counts to Run**")
+        p_pitch = _match_pitcher_trackman(_prefer_truemedia_pitch_data(trackman_data), pitcher) if isinstance(trackman_data, pd.DataFrame) else pd.DataFrame()
+        p_pitch = _filter_pitch_types_global(p_pitch, min_pct=0.0) if not p_pitch.empty else pd.DataFrame()
+        count_windows = _pitcher_steal_window_counts(p_pitch)
+        if not count_windows.empty:
+            top = count_windows.iloc[0]
+            st.metric("Top Window", f"{top['Count']}")
+            st.caption(f"FB {top['FastballPct']:.0f}% | {top['AvgVelo']:.1f} mph | n={int(top['N'])}")
+
+            show_df = count_windows[["Count", "N", "FastballPct", "AvgVelo"]].copy()
+            show_df["FastballPct"] = show_df["FastballPct"].map(lambda x: f"{x:.0f}%")
+            show_df["AvgVelo"] = show_df["AvgVelo"].map(lambda x: f"{x:.1f}")
+            st.dataframe(show_df, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No reliable count windows yet (need >=12 pitches per count).")
+
+    if (not p_sb.empty) or (not p_pk.empty):
+        notes = []
+        if not p_sb.empty:
+            row = p_sb.sort_values("SBOpp", ascending=False).iloc[0]
+            sb_pct = pd.to_numeric(pd.Series([row.get("SB%")]), errors="coerce").iloc[0]
+            if pd.notna(sb_pct):
+                notes.append(f"Steal success allowed: **{sb_pct:.1f}%**")
+        if not p_pk.empty:
+            row = p_pk.sort_values("PMenOn", ascending=False).iloc[0]
+            ppkatt = pd.to_numeric(pd.Series([row.get("P/PKAtt")]), errors="coerce").iloc[0]
+            if pd.notna(ppkatt):
+                notes.append(f"Pickoff frequency: **1 per {ppkatt:.1f} men-on**")
+        if notes:
+            st.caption(" | ".join(notes))
 
 
 def _trackman_pitcher_overlay(data, pitcher_name, source_label="Trackman"):
@@ -7414,51 +7666,76 @@ def _scouting_catcher_report(tm, team):
 # ══════════════════════════════════════════════════════════════════════════════
 
 
+def _find_local_csv(*candidates):
+    """Find CSV in /data first, then project root, supporting legacy file names."""
+    base = os.path.dirname(os.path.dirname(__file__))
+    search_dirs = [os.path.join(base, "data"), base]
+    for folder in search_dirs:
+        for name in candidates:
+            p = os.path.join(folder, name)
+            if os.path.exists(p):
+                return p
+    return None
+
+
 def _load_local_catcher_throws():
-    """Load catcher throwing data from local CSV file (stolen_bases_catchers.csv)."""
-    import os
-    # Use the new catcher SB data which includes PopTimeSBA2
-    csv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "stolen_bases_catchers.csv")
-    if os.path.exists(csv_path):
-        try:
-            df = pd.read_csv(csv_path)
-            # Map PopTimeSBA2 to PopTime for compatibility
-            if "PopTimeSBA2" in df.columns:
-                df["PopTime"] = pd.to_numeric(df["PopTimeSBA2"], errors="coerce")
-            # Convert numeric columns
-            for col in ["SB", "CS", "SBA", "SBOpp", "SB2", "CS2", "SB3", "CS3"]:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors="coerce")
-            # Parse SB% (remove % sign, handle '-' as NaN)
-            if "SB%" in df.columns:
-                df["SB%"] = df["SB%"].astype(str).str.replace("%", "", regex=False).replace("-", "")
-                df["SB%"] = pd.to_numeric(df["SB%"], errors="coerce")
-            return df
-        except Exception:
-            return pd.DataFrame()
-    return pd.DataFrame()
+    """Load catcher throwing data from local CSV file."""
+    csv_path = _find_local_csv("stolen_bases_catchers.csv", "Stolen Bases-3.csv", "Stolen Bases.csv")
+    if not csv_path:
+        return pd.DataFrame()
+    try:
+        df = pd.read_csv(csv_path)
+        # Map PopTimeSBA2 to PopTime for compatibility
+        if "PopTimeSBA2" in df.columns:
+            df["PopTime"] = pd.to_numeric(df["PopTimeSBA2"], errors="coerce")
+        for col in ["SB", "CS", "SBA", "SBOpp", "SB2", "CS2", "SB3", "CS3", "PopTime", "CThrowSpd", "CExchTime"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        if "SB%" in df.columns:
+            df["SB%"] = df["SB%"].astype(str).str.replace("%", "", regex=False).replace("-", "")
+            df["SB%"] = pd.to_numeric(df["SB%"], errors="coerce")
+        return df
+    except Exception:
+        return pd.DataFrame()
 
 
 def _load_local_pitcher_baserunning():
-    """Load pitcher-level SB allowed data (stolen_bases_pitchers.csv)."""
-    import os
-    csv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "stolen_bases_pitchers.csv")
-    if os.path.exists(csv_path):
-        try:
-            df = pd.read_csv(csv_path)
-            # Convert numeric columns
-            for col in ["SB", "CS", "SBA", "SBOpp", "G", "SB2", "CS2", "SB3", "CS3"]:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors="coerce")
-            # Parse SB% columns (remove % sign, handle '-' as NaN)
-            for pct_col in ["SB%", "SB2%", "SB3%"]:
-                if pct_col in df.columns:
-                    df[pct_col] = df[pct_col].astype(str).str.replace("%", "", regex=False).replace("-", "")
-                    df[pct_col] = pd.to_numeric(df[pct_col], errors="coerce")
-            return df
-        except Exception:
-            return pd.DataFrame()
-    return pd.DataFrame()
+    """Load pitcher-level SB allowed data."""
+    csv_path = _find_local_csv("stolen_bases_pitchers.csv", "Stolen Bases pitching.csv")
+    if not csv_path:
+        return pd.DataFrame()
+    try:
+        df = pd.read_csv(csv_path)
+        for col in ["SB", "CS", "SBA", "SBOpp", "G", "SB2", "CS2", "SB3", "CS3", "SBAH", "SBH", "CSH"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        for pct_col in ["SB%", "SB2%", "SB3%"]:
+            if pct_col in df.columns:
+                df[pct_col] = df[pct_col].astype(str).str.replace("%", "", regex=False).replace("-", "")
+                df[pct_col] = pd.to_numeric(df[pct_col], errors="coerce")
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+def _load_local_pickoffs():
+    """Load pitcher pickoff tendencies."""
+    csv_path = _find_local_csv("pickoffs.csv", "Pickoffs.csv")
+    if not csv_path:
+        return pd.DataFrame()
+    try:
+        df = pd.read_csv(csv_path)
+        for col in [
+            "PMenOn", "P/PKAtt", "PitcherPKAtt", "PitcherPK", "PitcherPKErr",
+            "P1B", "P/PK1Att", "PK1Att", "PK1", "PK1Err",
+            "P2B", "P/PK2Att", "PK2Att", "PK2", "PK2Err",
+            "P3B", "P/PK3Att", "PK3Att", "PK3", "PK3Err",
+        ]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        return df
+    except Exception:
+        return pd.DataFrame()
 
 
 def _load_local_outfield_throws():
