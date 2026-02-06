@@ -6926,9 +6926,13 @@ def _scouting_pitcher_report(tm, team, trackman_data, league_pitchers=None):
                     x_edges = np.array([-1.5, -0.5, 0.5, 1.5])
                     y_edges = np.array([0.5, 2.0, 3.0, 4.5])
                     df_side = df_side.copy()
-                    # Use hitter-relative bins for consistency with other scouting visuals.
-                    xbin_abs = np.clip(np.digitize(df_side["PlateLocSide"], x_edges) - 1, 0, 2)
-                    df_side["xbin"] = [_rel_xbin(int(xb), bats_side) for xb in xbin_abs]
+                    # Hitter-relative Inside/Middle/Away (normalized).
+                    # PlateLocSide is catcher-view (3B-side negative -> 1B-side positive). For LHH,
+                    # "inside" is 1B-side, so we flip the sign so inside is always left on the chart.
+                    side = pd.to_numeric(df_side["PlateLocSide"], errors="coerce")
+                    if str(bats_side).strip().upper().startswith("L"):
+                        side = -side
+                    df_side["xbin"] = np.clip(np.digitize(side, x_edges) - 1, 0, 2)
                     df_side["ybin"] = np.clip(np.digitize(df_side["PlateLocHeight"], y_edges) - 1, 0, 2)
                     z_matrix = []
                     total = len(df_side)
@@ -6938,9 +6942,13 @@ def _scouting_pitcher_report(tm, team, trackman_data, league_pitchers=None):
                             cnt = len(df_side[(df_side["xbin"] == xi) & (df_side["ybin"] == yi)])
                             row.append(round(cnt / max(total, 1) * 100, 1))
                         z_matrix.append(row)
+
+                    # Inside is always left due to the normalization above.
+                    x_labels = ["Inside", "Middle", "Away"]
+
                     fig_hm = go.Figure(data=go.Heatmap(
                         z=z_matrix,
-                        x=["Inside", "Middle", "Away"],
+                        x=x_labels,
                         y=["High", "Middle", "Low"],
                         colorscale=[[0, "#f0f4f8"], [0.5, "#3d7dab"], [1, "#14365d"]],
                         showscale=False,
@@ -6979,7 +6987,7 @@ def _scouting_pitcher_report(tm, team, trackman_data, league_pitchers=None):
 
                 rendered_cmd_heatmap = bool(ok_r or ok_l)
                 if rendered_cmd_heatmap:
-                    st.caption("Catcher-view location frequency from pitch-level TrueMedia data, shown hitter-relative as Inside/Middle/Away for each hand split.")
+                    st.caption("Hitter-relative Inside/Middle/Away frequency from pitch-level TrueMedia data (Inside is normalized to the left for both hands).")
 
             # Do not approximate a 3x3 joint map from API marginals (can be misleading).
             if not rendered_cmd_heatmap:
@@ -7239,7 +7247,11 @@ def _match_local_player_rows(df, player_name):
 
 
 def _pitcher_steal_window_counts(pitch_df):
-    """Return count-level windows where steals are most likely to succeed."""
+    """Return count-level windows where steals are most likely to succeed.
+
+    Heuristic only: we do not know actual steal attempts by count for this pitcher here.
+    We use pitch mix (fastball vs offspeed) and velo as a proxy for "run windows".
+    """
     req = {"Balls", "Strikes", "TaggedPitchType", "RelSpeed"}
     if pitch_df is None or pitch_df.empty or not req.issubset(pitch_df.columns):
         return pd.DataFrame()
@@ -7275,10 +7287,11 @@ def _pitcher_steal_window_counts(pitch_df):
     if agg.empty:
         return agg
     agg["FastballPct"] = agg["FastballPct"] * 100
+    agg["OffspeedPct"] = 100 - agg["FastballPct"]
 
     # Lower fastball share + lower avg velo = better steal window.
     agg["RunWindowScore"] = (100 - agg["FastballPct"]) * 0.7 + np.clip((90 - agg["AvgVelo"]) * 5, 0, 30)
-    agg = agg.sort_values(["RunWindowScore", "N"], ascending=[False, False]).head(4)
+    agg = agg.sort_values(["RunWindowScore", "N"], ascending=[False, False]).head(6)
     return agg.reset_index(drop=True)
 
 
@@ -7289,6 +7302,7 @@ def _scouting_pitcher_baserunning_panel(tm, team, pitcher, trackman_data):
 
     p_sb = _filter_local_team_rows(_load_local_pitcher_baserunning(), team)
     p_pk = _filter_local_team_rows(_load_local_pickoffs(), team)
+    c_sb = _filter_local_team_rows(_load_local_catcher_throws(), team)
     p_sb = _match_local_player_rows(p_sb, pitcher)
     p_pk = _match_local_player_rows(p_pk, pitcher)
 
@@ -7356,16 +7370,75 @@ def _scouting_pitcher_baserunning_panel(tm, team, pitcher, trackman_data):
         p_pitch = _filter_pitch_types_global(p_pitch, min_pct=0.0) if not p_pitch.empty else pd.DataFrame()
         count_windows = _pitcher_steal_window_counts(p_pitch)
         if not count_windows.empty:
-            top = count_windows.iloc[0]
-            st.metric("Top Window", f"{top['Count']}")
-            st.caption(f"FB {top['FastballPct']:.0f}% | {top['AvgVelo']:.1f} mph | n={int(top['N'])}")
+            # "Best" by offspeed share (simple, coach-friendly).
+            top_os = count_windows.sort_values(["OffspeedPct", "N"], ascending=[False, False]).iloc[0]
+            st.metric("Top Offspeed Window", f"{top_os['Count']}")
+            st.caption(f"Offspeed {top_os['OffspeedPct']:.0f}% | AvgVelo {top_os['AvgVelo']:.1f} mph | n={int(top_os['N'])}")
 
-            show_df = count_windows[["Count", "N", "FastballPct", "AvgVelo"]].copy()
+            show_df = count_windows[["Count", "N", "OffspeedPct", "FastballPct", "AvgVelo"]].copy()
+            show_df["OffspeedPct"] = show_df["OffspeedPct"].map(lambda x: f"{x:.0f}%")
             show_df["FastballPct"] = show_df["FastballPct"].map(lambda x: f"{x:.0f}%")
             show_df["AvgVelo"] = show_df["AvgVelo"].map(lambda x: f"{x:.1f}")
             st.dataframe(show_df, use_container_width=True, hide_index=True)
         else:
             st.caption("No reliable count windows yet (need >=12 pitches per count).")
+
+    # Catcher control matters for steal success; show team context here (not pitcher-specific).
+    st.markdown("**Catcher Stolen Base Control (Team)**")
+    if c_sb is None or c_sb.empty:
+        st.caption("No catcher SB/CS data found for this team.")
+    else:
+        c_df = c_sb.copy()
+        if "pos" in c_df.columns:
+            c_df = c_df[c_df["pos"].astype(str).str.upper().str.contains("C", na=False)].copy()
+        if c_df.empty:
+            st.caption("No catcher rows found for this team.")
+        else:
+            # Prefer 2B steal defense, but fall back to overall if needed.
+            for col in ["SBOpp", "SBA", "SB", "CS", "SB2", "CS2", "SBA2", "SBOpp2", "PopTime", "PopTimeSBA2", "SB%"]:
+                if col in c_df.columns:
+                    c_df[col] = pd.to_numeric(c_df[col], errors="coerce")
+            if "PopTimeSBA2" in c_df.columns and "PopTime" not in c_df.columns:
+                c_df["PopTime"] = pd.to_numeric(c_df["PopTimeSBA2"], errors="coerce")
+
+            sort_col = "SBOpp"
+            if sort_col not in c_df.columns:
+                sort_col = "SBA" if "SBA" in c_df.columns else None
+            if sort_col:
+                c_df = c_df.sort_values(sort_col, ascending=False)
+            primary = c_df.iloc[0]
+
+            sb = pd.to_numeric(pd.Series([primary.get("SB2", primary.get("SB"))]), errors="coerce").iloc[0]
+            cs = pd.to_numeric(pd.Series([primary.get("CS2", primary.get("CS"))]), errors="coerce").iloc[0]
+            sba = pd.to_numeric(pd.Series([primary.get("SBA2", primary.get("SBA"))]), errors="coerce").iloc[0]
+            pop = pd.to_numeric(pd.Series([primary.get("PopTime")]), errors="coerce").iloc[0]
+            succ = pd.to_numeric(pd.Series([primary.get("SB%")]), errors="coerce").iloc[0]
+            if pd.isna(succ) and pd.notna(sb) and pd.notna(cs) and (sb + cs) > 0:
+                succ = (sb / (sb + cs)) * 100
+
+            name = str(primary.get("playerFullName", primary.get("player", "Catcher"))).strip()
+            st.caption(f"Primary (most attempts faced): **{name}**")
+            if pd.notna(succ):
+                st.metric("Runner Success% vs Catcher", f"{succ:.1f}%")
+            parts = []
+            if pd.notna(sb) and pd.notna(cs):
+                parts.append(f"SB/CS: {int(sb)} / {int(cs)}")
+            if pd.notna(sba):
+                parts.append(f"SBA: {int(sba)}")
+            if pd.notna(pop):
+                parts.append(f"Pop: {pop:.2f}s")
+            if parts:
+                st.caption(" | ".join(parts))
+
+            # Small table of top catchers
+            cols = [c for c in ["playerFullName", "SBA", "SB", "CS", "SB%", "PopTime"] if c in c_df.columns]
+            if cols:
+                show = c_df[cols].head(3).copy()
+                if "SB%" in show.columns:
+                    show["SB%"] = show["SB%"].map(lambda x: f"{x:.1f}%" if pd.notna(x) else "-")
+                if "PopTime" in show.columns:
+                    show["PopTime"] = show["PopTime"].map(lambda x: f"{x:.2f}" if pd.notna(x) else "-")
+                st.dataframe(show, use_container_width=True, hide_index=True)
 
     if (not p_sb.empty) or (not p_pk.empty):
         notes = []
