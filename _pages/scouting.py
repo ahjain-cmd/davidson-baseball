@@ -177,7 +177,7 @@ def _entropy_bits(probs):
     return float(-(probs * np.log2(probs)).sum())
 
 
-def _pitch_type_entropy_by_count(pitch_df, min_pitches=20):
+def _pitch_type_entropy_by_count(pitch_df, min_pitches=20, min_pitch_usage_pct=0.0):
     """Compute pitch-type entropy by count and hitter hand."""
     req = {"TaggedPitchType", "Balls", "Strikes", "BatterSide"}
     if pitch_df.empty or not req.issubset(pitch_df.columns):
@@ -193,17 +193,27 @@ def _pitch_type_entropy_by_count(pitch_df, min_pitches=20):
     df = df[~pt_upper.isin(bad_pitch_labels)]
     if df.empty:
         return pd.DataFrame()
-    usage = df["TaggedPitchType"].value_counts(normalize=True) * 100
-    keep = usage[usage >= MIN_PITCH_USAGE_PCT].index
-    df = df[df["TaggedPitchType"].isin(keep)]
+    if min_pitch_usage_pct and min_pitch_usage_pct > 0:
+        usage = df["TaggedPitchType"].value_counts(normalize=True) * 100
+        keep = usage[usage >= float(min_pitch_usage_pct)].index
+        df = df[df["TaggedPitchType"].isin(keep)]
+        if df.empty:
+            return pd.DataFrame()
+
+    balls_num = pd.to_numeric(df["Balls"], errors="coerce")
+    strikes_num = pd.to_numeric(df["Strikes"], errors="coerce")
+    side_norm = df["BatterSide"].astype(str).str.strip().str.upper().str[0]
+    valid = balls_num.notna() & strikes_num.notna() & side_norm.isin(["L", "R", "S"])
+    df = df[valid].copy()
     if df.empty:
         return pd.DataFrame()
-
-    df["count"] = df["Balls"].astype(int).astype(str) + "-" + df["Strikes"].astype(int).astype(str)
-    df["BatterSide"] = df["BatterSide"].replace({"R": "Right", "L": "Left", "S": "Both"})
+    balls_num = balls_num[valid].astype(int)
+    strikes_num = strikes_num[valid].astype(int)
+    df["count"] = balls_num.astype(str) + "-" + strikes_num.astype(str)
+    df["BatterSideNorm"] = side_norm[valid]
 
     rows = []
-    for (count, side), grp in df.groupby(["count", "BatterSide"]):
+    for (count, side), grp in df.groupby(["count", "BatterSideNorm"]):
         n = len(grp)
         if n < min_pitches:
             continue
@@ -217,7 +227,7 @@ def _pitch_type_entropy_by_count(pitch_df, min_pitches=20):
         predict = 1 - h_norm if pd.notna(h_norm) else np.nan
         rows.append({
             "Count": count,
-            "BatterSide": "L" if side == "Left" else ("R" if side == "Right" else "S"),
+            "BatterSide": side,
             "N": n,
             "Top Pitch": top_pitch,
             "Top%": top_pct,
@@ -5222,10 +5232,10 @@ def _zone_heatmap_layout(fig, title, bats=None, show_inside_away=True, is_switch
     return fig
 
 
-def _attack_zone_heatmap(pitch_df, title, bats=None):
+def _attack_zone_heatmap(pitch_df, title, bats=None, min_pitches=25):
     """3x3 pitch attack heatmap using pitch-level data (inside/outside hitter-relative)."""
     loc = pitch_df.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
-    if len(loc) < 25:
+    if len(loc) < min_pitches:
         return None
 
     x_edges = np.array([-1.5, -0.5, 0.5, 1.5])
@@ -6770,6 +6780,8 @@ def _scouting_pitcher_report(tm, team, trackman_data, league_pitchers=None):
         src_label = _pitch_source_label(tm_only)
         p_tm_raw = _match_pitcher_trackman(tm_only, pitcher)
         p_tm = _filter_pitch_types_global(p_tm_raw, MIN_PITCH_USAGE_PCT)
+        # For predictability/entropy, keep all defined pitch types (drop only undefined labels).
+        p_tm_predict = _filter_pitch_types_global(p_tm_raw, min_pct=0.0)
         p_tm_for_cmd = p_tm.copy() if p_tm is not None else pd.DataFrame()
         if not p_tm.empty and len(p_tm) >= 20:
             # ── Movement Profile ──
@@ -6829,7 +6841,7 @@ def _scouting_pitcher_report(tm, team, trackman_data, league_pitchers=None):
                     if ars_rows:
                         st.dataframe(pd.DataFrame(ars_rows), use_container_width=True, hide_index=True)
             # ── Pitch Predictability by Count & Hand (Top 3 most predictable) ──
-            ent_df = _pitch_type_entropy_by_count(p_tm, min_pitches=20)
+            ent_df = _pitch_type_entropy_by_count(p_tm_predict, min_pitches=20, min_pitch_usage_pct=0.0)
             if not ent_df.empty:
                 section_header(f"Most Predictable Counts ({src_label})")
                 st.caption("Top 3 count/hand situations where this pitcher is most predictable.")
@@ -6853,29 +6865,40 @@ def _scouting_pitcher_report(tm, team, trackman_data, league_pitchers=None):
                         st.caption(f"n={n}")
 
                         # Filter pitches for this count/side and show location
-                        if {"Balls", "Strikes", "BatterSide", "PlateLocSide", "PlateLocHeight"}.issubset(p_tm.columns):
+                        if {"Balls", "Strikes", "BatterSide", "PlateLocSide", "PlateLocHeight"}.issubset(p_tm_predict.columns):
                             balls, strikes = int(count_str.split("-")[0]), int(count_str.split("-")[1])
-                            side_map = p_tm["BatterSide"].astype(str).str.strip().str.upper().str[0]
+                            side_map = p_tm_predict["BatterSide"].astype(str).str.strip().str.upper().str[0]
+                            balls_num = pd.to_numeric(p_tm_predict["Balls"], errors="coerce")
+                            strikes_num = pd.to_numeric(p_tm_predict["Strikes"], errors="coerce")
                             if side in {"L", "R"}:
                                 side_mask = side_map == side
                             else:
-                                side_mask = side_map.notna()
-                            count_pitches = p_tm[
-                                (p_tm["Balls"] == balls) &
-                                (p_tm["Strikes"] == strikes) &
+                                side_mask = side_map.isin(["L", "R", "S"])
+                            count_pitches = p_tm_predict[
+                                (balls_num == balls) &
+                                (strikes_num == strikes) &
                                 side_mask
                             ]
-                            if len(count_pitches) >= 15:
+                            plot_pitches = count_pitches
+                            if "TaggedPitchType" in count_pitches.columns and pitch in set(count_pitches["TaggedPitchType"].dropna()):
+                                top_pitch_pitches = count_pitches[count_pitches["TaggedPitchType"] == pitch]
+                                if len(top_pitch_pitches) >= 8:
+                                    plot_pitches = top_pitch_pitches
+                            if len(plot_pitches) >= 8:
                                 bats = "L" if side == "L" else ("R" if side == "R" else None)
-                                fig = _zone_freq_heatmap(
-                                    count_pitches,
+                                fig = _attack_zone_heatmap(
+                                    plot_pitches,
                                     f"{count_str} Location",
                                     bats=bats,
-                                    hitter_relative=False,
+                                    min_pitches=8,
                                 )
                                 if fig is not None:
                                     fig.update_layout(height=340)
                                     st.plotly_chart(fig, use_container_width=True)
+                                    if len(plot_pitches) < len(count_pitches):
+                                        st.caption(f"{pitch} locations (n={len(plot_pitches)})")
+                                    else:
+                                        st.caption(f"All pitch locations in this count (n={len(plot_pitches)})")
 
         elif p_tm_raw.empty:
             st.info(f"No {src_label} pitch-level data available for this pitcher.")
@@ -6923,8 +6946,9 @@ def _scouting_pitcher_report(tm, team, trackman_data, league_pitchers=None):
                         type="rect", x0=-0.5, y0=-0.5, x1=2.5, y1=2.5,
                         line=dict(color="#000000", width=3),
                     )
+                    _cl = {k: v for k, v in CHART_LAYOUT.items() if k != "margin"}
                     fig_hm.update_layout(
-                        **CHART_LAYOUT, height=280,
+                        **_cl, height=280,
                         xaxis=dict(side="bottom"), yaxis=dict(autorange="reversed"),
                         margin=dict(l=60, r=10, t=10, b=40),
                     )
