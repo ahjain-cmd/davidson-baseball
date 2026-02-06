@@ -7306,7 +7306,8 @@ def _scouting_pitcher_baserunning_panel(tm, team, pitcher, trackman_data):
     p_sb = _match_local_player_rows(p_sb, pitcher)
     p_pk = _match_local_player_rows(p_pk, pitcher)
 
-    col1, col2, col3 = st.columns(3)
+    # Top row: 3 compact cards (keep tables out of columns so nothing gets squished).
+    col1, col2, col3 = st.columns([1, 1, 1])
 
     with col1:
         st.markdown("**Steal Success Allowed**")
@@ -7372,16 +7373,19 @@ def _scouting_pitcher_baserunning_panel(tm, team, pitcher, trackman_data):
         if not count_windows.empty:
             # "Best" by offspeed share (simple, coach-friendly).
             top_os = count_windows.sort_values(["OffspeedPct", "N"], ascending=[False, False]).iloc[0]
-            st.metric("Top Offspeed Window", f"{top_os['Count']}")
+            st.metric("Top Offspeed Count", f"{top_os['Count']}")
             st.caption(f"Offspeed {top_os['OffspeedPct']:.0f}% | AvgVelo {top_os['AvgVelo']:.1f} mph | n={int(top_os['N'])}")
-
-            show_df = count_windows[["Count", "N", "OffspeedPct", "FastballPct", "AvgVelo"]].copy()
-            show_df["OffspeedPct"] = show_df["OffspeedPct"].map(lambda x: f"{x:.0f}%")
-            show_df["FastballPct"] = show_df["FastballPct"].map(lambda x: f"{x:.0f}%")
-            show_df["AvgVelo"] = show_df["AvgVelo"].map(lambda x: f"{x:.1f}")
-            st.dataframe(show_df, use_container_width=True, hide_index=True)
         else:
             st.caption("No reliable count windows yet (need >=12 pitches per count).")
+
+    # Full-width: show count windows table (avoid tiny tables inside narrow columns).
+    if "count_windows" in locals() and isinstance(count_windows, pd.DataFrame) and (not count_windows.empty):
+        st.markdown("**Offspeed Windows by Count**")
+        show_df = count_windows[["Count", "N", "OffspeedPct", "FastballPct", "AvgVelo"]].copy()
+        show_df["OffspeedPct"] = show_df["OffspeedPct"].map(lambda x: f"{x:.0f}%")
+        show_df["FastballPct"] = show_df["FastballPct"].map(lambda x: f"{x:.0f}%")
+        show_df["AvgVelo"] = show_df["AvgVelo"].map(lambda x: f"{x:.1f}")
+        st.dataframe(show_df, use_container_width=True, hide_index=True)
 
     # Catcher control matters for steal success; show team context here (not pitcher-specific).
     st.markdown("**Catcher Stolen Base Control (Team)**")
@@ -7417,28 +7421,31 @@ def _scouting_pitcher_baserunning_panel(tm, team, pitcher, trackman_data):
                 succ = (sb / (sb + cs)) * 100
 
             name = str(primary.get("playerFullName", primary.get("player", "Catcher"))).strip()
-            st.caption(f"Primary (most attempts faced): **{name}**")
-            if pd.notna(succ):
-                st.metric("Runner Success% vs Catcher", f"{succ:.1f}%")
-            parts = []
-            if pd.notna(sb) and pd.notna(cs):
-                parts.append(f"SB/CS: {int(sb)} / {int(cs)}")
-            if pd.notna(sba):
-                parts.append(f"SBA: {int(sba)}")
-            if pd.notna(pop):
-                parts.append(f"Pop: {pop:.2f}s")
-            if parts:
-                st.caption(" | ".join(parts))
+            c_col1, c_col2 = st.columns([1, 2])
+            with c_col1:
+                st.caption(f"Primary: **{name}**")
+                if pd.notna(succ):
+                    st.metric("Runner Success% vs Catcher", f"{succ:.1f}%")
+                parts = []
+                if pd.notna(sb) and pd.notna(cs):
+                    parts.append(f"SB/CS: {int(sb)} / {int(cs)}")
+                if pd.notna(sba):
+                    parts.append(f"SBA: {int(sba)}")
+                if pd.notna(pop):
+                    parts.append(f"Pop: {pop:.2f}s")
+                if parts:
+                    st.caption(" | ".join(parts))
 
-            # Small table of top catchers
-            cols = [c for c in ["playerFullName", "SBA", "SB", "CS", "SB%", "PopTime"] if c in c_df.columns]
-            if cols:
-                show = c_df[cols].head(3).copy()
-                if "SB%" in show.columns:
-                    show["SB%"] = show["SB%"].map(lambda x: f"{x:.1f}%" if pd.notna(x) else "-")
-                if "PopTime" in show.columns:
-                    show["PopTime"] = show["PopTime"].map(lambda x: f"{x:.2f}" if pd.notna(x) else "-")
-                st.dataframe(show, use_container_width=True, hide_index=True)
+            with c_col2:
+                with st.expander("Show catcher details", expanded=False):
+                    cols = [c for c in ["playerFullName", "SBA", "SB", "CS", "SB%", "PopTime"] if c in c_df.columns]
+                    if cols:
+                        show = c_df[cols].head(5).copy()
+                        if "SB%" in show.columns:
+                            show["SB%"] = show["SB%"].map(lambda x: f"{x:.1f}%" if pd.notna(x) else "-")
+                        if "PopTime" in show.columns:
+                            show["PopTime"] = show["PopTime"].map(lambda x: f"{x:.2f}" if pd.notna(x) else "-")
+                        st.dataframe(show, use_container_width=True, hide_index=True)
 
     if (not p_sb.empty) or (not p_pk.empty):
         notes = []
