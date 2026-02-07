@@ -74,11 +74,11 @@ def _build_3pitch_sequences(sorted_ps, hd, tun_df, seq_df):
             # Allow same-pitch sequences (e.g., FB→FB→SL) - treat tunnel as neutral
             is_same_p2_p3 = (p2 == p3)
             for p1 in setup_candidates:  # P1 restricted to primary pitches
-                if p1 == p2:
-                    continue
                 t12, g12 = _lookup_tunnel(p1, p2, tun_df)
                 t23, g23 = _lookup_tunnel(p2, p3, tun_df)
                 # For same-pitch pairs, use neutral tunnel score (50) since tunnel doesn't apply
+                if p1 == p2:
+                    t12 = 50.0
                 if is_same_p2_p3:
                     t23 = 50.0
                 # Use neutral score (50) when tunnel is missing, so outcomes can still surface

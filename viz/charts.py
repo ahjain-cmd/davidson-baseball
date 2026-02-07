@@ -194,13 +194,13 @@ def make_movement_profile(pdf, height=520):
     #   LHP: positive HB -> 1B side -> RIGHT (no negate)
     mov = mov.copy()
     throws = mov.get("PitcherThrows")
-    is_lhp = False
     if throws is not None and not throws.dropna().empty:
-        mode_throw = throws.mode()
-        if len(mode_throw) > 0:
-            is_lhp = str(mode_throw.iloc[0]).lower().startswith("l")
-    hb_sign = 1.0 if is_lhp else -1.0
-    mov["HB_plot"] = mov["HorzBreak"] * hb_sign
+        is_lhp = throws.astype(str).str.lower().str.startswith("l")
+        hb_sign = np.where(is_lhp, 1.0, -1.0)
+        mov["HB_plot"] = mov["HorzBreak"] * hb_sign
+    else:
+        # Fallback: assume RHP orientation
+        mov["HB_plot"] = -mov["HorzBreak"]
 
     # Plot each pitch type as cluster
     pitch_types = sorted(mov["TaggedPitchType"].dropna().unique())

@@ -103,8 +103,11 @@ PITCH_TYPE_MAP = {
     "ChangeUp": "Changeup",
     "Knuckleball": "Other",
     "Undefined": "Other",
+    "UN": "Other",
+    "Unknown": "Other",
+    "UNK": "Other",
 }
-PITCH_TYPES_TO_DROP = {"Other", "Undefined"}
+PITCH_TYPES_TO_DROP = {"Other", "Undefined", "UN", "Unknown", "UNK"}
 
 TM_PITCH_PCT_COLS = {
     "4Seam%": "Fastball", "Sink2Seam%": "Sinker", "Cutter%": "Cutter",

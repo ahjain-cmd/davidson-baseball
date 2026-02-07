@@ -85,9 +85,12 @@ def page_team(data):
             st.image(_celeb_path, use_container_width=True)
 
     # ── Data setup ──
-    dav_pitching = data[data["PitcherTeam"] == DAVIDSON_TEAM_ID]
-    dav_batting = data[data["BatterTeam"] == DAVIDSON_TEAM_ID]
-    dav_data = pd.concat([dav_pitching, dav_batting]).drop_duplicates(subset=["Date", "Pitcher", "Batter", "PitchNo", "Inning", "PAofInning"])
+    # Davidson-only, Trackman-derived rows
+    dav_pitching = data[data["PitcherTeam"] == DAVIDSON_TEAM_ID].copy()
+    dav_batting = data[data["BatterTeam"] == DAVIDSON_TEAM_ID].copy()
+    dav_data = pd.concat([dav_pitching, dav_batting]).drop_duplicates(
+        subset=["Date", "Pitcher", "Batter", "PitchNo", "Inning", "PAofInning"]
+    )
     latest_date = data["Date"].max()
     dav_dates = pd.concat([dav_pitching["Date"], dav_batting["Date"]]).dropna().dt.date.nunique()
     n_pitchers = len([p for p in ROSTER_2026 if p in dav_pitching["Pitcher"].values])
@@ -150,7 +153,7 @@ def _render_team_dashboard(data, dav_pitching, dav_batting, dav_data, latest_dat
     # ── Quick Stats Row ──
     s1, s2, s3, s4, s5 = st.columns(5)
     with s1:
-        st.markdown(f'<div class="stat-card"><div class="val">{len(data):,}</div><div class="lbl">Total Pitches</div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="stat-card"><div class="val">{len(dav_data):,}</div><div class="lbl">Total Pitches</div></div>', unsafe_allow_html=True)
     with s2:
         st.markdown(f'<div class="stat-card"><div class="val">{dav_dates}</div><div class="lbl">Davidson Games</div></div>', unsafe_allow_html=True)
     with s3:
@@ -181,7 +184,10 @@ def _render_team_dashboard(data, dav_pitching, dav_batting, dav_data, latest_dat
         # ── Hitting Leaders ──
         with col_wh:
             st.markdown("#### :red[Hitting]")
-            week_bat = recent[recent["BatterTeam"] == DAVIDSON_TEAM_ID].copy()
+            week_bat = recent[
+                (recent["BatterTeam"] == DAVIDSON_TEAM_ID) &
+                (recent["Batter"].isin(ROSTER_2026))
+            ].copy()
             week_inplay = week_bat[week_bat["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
             if len(week_inplay) >= 5:
                 # Hardest contact
@@ -245,7 +251,10 @@ def _render_team_dashboard(data, dav_pitching, dav_batting, dav_data, latest_dat
         # ── Pitching Leaders ──
         with col_wp:
             st.markdown("#### :red[Pitching]")
-            week_pit = recent[recent["PitcherTeam"] == DAVIDSON_TEAM_ID].copy()
+            week_pit = recent[
+                (recent["PitcherTeam"] == DAVIDSON_TEAM_ID) &
+                (recent["Pitcher"].isin(ROSTER_2026))
+            ].copy()
             if len(week_pit) >= 10:
                 # Whiff leader
                 pit_swings = week_pit[week_pit["PitchCall"].isin(SWING_CALLS)]
@@ -279,7 +288,11 @@ def _render_team_dashboard(data, dav_pitching, dav_batting, dav_data, latest_dat
                                     f'</div>', unsafe_allow_html=True)
 
                 # Lowest EV against
-                pit_inplay = recent[(recent["PitcherTeam"] == DAVIDSON_TEAM_ID) & (recent["PitchCall"] == "InPlay")]
+                pit_inplay = recent[
+                    (recent["PitcherTeam"] == DAVIDSON_TEAM_ID) &
+                    (recent["Pitcher"].isin(ROSTER_2026)) &
+                    (recent["PitchCall"] == "InPlay")
+                ]
                 pit_ev = pit_inplay.dropna(subset=["ExitSpeed"]).groupby("Pitcher")["ExitSpeed"].agg(["mean", "count"]).reset_index()
                 pit_ev = pit_ev[pit_ev["count"] >= 3].sort_values("mean")
                 if len(pit_ev) > 0:
