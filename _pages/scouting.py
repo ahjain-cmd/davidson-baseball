@@ -419,8 +419,12 @@ def _get_our_pitcher_arsenal(data, pitcher_name, season_filter=None, tunnel_pop=
         for zn, zmask in [
             ("up", loc_grp["PlateLocHeight"] >= zone_mid_h),
             ("down", (loc_grp["PlateLocHeight"] < zone_mid_h) & (loc_grp["PlateLocHeight"] >= ZONE_HEIGHT_BOT)),
-            ("glove", loc_grp["PlateLocSide"] > 0 if throws == "Right" else loc_grp["PlateLocSide"] < 0),
-            ("arm", loc_grp["PlateLocSide"] <= 0 if throws == "Right" else loc_grp["PlateLocSide"] >= 0),
+            # Catcher's-view coordinates:
+            #   PlateLocSide > 0 => 1B side, PlateLocSide < 0 => 3B side
+            # Glove-side (pitcher perspective):
+            #   RHP: 3B side (negative), LHP: 1B side (positive)
+            ("glove", loc_grp["PlateLocSide"] < 0 if throws == "Right" else loc_grp["PlateLocSide"] > 0),
+            ("arm", loc_grp["PlateLocSide"] > 0 if throws == "Right" else loc_grp["PlateLocSide"] < 0),
             ("chase_low", loc_grp["PlateLocHeight"] < ZONE_HEIGHT_BOT),
         ]:
             zdf = loc_grp[zmask]
@@ -454,6 +458,14 @@ def _get_our_pitcher_arsenal(data, pitcher_name, season_filter=None, tunnel_pop=
             "chase_pct": len(oz_sw) / max(len(oz_grp), 1) * 100 if len(oz_grp) > 0 else np.nan,
             "ev_against": ip["ExitSpeed"].mean() if len(ip) > 0 else np.nan,
             "barrel_pct_against": barrel_pct_against,
+            # Raw sample sizes for shrinkage / confidence.
+            "n_swings": int(len(sw)),
+            "n_whiffs": int(len(wh)),
+            "n_csw": int(len(csw)),
+            "n_inplay_ev": int(len(ip)),
+            "n_oz_pitches": int(len(oz_grp)),
+            "n_oz_swings": int(len(oz_sw)),
+            "n_barrels_against": int(barrels_against),
             "stuff_plus": stuff_plus,
             "command_plus": cmd_map.get(pt_name, np.nan),
             "count": len(grp),
@@ -3534,6 +3546,63 @@ def page_scouting(data):
     # ── Fetch team data via API ──
     with st.spinner(f"Loading {team} scouting data..."):
         tm = build_tm_dict_for_team(team_id, team, season_year)
+
+    # ── v2: Local baserunning + defense intel (from CSV exports) ──
+    with st.expander("Baserunning & Defense Intel (v2)", expanded=False):
+        try:
+            from decision_engine.data.baserunning_data import load_count_sb_squeeze, load_speed_scores
+            from decision_engine.data.fielding_intel import team_defense_profile
+
+            spd = load_speed_scores()
+            if not spd.empty and "newestTeamName" in spd.columns:
+                spd_t = spd[spd["newestTeamName"].astype(str).str.strip() == team].copy()
+            else:
+                spd_t = pd.DataFrame()
+
+            if not spd_t.empty:
+                show_cols = [c for c in ["playerFullName", "SpeedScore", "SB", "SBA", "SB%"] if c in spd_t.columns]
+                st.caption("Team speed leaders (SpeedScore)")
+                st.dataframe(
+                    spd_t[show_cols].sort_values("SpeedScore", ascending=False).head(12),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            else:
+                st.caption("No SpeedScore rows found for this team in local exports.")
+
+            sq = load_count_sb_squeeze()
+            if not sq.empty and "newestTeamName" in sq.columns:
+                sq_t = sq[sq["newestTeamName"].astype(str).str.strip() == team].copy()
+            else:
+                sq_t = pd.DataFrame()
+            if not sq_t.empty:
+                keep = [c for c in ["playerFullName", "Squeeze #", "Bunt Hit Att", "SBA"] if c in sq_t.columns]
+                threats = sq_t[(sq_t.get("Squeeze #", 0) >= 2) | (sq_t.get("Bunt Hit Att", 0) >= 3)].copy()
+                st.caption("Squeeze/Bunt threats")
+                if threats.empty:
+                    st.write("None flagged (Squeeze # < 2 and Bunt Hit Att < 3).")
+                else:
+                    st.dataframe(
+                        threats[keep].sort_values(["Squeeze #", "Bunt Hit Att"], ascending=False).head(20),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+            prof = team_defense_profile(team)
+            starters = prof.get("starters", pd.DataFrame()) if isinstance(prof, dict) else pd.DataFrame()
+            if starters is not None and not starters.empty:
+                cols = [c for c in ["pos", "playerFullName", "Inn", "Chances", "E", "FLD%", "quality", "note"] if c in starters.columns]
+                st.caption("Likely primary fielders by position")
+                st.dataframe(starters[cols].sort_values("pos"), use_container_width=True, hide_index=True)
+
+            of_arms = prof.get("of_arms", pd.DataFrame()) if isinstance(prof, dict) else pd.DataFrame()
+            if of_arms is not None and not of_arms.empty:
+                cols = [c for c in ["pos", "playerFullName", "InnOF", "OFAst", "ArmRating", "OFThrowE"] if c in of_arms.columns]
+                st.caption("Outfield arms")
+                st.dataframe(of_arms[cols].sort_values(["ArmRating", "OFAst"], ascending=[True, False]).head(25),
+                             use_container_width=True, hide_index=True)
+        except Exception as e:
+            st.caption(f"Local baserunning/defense intel not available: {e}")
 
     # ── Load NCAA D1 context for percentiles (from TrueMedia API with disk cache) ──
     league_hitters = None

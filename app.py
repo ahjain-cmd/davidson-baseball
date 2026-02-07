@@ -16,6 +16,7 @@ from _pages.defense import page_defensive_positioning
 from _pages.scouting import page_scouting
 from _pages.postgame import page_postgame
 from _pages.data_quality import page_data_quality
+from _pages.decision_engine import page_decision_engine
 
 
 st.set_page_config(page_title="Davidson Baseball Analytics", layout="wide")
@@ -57,6 +58,7 @@ def main():
             "Player Development",
             "Defensive Positioning",
             "Opponent Scouting",
+            "In-Game Decision Engine",
             "Postgame Report",
             "Data Quality",
         ],
@@ -97,6 +99,8 @@ def main():
         page_defensive_positioning(data)
     elif page == "Opponent Scouting":
         page_scouting(data)
+    elif page == "In-Game Decision Engine":
+        page_decision_engine(data)
     elif page == "Postgame Report":
         page_postgame(data)
     elif page == "Data Quality":
