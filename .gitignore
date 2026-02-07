@@ -9,3 +9,17 @@ v3/
 Archive*/
 30/
 .ipynb_checkpoints/
+
+# Raw D1 export filenames (canonical copies live under data/)
+All Fielding Counting.csv
+Fielding Participation.csv
+Outfield Counting.csv
+Outfield Throws.csv
+Pickoffs.csv
+Speed Score-2.csv
+Stolen Bases hitters.csv
+Stolen Bases pitching.csv
+Stolen Bases-2.csv
+Stolen Bases-3.csv
+Count SB SQ.csv
+Running Bases.csv
