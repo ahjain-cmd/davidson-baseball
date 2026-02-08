@@ -262,7 +262,10 @@ def compute_re24_matrix(parquet_path: str = PARQUET_PATH) -> RE24Matrix:
     state_runs: Dict[str, List[float]] = {}  # bo_key -> list of runs_rest
 
     for hi_key, pa_list in half_innings.items():
-        # Sort by PA order
+        # Sort by PA order (filter out None values)
+        pa_list = [p for p in pa_list if p["pa_of_inning"] is not None]
+        if not pa_list:
+            continue
         pa_list.sort(key=lambda x: x["pa_of_inning"])
 
         # Reconstruct

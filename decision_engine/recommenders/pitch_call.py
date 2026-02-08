@@ -682,7 +682,40 @@ def recommend_pitch_call_re(
         sq_delta_old, _ = _squeeze_adjustments(pitch_name, info, state)
         delta_re_squeeze = -sq_delta_old * RE_SCALE
 
-        delta_re_total = delta_re_base + delta_re_seq + delta_re_steal + delta_re_squeeze
+        # 5. Usage adjustment — penalize rarely-used pitches, boost primary pitches
+        # A pitch the pitcher barely throws is less reliable (command, feel, deception).
+        # Express as ΔRE: positive penalty (bad) for low usage, small negative bonus
+        # (good) for high usage.
+        usage = info.get("usage", np.nan)
+        delta_re_usage = 0.0
+        usage_reasons: List[str] = []
+        if not np.isnan(usage):
+            usage_f = float(usage)
+            if usage_f < 5.0:
+                # Rarely thrown (<5%): substantial penalty — unreliable pitch
+                delta_re_usage = 0.006  # +0.006 RE = -0.6 RS/100
+                usage_reasons.append(f"low usage ({usage_f:.0f}%): reliability penalty")
+            elif usage_f < 10.0:
+                # Secondary pitch (5-10%): moderate penalty
+                delta_re_usage = 0.003  # +0.003 RE = -0.3 RS/100
+                usage_reasons.append(f"low usage ({usage_f:.0f}%): minor penalty")
+            elif usage_f >= 30.0:
+                # Primary pitch (30%+): small bonus — well-practiced, hitter must respect
+                delta_re_usage = -0.002  # -0.002 RE = +0.2 RS/100
+                usage_reasons.append(f"primary pitch ({usage_f:.0f}%)")
+            elif usage_f >= 20.0:
+                # Solid secondary (20-30%): tiny bonus
+                delta_re_usage = -0.001
+
+            # Extra penalty for low-usage pitches at 3-ball counts
+            # (high walk cost makes unreliable pitches riskier)
+            if b == 3 and usage_f < 10.0:
+                extra = 0.004 if usage_f < 5.0 else 0.002
+                delta_re_usage += extra
+                usage_reasons.append("3-ball: low-usage risk amplified")
+
+        delta_re_total = (delta_re_base + delta_re_seq + delta_re_steal
+                         + delta_re_squeeze + delta_re_usage)
         rs100 = -delta_re_total * 100.0  # runs saved per 100 pitches
 
         # Build reasons
@@ -690,6 +723,7 @@ def recommend_pitch_call_re(
         reasons.extend(se_reasons)
         reasons.extend(sb_reasons)
         reasons.extend(sq_reasons)
+        reasons.extend(usage_reasons)
 
         # Confidence
         n_p = int(info.get("count", 0) or 0)
@@ -704,6 +738,7 @@ def recommend_pitch_call_re(
             "delta_re_seq": float(round(delta_re_seq, 5)),
             "delta_re_steal": float(round(delta_re_steal, 5)),
             "delta_re_squeeze": float(round(delta_re_squeeze, 5)),
+            "delta_re_usage": float(round(delta_re_usage, 5)),
             "confidence": conf,
             "confidence_n": n_p,
             "reasons": reasons,

@@ -367,11 +367,18 @@ def render_ingame_panel(data):
             dre_seq = r.get("delta_re_seq", 0.0)
             dre_steal = r.get("delta_re_steal", 0.0)
             dre_squeeze = r.get("delta_re_squeeze", 0.0)
-            st.caption(
-                f"ΔRE: base {dre_base:+.4f} + seq {dre_seq:+.4f}"
-                f" + steal {dre_steal:+.4f} + squeeze {dre_squeeze:+.4f}"
-                f" = {r.get('delta_re', 0.0):+.4f}"
-            )
+            dre_usage = r.get("delta_re_usage", 0.0)
+            parts = f"ΔRE: base {dre_base:+.4f}"
+            if dre_seq != 0.0:
+                parts += f" + seq {dre_seq:+.4f}"
+            if dre_steal != 0.0:
+                parts += f" + steal {dre_steal:+.4f}"
+            if dre_squeeze != 0.0:
+                parts += f" + squeeze {dre_squeeze:+.4f}"
+            if dre_usage != 0.0:
+                parts += f" + usage {dre_usage:+.4f}"
+            parts += f" = {r.get('delta_re', 0.0):+.4f}"
+            st.caption(parts)
         else:
             adj_seq = r.get("adj_sequence", 0.0)
             seq_tag = f"  |  Seq: `{adj_seq:+.1f}`" if adj_seq != 0.0 else ""
