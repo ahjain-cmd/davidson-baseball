@@ -125,18 +125,6 @@ def _advance_runners_hr(on1b: int, on2b: int, on3b: int) -> Tuple[int, int, int,
 def _advance_runners_walk(on1b: int, on2b: int, on3b: int) -> Tuple[int, int, int, int]:
     """BB/HBP: forced advances only."""
     runs = 0
-    if on1b and on2b and on3b:
-        runs = 1  # R3 forced home
-    new_3b = on3b if not (on1b and on2b) else (1 if on2b else on3b)
-    if on1b and on2b:
-        new_3b = 1  # R2 forced to 3B
-    elif not on1b:
-        new_3b = on3b
-    else:
-        # R1 occupied, R2 empty -> R1->2B, no force at 3B
-        new_3b = on3b
-
-    # More precise forced-advance logic:
     if on1b:
         new_2b = 1
         if on2b:
@@ -725,11 +713,11 @@ def compute_delta_re(
 
     # Scale BIP outcome rates so their weighted wOBA ≈ contact_rv
     # First compute what the default rates imply
-    default_crv = (p_single_bip * lw.get("single_w", 0.47) +
-                   p_double_bip * lw.get("double_w", 0.78) +
-                   p_triple_bip * lw.get("triple_w", 1.05) +
-                   p_hr_bip * lw.get("hr_w", 1.40) +
-                   p_error_bip * lw.get("single_w", 0.47))
+    default_crv = (p_single_bip * lw.get("Single", 0.47) +
+                   p_double_bip * lw.get("Double", 0.78) +
+                   p_triple_bip * lw.get("Triple", 1.05) +
+                   p_hr_bip * lw.get("HomeRun", 1.40) +
+                   p_error_bip * lw.get("Single", 0.47))
     # Scale hit rates to match actual contact_rv
     if default_crv > 0:
         hit_scale = crv / default_crv

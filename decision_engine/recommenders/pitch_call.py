@@ -670,16 +670,13 @@ def recommend_pitch_call_re(
         # Scale from old ±5 point range to ~±0.002 runs
         RE_SCALE = 0.0004  # 1 old point ≈ 0.0004 runs
 
-        _, se_reasons = _sequence_adjustments(pitch_name, state, tun_df=tun_df, seq_df=seq_df)
-        se_delta_old, _ = _sequence_adjustments(pitch_name, state, tun_df=tun_df, seq_df=seq_df)
-        delta_re_seq = -se_delta_old * RE_SCALE  # negative old delta = good = negative ΔRE
+        se_delta_old, se_reasons = _sequence_adjustments(pitch_name, state, tun_df=tun_df, seq_df=seq_df)
+        delta_re_seq = -se_delta_old * RE_SCALE  # positive old delta (good) -> negative ΔRE (good)
 
-        _, sb_reasons = _steal_adjustments(pitch_name, info, state)
-        sb_delta_old, _ = _steal_adjustments(pitch_name, info, state)
+        sb_delta_old, sb_reasons = _steal_adjustments(pitch_name, info, state)
         delta_re_steal = -sb_delta_old * RE_SCALE
 
-        _, sq_reasons = _squeeze_adjustments(pitch_name, info, state)
-        sq_delta_old, _ = _squeeze_adjustments(pitch_name, info, state)
+        sq_delta_old, sq_reasons = _squeeze_adjustments(pitch_name, info, state)
         delta_re_squeeze = -sq_delta_old * RE_SCALE
 
         # 5. Usage adjustment — dampen base ΔRE by reliability factor.

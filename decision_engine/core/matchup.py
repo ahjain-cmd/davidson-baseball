@@ -316,9 +316,22 @@ def compute_matchup_adjusted_probs(
     whiff_ratio = _shrunk_ratio(p_whiff, p_n, lm["whiff_pct"])
     p_ss = _logistic_adjust(p_ss, whiff_ratio)
 
-    # CSW ratio -> adjusts P(called_strike)
-    csw_ratio = _shrunk_ratio(p_csw, p_n, lm["csw_pct"])
-    p_cs = _logistic_adjust(p_cs, csw_ratio)
+    # Called-strike-only ratio -> adjusts P(called_strike)
+    # CSW = called_strike% + whiff%, so called_strike_only% = CSW% - whiff%
+    # Using full CSW would double-count the whiff component already applied above.
+    if p_csw is not None and p_whiff is not None:
+        try:
+            cs_only = float(p_csw) - float(p_whiff)
+            league_cs_only = float(lm["csw_pct"]) - float(lm["whiff_pct"])
+            if cs_only > 0 and league_cs_only > 0:
+                cs_ratio = _shrunk_ratio(cs_only, p_n, league_cs_only)
+                p_cs = _logistic_adjust(p_cs, cs_ratio)
+        except (TypeError, ValueError):
+            pass
+    elif p_csw is not None:
+        # No whiff data available — fall back to full CSW ratio
+        csw_ratio = _shrunk_ratio(p_csw, p_n, lm["csw_pct"])
+        p_cs = _logistic_adjust(p_cs, csw_ratio)
 
     # ── Hitter adjustments ──
     h_k_pct = hitter_metrics.get("k_pct")
