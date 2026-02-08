@@ -70,9 +70,15 @@ def _get_count_weights():
     global _CAL
     if _CAL is None:
         from analytics.count_calibration import fallback_weights, load_count_calibration
-        cal = load_count_calibration()
+        try:
+            cal = load_count_calibration()
+        except Exception:
+            cal = None
         raw = cal.weights if cal else fallback_weights()
-        _CAL = _sanitize_count_weights(raw)
+        try:
+            _CAL = _sanitize_count_weights(raw)
+        except Exception:
+            _CAL = fallback_weights()
     return _CAL
 
 
@@ -80,7 +86,10 @@ def _get_historical_cal():
     global _HIST_CAL
     if _HIST_CAL is None:
         from analytics.historical_calibration import load_historical_calibration
-        _HIST_CAL = load_historical_calibration()
+        try:
+            _HIST_CAL = load_historical_calibration()
+        except Exception:
+            _HIST_CAL = None
     return _HIST_CAL
 
 
@@ -330,8 +339,10 @@ def _base_adjustments(
 def _steal_adjustments(pitch_name: str, info: Dict[str, Any], state: GameState) -> Tuple[float, List[str]]:
     """Adjust pitch scores based on stolen base pressure.
 
-    Penalties/bonuses are derived from empirical SB success rates by pitch
-    velocity class (slow=80.7%, med=79.2%, fast=76.1%, elite=71.5%).
+    This is a situational overlay to bias toward quicker-to-the-plate options
+    when there is meaningful steal pressure (runner threat + our catcher/pitcher
+    control).  It is intentionally capped so it can swap borderline pitches
+    but not override a dominant putaway pitch.
     """
     rc = getattr(state, "runner", None)
     if rc is None:
@@ -342,29 +353,16 @@ def _steal_adjustments(pitch_name: str, info: Dict[str, Any], state: GameState) 
     if pressure < 0.2:
         return 0.0, []
 
-    steal_cal = _get_steal_rates()
-    slow_pct = steal_cal["slow_sb_pct"]
-    med_pct = steal_cal["med_sb_pct"]
-    fast_pct = steal_cal["fast_sb_pct"]
-    elite_pct = steal_cal["elite_sb_pct"]
-    mid = (slow_pct + elite_pct) / 2.0
-    spread = slow_pct - elite_pct
-    # Scale factor: map the empirical spread to ~±8 point range for continuity
-    scale = 8.0 / spread if spread > 0 else 1.0
-
     delta = 0.0
     reasons: List[str] = []
 
     if pitch_name in _SLOW_PITCHES:
-        penalty = (slow_pct - mid) * scale * pressure
-        delta -= penalty
+        delta -= 8.0 * pressure
         reasons.append(f"steal risk: slow delivery ({pitch_name})")
     elif pitch_name in _MEDIUM_PITCHES:
-        penalty = (med_pct - mid) * scale * pressure
-        delta -= penalty
+        delta -= 4.0 * pressure
     elif pitch_name in _QUICK_PITCHES:
-        bonus = (mid - fast_pct) * scale * pressure
-        delta += bonus
+        delta += 4.0 * pressure
         if pressure >= 0.7:
             reasons.append("steal risk: quick pitch helps hold runner")
 
@@ -582,7 +580,8 @@ def recommend_pitch_call_re(
     _count_strike_gain = None
     try:
         import json as _json
-        _cc_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".cache", "count_calibration.json")
+        from config import CACHE_DIR
+        _cc_path = os.path.join(CACHE_DIR, "count_calibration.json")
         if os.path.exists(_cc_path):
             with open(_cc_path) as _ccf:
                 _cc = _json.load(_ccf)

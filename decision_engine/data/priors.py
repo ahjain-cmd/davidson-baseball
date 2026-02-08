@@ -73,7 +73,7 @@ def compute_pitch_priors(parquet_path: str = PARQUET_PATH) -> PitchPriors:
             ExitSpeed,
             Angle
           FROM read_parquet('{parquet_path.replace("'", "''")}')
-          WHERE PitchCall IS NULL OR PitchCall != 'Undefined'
+          WHERE PitchCall IS NOT NULL AND PitchCall != 'Undefined'
         )
         SELECT
           pitch_type,

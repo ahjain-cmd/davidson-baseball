@@ -125,6 +125,9 @@ def _score_zone(z: Dict[str, Any], *, mode: str) -> float:
         wh_w, csw_w, ev_w = 1.2, 0.3, 0.4
     elif mode == "must_strike":
         wh_w, csw_w, ev_w = 0.2, 1.0, 0.5
+    elif mode == "hybrid_3-2":
+        # 3-2 is simultaneously must-compete and high-leverage putaway.
+        wh_w, csw_w, ev_w = 0.8, 0.7, 0.5
     else:
         wh_w, csw_w, ev_w = 0.4, 0.8, 0.4
 
@@ -193,6 +196,15 @@ def _count_bonus(xb: int, yb: int, mode: str) -> float:
             return 5.0
         if is_bottom:
             return -15.0
+        return 0.0
+    elif mode == "hybrid_3-2":
+        # Blend: prefer edges / below, but not as extreme as 0-2.
+        if is_bottom:
+            return 8.0
+        if yb == 1 and is_edge:
+            return 3.0
+        if is_middle:
+            return -2.0
         return 0.0
     else:
         return 0.0
@@ -286,7 +298,9 @@ def recommend_pitch_location(
     two_strike = s == 2
     must_strike = b == 3 or (b >= 2 and b > s and not two_strike)
     mode = "neutral"
-    if must_strike:
+    if b == 3 and s == 2:
+        mode = "hybrid_3-2"
+    elif must_strike:
         mode = "must_strike"
     elif two_strike:
         mode = "putaway"

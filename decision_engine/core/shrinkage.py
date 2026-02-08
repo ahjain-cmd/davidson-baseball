@@ -22,17 +22,29 @@ def shrink_value(
       - This is a simple convex blend, not a full conjugate Bayesian model.
       - We treat `n_obs` as the effective sample size for the metric.
     """
-    if _is_bad(observed) or _is_bad(prior) or n_obs is None:
-        return observed
+    # If the observed metric is missing but we have a usable prior, fall back to it.
+    if _is_bad(observed):
+        return None if _is_bad(prior) else float(prior)
+    # If prior is missing, just return the observation.
+    if _is_bad(prior):
+        return float(observed)
+    # Treat missing n_obs as 0 (pure prior).
+    if n_obs is None:
+        n = 0.0
+    else:
+        try:
+            n = float(n_obs)
+        except Exception:
+            n = 0.0
     try:
-        n = float(n_obs)
+        obs_f = float(observed)
     except Exception:
         return observed
     if n_prior_equiv <= 0:
-        return float(observed)
+        return float(obs_f)
     n = max(n, 0.0)
     w = n / (n + float(n_prior_equiv))
-    return float(w * float(observed) + (1.0 - w) * float(prior))
+    return float(w * obs_f + (1.0 - w) * float(prior))
 
 
 def confidence_tier(n: Optional[int], low: int = 50, high: int = 100) -> str:
@@ -56,4 +68,3 @@ class ShrinkageConfig:
     n_prior_equiv_chase: float = 80.0
     n_prior_equiv_ev: float = 40.0
     n_prior_equiv_barrel: float = 80.0
-
