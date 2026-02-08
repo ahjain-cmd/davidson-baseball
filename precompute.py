@@ -583,6 +583,20 @@ def _create_tunnel_pair_outcomes(con):
         con.execute("CREATE OR REPLACE TABLE tunnel_weights AS SELECT * FROM weights_df")
 
 
+def _calibrate_run_expectancy(parquet_path):
+    """Compute and cache RE24, pitch outcome probs, and contact RV."""
+    from analytics.run_expectancy import load_run_expectancy_calibration
+    cal = load_run_expectancy_calibration(parquet_path=parquet_path, force_refresh=True)
+    if cal is not None:
+        print(f"  RE calibration: {len(cal.re24)} base-out states, "
+              f"{len(cal.outcome_probs)} pitch types, "
+              f"{len(cal.contact_rv)} contact RVs")
+        # Sanity check: bases empty 0 outs should be ~0.5 runs
+        re_empty = cal.re24.get("0,0,0,0", 0.0)
+        re_loaded = cal.re24.get("1,1,1,0", 0.0)
+        print(f"  RE24 check: empty/0-out={re_empty:.3f}, loaded/0-out={re_loaded:.3f}")
+
+
 def run(parquet_path, db_path, overwrite=False):
     _ensure_parquet(parquet_path)
     con = _connect(db_path, overwrite=overwrite)
@@ -598,6 +612,10 @@ def run(parquet_path, db_path, overwrite=False):
     _create_tunnel_population(con)
     _create_tunnel_pair_outcomes(con)
     con.close()
+
+    # Run expectancy calibration (reads parquet directly, writes to .cache/)
+    print("Calibrating run expectancy...")
+    _calibrate_run_expectancy(parquet_path)
 
 
 def main():

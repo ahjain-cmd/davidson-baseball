@@ -270,28 +270,113 @@ def apply_situation_overlay(state: GameState, positions: Dict[str, Dict[str, flo
     return overlay
 
 
+def shift_value_delta_re(
+    standard_contact_rv: float,
+    shifted_contact_rv: float,
+    p_in_play: float,
+) -> float:
+    """Express defensive shift value as ΔRE.
+
+    Computes how the shift changes the expected run value on contact
+    by altering the hit→out conversion rate.
+
+    Parameters
+    ----------
+    standard_contact_rv : float
+        Expected wOBA on contact with standard positioning.
+    shifted_contact_rv : float
+        Expected wOBA on contact with the recommended shift.
+    p_in_play : float
+        Probability of a ball in play for this matchup.
+
+    Returns
+    -------
+    float
+        ΔRE from the shift. Negative = shift saves runs (good).
+    """
+    return p_in_play * (shifted_contact_rv - standard_contact_rv)
+
+
+def estimate_shift_contact_rv(
+    *,
+    shift_type: str,
+    pull_pct: float,
+    gb_pct: float,
+    standard_contact_rv: float,
+) -> float:
+    """Estimate how a defensive shift changes contact run value.
+
+    The shift improves conversion on pull-side ground balls but may
+    concede hits on opposite-field contact. Net effect depends on
+    pull/GB tendencies.
+
+    Returns the adjusted contact_rv (lower = better for defense).
+    """
+    import pandas as pd
+    pull_pct = float(pull_pct) if pd.notna(pull_pct) else 34.0
+    gb_pct = float(gb_pct) if pd.notna(gb_pct) else 44.0
+
+    if shift_type == "Standard":
+        return standard_contact_rv
+
+    # Pull tendency factor: how much of contact goes to the shifted side
+    pull_factor = max(0.0, (pull_pct - 33.0) / 67.0)  # 0 at balanced, ~1 at extreme pull
+
+    # GB factor: ground balls are most affected by infield shifts
+    gb_factor = max(0.0, (gb_pct - 30.0) / 40.0)  # 0 at low GB, ~1 at extreme GB
+
+    if shift_type == "Infield Shift":
+        # Strong shift: big benefit on pull-side GBs, small cost on oppo
+        benefit = 0.04 * pull_factor * gb_factor  # up to ~0.04 wOBA saved
+        cost = 0.01 * (1.0 - pull_factor)  # small oppo-side cost
+        return standard_contact_rv - benefit + cost
+
+    elif shift_type == "Shade Pull":
+        benefit = 0.02 * pull_factor * gb_factor
+        cost = 0.005 * (1.0 - pull_factor)
+        return standard_contact_rv - benefit + cost
+
+    elif shift_type == "Shade Oppo":
+        # Shade toward opposite field for oppo-oriented hitters
+        oppo_factor = max(0.0, (1.0 - pull_factor))
+        benefit = 0.015 * oppo_factor
+        return standard_contact_rv - benefit
+
+    return standard_contact_rv
+
+
 def pitch_defense_mismatch(
     *,
     pitch_name: str,
     location_zone: Optional[str],
     defense_shift_type: str,
 ) -> Optional[str]:
-    """Return a coach-facing warning when a pitch choice fights the defensive alignment."""
+    """Return a coach-facing warning when a pitch choice fights the defensive alignment.
+
+    location_zone: a zone label string like "Up-Away", "Low-In", "Middle",
+    or legacy labels like "glove side", "below zone".
+    """
     shift = (defense_shift_type or "").strip()
     if not shift or shift == "Standard":
         return None
 
-    # Heuristic: breaking balls expanded away (glove-side / below zone) increase opposite-field contact risk.
+    zl = (location_zone or "").lower()
+
+    # Map new 3×3 labels + legacy labels to conceptual regions
+    is_away = "away" in zl or "glove" in zl
+    is_low = "low" in zl or "below" in zl or "chase" in zl
+    is_down_arm = "down" in zl or "arm" in zl or "low-in" in zl
+
+    # Heuristic: breaking balls expanded away / low increase opposite-field contact risk.
     breaking = {"Slider", "Sweeper", "Curveball", "Knuckle Curve"}
-    awayish = {"glove", "chase_low"}
-    if shift in {"Infield Shift", "Shade Pull"} and pitch_name in breaking and (location_zone in awayish):
+    if shift in {"Infield Shift", "Shade Pull"} and pitch_name in breaking and (is_away or is_low):
         return (
-            f"Pitch-defense mismatch: {pitch_name} expanded away vs a pull-leaning alignment. "
+            f"Pitch-defense mismatch: {pitch_name} to {location_zone} vs a pull-leaning alignment. "
             "If contact, ball may be served oppo into the shift hole."
         )
 
     # Heuristic: sinker/CH for GB aligns with DP/pull shades.
-    if shift == "Shade Oppo" and pitch_name in {"Sinker", "Changeup", "Splitter"} and (location_zone in {"arm", "down", None}):
+    if shift == "Shade Oppo" and pitch_name in {"Sinker", "Changeup", "Splitter"} and (is_down_arm or location_zone is None):
         return (
             f"Pitch-defense mismatch: {pitch_name} ground-ball bias vs an oppo shade. "
             "Consider standard or pull-side alignment if expecting GB pull."

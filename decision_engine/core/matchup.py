@@ -63,6 +63,7 @@ def _build_hitter_data(hitter_profile: Dict[str, Any], throws: str) -> Dict[str,
         "low_pct": hitter_profile.get("low_pct", np.nan),
         "inside_pct": hitter_profile.get("inside_pct", np.nan),
         "outside_pct": hitter_profile.get("outside_pct", np.nan),
+        "zone_vuln": hitter_profile.get("zone_vuln", {}),
     }
 
 
@@ -231,4 +232,144 @@ def score_pitcher_vs_hitter_shrunk(
         "pitch_scores": pitch_scores,
         "recommendations": recommendations,
         "hitter_data": hd,
+    }
+
+
+# ── Matchup-adjusted outcome probabilities ──────────────────────────────────
+
+def _logistic_adjust(p_league: float, ratio: float) -> float:
+    """Adjust a probability using logistic (odds-ratio) scaling.
+
+    ratio = pitcher_metric / league_metric, clamped [0.5, 2.0].
+    """
+    ratio = max(0.5, min(2.0, ratio))
+    if p_league <= 0.0 or p_league >= 1.0:
+        return p_league
+    return p_league * ratio / (p_league * ratio + (1.0 - p_league))
+
+
+def compute_matchup_adjusted_probs(
+    league_probs: dict,
+    pitcher_metrics: dict,
+    hitter_metrics: dict,
+    league_metrics: Optional[dict] = None,
+) -> dict:
+    """Adjust league-average pitch outcome probs using pitcher/hitter matchup data.
+
+    Parameters
+    ----------
+    league_probs : dict
+        Keys: p_ball, p_called_strike, p_swinging_strike, p_foul, p_in_play, p_hbp
+    pitcher_metrics : dict
+        Keys: whiff_pct, csw_pct, chase_pct, ev_against (optional)
+    hitter_metrics : dict
+        Keys: k_pct, chase_pct, contact_pct, swstrk_pct (optional)
+    league_metrics : dict, optional
+        Keys: whiff_pct, csw_pct, chase_pct, k_pct, contact_pct.
+        Defaults to D1 league averages.
+
+    Returns
+    -------
+    dict with same keys as league_probs, adjusted and renormalized.
+    Also includes 'contact_rv_adj' multiplier for contact run value.
+    """
+    lm = league_metrics or {
+        "whiff_pct": 24.0,
+        "csw_pct": 27.0,
+        "chase_pct": 28.0,
+        "k_pct": 22.0,
+        "contact_pct": 76.0,
+    }
+
+    p_ball = league_probs.get("p_ball", 0.38)
+    p_cs = league_probs.get("p_called_strike", 0.17)
+    p_ss = league_probs.get("p_swinging_strike", 0.10)
+    p_foul = league_probs.get("p_foul", 0.18)
+    p_ip = league_probs.get("p_in_play", 0.16)
+    p_hbp = league_probs.get("p_hbp", 0.01)
+
+    # Helper: shrink ratio toward 1.0 for small samples
+    def _shrunk_ratio(obs, n_obs, league_val, n_prior=100):
+        if obs is None or league_val is None or league_val == 0:
+            return 1.0
+        try:
+            obs_f = float(obs)
+            league_f = float(league_val)
+        except (TypeError, ValueError):
+            return 1.0
+        if np.isnan(obs_f) or np.isnan(league_f):
+            return 1.0
+        raw_ratio = obs_f / league_f
+        # Shrink toward 1.0 based on sample size
+        n = float(n_obs) if n_obs is not None and not np.isnan(float(n_obs)) else 0.0
+        w = n / (n + n_prior)
+        shrunk = w * raw_ratio + (1.0 - w) * 1.0
+        return max(0.5, min(2.0, shrunk))
+
+    # ── Pitcher adjustments ──
+    p_whiff = pitcher_metrics.get("whiff_pct")
+    p_csw = pitcher_metrics.get("csw_pct")
+    p_chase = pitcher_metrics.get("chase_pct")
+    p_n = pitcher_metrics.get("count", pitcher_metrics.get("n_pitches", 0))
+
+    # Whiff ratio -> adjusts P(swinging_strike)
+    whiff_ratio = _shrunk_ratio(p_whiff, p_n, lm["whiff_pct"])
+    p_ss = _logistic_adjust(p_ss, whiff_ratio)
+
+    # CSW ratio -> adjusts P(called_strike)
+    csw_ratio = _shrunk_ratio(p_csw, p_n, lm["csw_pct"])
+    p_cs = _logistic_adjust(p_cs, csw_ratio)
+
+    # ── Hitter adjustments ──
+    h_k_pct = hitter_metrics.get("k_pct")
+    h_chase = hitter_metrics.get("chase_pct")
+    h_contact = hitter_metrics.get("contact_pct")
+    h_n = hitter_metrics.get("pa", 0)
+
+    # Hitter K% -> scales strikeout probability (affects swinging strike)
+    if h_k_pct is not None and not np.isnan(float(h_k_pct or 0)):
+        k_ratio = _shrunk_ratio(h_k_pct, h_n, lm["k_pct"])
+        p_ss = _logistic_adjust(p_ss, k_ratio)
+
+    # Hitter chase% -> adjusts ball/strike partition
+    if h_chase is not None and not np.isnan(float(h_chase or 0)):
+        chase_ratio = _shrunk_ratio(h_chase, h_n, lm["chase_pct"])
+        # Higher chase = more swings on OZ = fewer balls, more whiffs
+        ball_adj = 1.0 / max(chase_ratio, 0.5)  # inverse: chaser sees fewer balls
+        p_ball = _logistic_adjust(p_ball, ball_adj)
+
+    # Hitter contact% -> adjusts foul/whiff partition
+    if h_contact is not None and not np.isnan(float(h_contact or 0)):
+        contact_ratio = _shrunk_ratio(h_contact, h_n, lm["contact_pct"])
+        # Higher contact = more fouls (instead of whiffs)
+        p_foul = _logistic_adjust(p_foul, contact_ratio)
+        whiff_contact_adj = 1.0 / max(contact_ratio, 0.5)
+        p_ss = _logistic_adjust(p_ss, whiff_contact_adj)
+
+    # ── Contact RV adjustment (EV-based) ──
+    contact_rv_adj = 1.0
+    p_ev = pitcher_metrics.get("ev_against")
+    if p_ev is not None and not np.isnan(float(p_ev or 0)):
+        # Higher EV = worse for pitcher
+        ev_ratio = float(p_ev) / 85.0  # 85 mph as baseline EV
+        contact_rv_adj = max(0.7, min(1.5, ev_ratio))
+
+    # ── Renormalize ──
+    total = p_ball + p_cs + p_ss + p_foul + p_ip + p_hbp
+    if total > 0:
+        p_ball /= total
+        p_cs /= total
+        p_ss /= total
+        p_foul /= total
+        p_ip /= total
+        p_hbp /= total
+
+    return {
+        "p_ball": round(p_ball, 5),
+        "p_called_strike": round(p_cs, 5),
+        "p_swinging_strike": round(p_ss, 5),
+        "p_foul": round(p_foul, 5),
+        "p_in_play": round(p_ip, 5),
+        "p_hbp": round(p_hbp, 5),
+        "contact_rv_adj": round(contact_rv_adj, 4),
     }

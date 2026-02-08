@@ -22,12 +22,24 @@ from decision_engine.data.baserunning_data import (
     pitcher_sb_summary_from_trackman,
     speed_score_and_sb_from_sources,
 )
-from decision_engine.recommenders.pitch_call import recommend_pitch_call
+from decision_engine.recommenders.pitch_call import recommend_pitch_call, recommend_pitch_call_re
 from decision_engine.recommenders.pitch_location import recommend_pitch_location
+from analytics.sequencing import _build_3pitch_sequences
+from config import BRYANT_COMBINED_TEAM_ID
+from data.bryant_combined import load_bryant_combined_pack
 from decision_engine.recommenders.defense_recommender import (
     pitch_defense_mismatch,
     recommend_defense_from_truemedia,
 )
+
+
+def _get_re_cal_for_defense():
+    """Lazy-load RE calibration for defense ΔRE display."""
+    try:
+        from analytics.run_expectancy import load_run_expectancy_calibration
+        return load_run_expectancy_calibration()
+    except Exception:
+        return None
 
 
 def _safe_float(v):
@@ -60,11 +72,18 @@ def render_ingame_panel(data):
 
         team_id = ""
         team_name = ""
+        _BRYANT_LABEL = "Bryant (2024-25 Combined)"
+
         if teams_df is not None and not teams_df.empty:
             id_col = "teamId" if "teamId" in teams_df.columns else teams_df.columns[0]
-            name_col = "teamName" if "teamName" in teams_df.columns else ("name" if "name" in teams_df.columns else None)
+            # Prefer fullName / newestTeamName (e.g. "Charlotte 49ers") over
+            # teamName (which is just the nickname, e.g. "49ers").
+            name_col = None
+            for c in ["fullName", "newestTeamName", "mostRecentTeamName", "teamName", "name"]:
+                if c in teams_df.columns:
+                    name_col = c
+                    break
             if name_col is None:
-                # Try a reasonable fallback.
                 for c in teams_df.columns:
                     if "name" in c.lower():
                         name_col = c
@@ -72,12 +91,16 @@ def render_ingame_panel(data):
             if name_col is None:
                 name_col = teams_df.columns[0]
 
-            teams_df = teams_df[[id_col, name_col]].dropna().drop_duplicates()
+            teams_df = teams_df[[id_col, name_col]].dropna().drop_duplicates(subset=[id_col])
             teams_df = teams_df.sort_values(name_col)
 
+            team_options = [_BRYANT_LABEL] + teams_df[name_col].tolist()
             with col_b:
-                team_name = st.selectbox("Opponent Team", teams_df[name_col].tolist(), index=0)
-            team_id = str(teams_df[teams_df[name_col] == team_name][id_col].iloc[0])
+                team_name = st.selectbox("Opponent Team", team_options, index=0)
+            if team_name == _BRYANT_LABEL:
+                team_id = BRYANT_COMBINED_TEAM_ID
+            else:
+                team_id = str(teams_df[teams_df[name_col] == team_name][id_col].iloc[0])
             with col_c:
                 refresh_pack = st.checkbox("Refresh pack", value=False, help="Force refresh from API and overwrite disk cache.")
         else:
@@ -90,12 +113,19 @@ def render_ingame_panel(data):
             st.info("Select an opponent team to proceed.")
             return
 
-        pack = load_or_build_opponent_pack(
-            team_id=team_id,
-            team_name=team_name,
-            season_year=season_year,
-            refresh=refresh_pack,
-        )
+        # Load pack — special handling for Bryant combined
+        if team_id == BRYANT_COMBINED_TEAM_ID:
+            pack = load_bryant_combined_pack()
+            if pack is None:
+                st.warning("Bryant combined pack not built yet. Go to **Bryant Scouting** page first to build it.")
+                return
+        else:
+            pack = load_or_build_opponent_pack(
+                team_id=team_id,
+                team_name=team_name,
+                season_year=season_year,
+                refresh=refresh_pack,
+            )
 
         h_rate = pack.get("hitting", {}).get("rate")
         if h_rate is None or h_rate.empty:
@@ -138,7 +168,7 @@ def render_ingame_panel(data):
 
     # ── Game state inputs ───────────────────────────────────────────────────
     with st.expander("Game State", expanded=True):
-        c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
+        c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 2, 2])
         with c1:
             balls = int(st.number_input("Balls", min_value=0, max_value=3, value=0, step=1))
         with c2:
@@ -147,6 +177,17 @@ def render_ingame_panel(data):
             outs = int(st.number_input("Outs", min_value=0, max_value=2, value=0, step=1))
         with c4:
             inning = int(st.number_input("Inning", min_value=1, max_value=20, value=1, step=1))
+        with c5:
+            last_pitch_opt = st.selectbox(
+                "Last Pitch Thrown",
+                ["(None)"] + sorted(
+                    {"Fastball", "Sinker", "Cutter", "Slider", "Curveball",
+                     "Changeup", "Splitter", "Sweeper", "Knuckle Curve"}
+                ),
+                index=0,
+                help="The previous pitch thrown this AB (enables sequence/tunnel adjustments)",
+            )
+            last_pitch = None if last_pitch_opt == "(None)" else last_pitch_opt
 
         b1, b2, b3 = st.columns(3)
         with b1:
@@ -264,6 +305,7 @@ def render_ingame_panel(data):
             score_our=int(score_our),
             score_opp=int(score_opp),
             runner=runner_ctx,
+            last_pitch=last_pitch,
         )
 
     # ── Compute matchup & recommendations ───────────────────────────────────
@@ -285,32 +327,115 @@ def render_ingame_panel(data):
         st.error("Could not compute matchup.")
         return
 
-    recs = recommend_pitch_call(matchup, state, top_n=3)
+    # Try RE-based recommendations first, fall back to composite scoring
+    recs_re = recommend_pitch_call_re(
+        matchup, state, top_n=3,
+        tun_df=arsenal.get("tunnels"), seq_df=arsenal.get("sequences"),
+    )
+    recs_old = recommend_pitch_call(
+        matchup, state, top_n=3,
+        tun_df=arsenal.get("tunnels"), seq_df=arsenal.get("sequences"),
+    )
+    use_re = bool(recs_re and "delta_re" in recs_re[0])
+    recs = recs_re if use_re else recs_old
     if not recs:
         st.warning("No pitch recommendations available.")
         return
 
     st.subheader(f"Pitch Call ({state.count_str()})")
     top_loc_zone = None
+    top_loc_label = None
     top_pitch = recs[0]["pitch"] if recs else None
+    hitter_zv = matchup.get("hitter_data", {}).get("zone_vuln", {})
     for i, r in enumerate(recs, start=1):
         pitch_name = r["pitch"]
         conf = r.get("confidence", "Low")
         conf_n = r.get("confidence_n", 0)
-        st.markdown(f"**#{i} {pitch_name}**  |  Score: `{r['score']:.1f}`  |  Confidence: `{conf}` (n={conf_n})")
-        if r.get("reasons"):
-            st.caption(" | ".join(r["reasons"][:4]))
 
-        loc = recommend_pitch_location(pitch_name, arsenal["pitches"].get(pitch_name, {}), state)
+        if use_re:
+            rs100 = r.get("rs100", 0.0)
+            # Color coding: Green (>0.5), Yellow (±0.5), Red (<-0.5)
+            if rs100 > 0.5:
+                color = "🟢"
+            elif rs100 < -0.5:
+                color = "🔴"
+            else:
+                color = "🟡"
+            st.markdown(f"**#{i} {pitch_name}**  |  RS/100: `{rs100:+.1f}` {color}  |  Confidence: `{conf}` (n={conf_n})")
+            # ΔRE decomposition
+            dre_base = r.get("delta_re_base", 0.0)
+            dre_seq = r.get("delta_re_seq", 0.0)
+            dre_steal = r.get("delta_re_steal", 0.0)
+            dre_squeeze = r.get("delta_re_squeeze", 0.0)
+            st.caption(
+                f"ΔRE: base {dre_base:+.4f} + seq {dre_seq:+.4f}"
+                f" + steal {dre_steal:+.4f} + squeeze {dre_squeeze:+.4f}"
+                f" = {r.get('delta_re', 0.0):+.4f}"
+            )
+        else:
+            adj_seq = r.get("adj_sequence", 0.0)
+            seq_tag = f"  |  Seq: `{adj_seq:+.1f}`" if adj_seq != 0.0 else ""
+            st.markdown(f"**#{i} {pitch_name}**  |  Score: `{r['score']:.1f}`  |  Confidence: `{conf}` (n={conf_n}){seq_tag}")
+
+        if r.get("reasons"):
+            st.caption(" | ".join(r["reasons"][:5]))
+
+        loc = recommend_pitch_location(
+            pitch_name,
+            arsenal["pitches"].get(pitch_name, {}),
+            state,
+            hitter_zone_vuln=hitter_zv,
+            bats=matchup.get("bats", "R"),
+            throws=arsenal.get("throws", "Right"),
+        )
         if loc:
             if i == 1:
                 top_loc_zone = loc.get("zone")
+                top_loc_label = loc.get("zone_label")
             zlab = loc.get("zone_label")
             wh = loc.get("whiff_pct", float("nan"))
             csw = loc.get("csw_pct", float("nan"))
             ev = loc.get("ev_against", float("nan"))
             n = loc.get("n", 0)
-            st.caption(f"Location: {zlab} (n={n}) | whiff {wh:.0f}% | CSW {csw:.0f}% | EV {ev:.0f}")
+            reason = loc.get("reason", "")
+            st.caption(f"Location: **{zlab}** (n={n}) | whiff {wh:.0f}% | CSW {csw:.0f}% | EV {ev:.0f} | {reason}")
+            sec = loc.get("secondary")
+            if sec:
+                sec_lab = sec.get("zone_label", "")
+                sec_reason = sec.get("reason", "")
+                st.caption(f"  Alt: **{sec_lab}** | {sec_reason}")
+
+    # ── 3-Pitch Sequences ──────────────────────────────────────────────────
+    with st.expander("3-Pitch Sequences", expanded=False):
+        tun = arsenal.get("tunnels", pd.DataFrame())
+        seq = arsenal.get("sequences", pd.DataFrame())
+        sorted_ps = sorted(
+            matchup.get("pitch_scores", {}).items(),
+            key=lambda x: x[1].get("score", 0), reverse=True,
+        )
+        hd_seq = matchup.get("hitter_data") or {}
+        seqs = _build_3pitch_sequences(sorted_ps, hd_seq, tun, seq)
+        if seqs:
+            for idx, s in enumerate(seqs[:3], start=1):
+                t12 = s.get("t12", np.nan)
+                t23 = s.get("t23", np.nan)
+                sw23 = s.get("sw23", np.nan)
+                their_2k = s.get("their_2k", np.nan)
+                effv_gap = s.get("effv_gap", np.nan)
+                t12_str = f"{t12:.0f}" if not np.isnan(t12) else "-"
+                t23_str = f"{t23:.0f}" if not np.isnan(t23) else "-"
+                sw23_str = f"{sw23:.0f}%" if not np.isnan(sw23) else "-"
+                their_2k_str = f"{their_2k:.0f}%" if not np.isnan(their_2k) else "-"
+                effv_str = f"{effv_gap:.1f} mph" if not np.isnan(effv_gap) else "-"
+                st.markdown(
+                    f"**#{idx} {s['seq']}**  |  Score: `{s['score']:.1f}`"
+                )
+                st.caption(
+                    f"Tunnel: {t12_str} / {t23_str}  |  Whiff→P3: {sw23_str}"
+                    f"  |  2K Whiff: {their_2k_str}  |  EffV Gap: {effv_str}"
+                )
+        else:
+            st.info("Not enough arsenal data for sequence analysis.")
 
     # ── Defense panel (Module B) ─────────────────────────────────────────────
     with st.expander("Defense Positioning (v2)", expanded=False):
@@ -368,11 +493,38 @@ def render_ingame_panel(data):
         if defense.overlay.get("notes"):
             st.caption(" | ".join(defense.overlay["notes"]))
 
+        # Shift value in ΔRE terms
+        if use_re and recs:
+            from decision_engine.recommenders.defense_recommender import (
+                estimate_shift_contact_rv,
+                shift_value_delta_re,
+            )
+            top_r = recs[0]
+            top_raw = top_r.get("raw", {})
+            re_cal_def = _get_re_cal_for_defense()
+            std_crv = re_cal_def.contact_rv.get(top_r["pitch"], 0.12) if re_cal_def else 0.12
+            shifted_crv = estimate_shift_contact_rv(
+                shift_type=defense.shift["type"],
+                pull_pct=pull_pct,
+                gb_pct=gb_pct,
+                standard_contact_rv=std_crv,
+            )
+            # Get P(in_play) from the RE probs
+            p_ip = 0.16  # fallback
+            if re_cal_def and top_r["pitch"] in re_cal_def.outcome_probs:
+                count_probs = re_cal_def.outcome_probs[top_r["pitch"]].get(state.count_str())
+                if count_probs:
+                    p_ip = count_probs.p_in_play if hasattr(count_probs, 'p_in_play') else 0.16
+            shift_dre = shift_value_delta_re(std_crv, shifted_crv, p_ip)
+            shift_rs100 = -shift_dre * 100.0
+            if abs(shift_rs100) > 0.01:
+                st.caption(f"Shift value: RS/100 {shift_rs100:+.2f} (ΔRE {shift_dre:+.4f})")
+
         # Compatibility warning vs top pitch recommendation.
         if top_pitch:
             warn = pitch_defense_mismatch(
                 pitch_name=top_pitch,
-                location_zone=top_loc_zone,
+                location_zone=top_loc_label,
                 defense_shift_type=defense.shift["type"],
             )
             if warn:

@@ -1,17 +1,109 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+import pandas as pd
 
 from decision_engine.core.state import GameState
 
 
 _HARD_PITCHES = {"Fastball", "Sinker", "Cutter"}
+_OFFSPEED_PITCHES = {"Slider", "Curveball", "Changeup", "Splitter", "Sweeper", "Knuckle Curve"}
 _GB_PITCHES = {"Sinker", "Changeup", "Splitter", "Curveball", "Knuckle Curve"}
 _SLOW_PITCHES = {"Curveball", "Knuckle Curve"}
 _MEDIUM_PITCHES = {"Changeup", "Splitter", "Slider", "Sweeper"}
 _QUICK_PITCHES = {"Fastball", "Sinker", "Cutter"}
+
+
+# ── Calibrated weights & data (lazy-loaded singletons) ──────────────────────
+_CAL = None
+_HIST_CAL = None
+
+
+def _sanitize_count_weights(weights):
+    """Apply domain constraints to prevent calibration artifacts.
+
+    At 3-ball counts, selection bias inflates offspeed run values because
+    only elite offspeed is thrown there.  Game theory dictates hard-stuff
+    dominance at those counts, so we clamp the deltas accordingly.
+    At non-2-strike counts, offspeed should never receive a larger bonus
+    than hard pitches.
+    """
+    from analytics.count_calibration import CountWeights
+
+    result = dict(weights)
+    for key in list(result.keys()):
+        cw = result[key]
+        b, s = int(key[0]), int(key[2])
+
+        if b == 3 and s == 0:
+            # 3-0: strongest constraint — throw fastball for a strike
+            result[key] = CountWeights(
+                whiff_w=cw.whiff_w, csw_w=cw.csw_w, chase_w=cw.chase_w,
+                cmd_w=cw.cmd_w,
+                hard_delta=max(cw.hard_delta, 3.0),
+                offspeed_delta=min(cw.offspeed_delta, -3.0),
+            )
+        elif b == 3 and s == 1:
+            # 3-1: strong constraint — heavily favor hard stuff
+            result[key] = CountWeights(
+                whiff_w=cw.whiff_w, csw_w=cw.csw_w, chase_w=cw.chase_w,
+                cmd_w=cw.cmd_w,
+                hard_delta=max(cw.hard_delta, 2.0),
+                offspeed_delta=min(cw.offspeed_delta, -2.0),
+            )
+        elif s < 2 and cw.offspeed_delta > cw.hard_delta:
+            # Non-2-strike: offspeed should never get MORE bonus than hard
+            result[key] = CountWeights(
+                whiff_w=cw.whiff_w, csw_w=cw.csw_w, chase_w=cw.chase_w,
+                cmd_w=cw.cmd_w,
+                hard_delta=cw.hard_delta,
+                offspeed_delta=cw.hard_delta,
+            )
+    return result
+
+
+def _get_count_weights():
+    global _CAL
+    if _CAL is None:
+        from analytics.count_calibration import fallback_weights, load_count_calibration
+        cal = load_count_calibration()
+        raw = cal.weights if cal else fallback_weights()
+        _CAL = _sanitize_count_weights(raw)
+    return _CAL
+
+
+def _get_historical_cal():
+    global _HIST_CAL
+    if _HIST_CAL is None:
+        from analytics.historical_calibration import load_historical_calibration
+        _HIST_CAL = load_historical_calibration()
+    return _HIST_CAL
+
+
+def _get_gb_dp_rates():
+    cal = _get_historical_cal()
+    if cal:
+        return cal.gb_dp_rates
+    from analytics.historical_calibration import fallback_gb_dp_rates
+    return fallback_gb_dp_rates()
+
+
+def _get_steal_rates():
+    cal = _get_historical_cal()
+    if cal:
+        return cal.steal_rates
+    from analytics.historical_calibration import fallback_steal_rates
+    return fallback_steal_rates()
+
+
+def _get_metric_ranges():
+    cal = _get_historical_cal()
+    if cal:
+        return cal.metric_ranges
+    from analytics.historical_calibration import fallback_metric_ranges
+    return fallback_metric_ranges()
 
 
 def _clamp(x: float, lo: float = 0.0, hi: float = 100.0) -> float:
@@ -46,12 +138,16 @@ def _cmd_norm(cmd_plus: Any) -> float:
     return float(max(0.0, min(1.0, (v - 85.0) / 30.0)))
 
 
-def _count_adjustments(pitch_name: str, info: Dict[str, Any], state: GameState) -> Tuple[float, List[str]]:
+def _count_adjustments(
+    pitch_name: str, info: Dict[str, Any], state: GameState, *, hd: Dict = None,
+) -> Tuple[float, List[str]]:
     b, s = state.count()
     reasons: List[str] = []
     delta = 0.0
+    hd = hd or {}
 
     is_hard = pitch_name in _HARD_PITCHES
+    is_offspeed = pitch_name in _OFFSPEED_PITCHES
     wh = info.get("shrunk_whiff", info.get("our_whiff"))
     csw = info.get("shrunk_csw", info.get("our_csw"))
     chase = info.get("shrunk_chase", info.get("our_chase"))
@@ -59,100 +155,161 @@ def _count_adjustments(pitch_name: str, info: Dict[str, Any], state: GameState) 
     cmd = info.get("command_plus", np.nan)
     usage = info.get("usage", np.nan)
 
-    wh_n = _norm_pct(wh, lo=12.0, hi=40.0)
-    csw_n = _norm_pct(csw, lo=18.0, hi=35.0)
-    chase_n = _norm_pct(chase, lo=10.0, hi=35.0)
+    mr = _get_metric_ranges()
+    wh_n = _norm_pct(wh, lo=mr["whiff_p5"], hi=mr["whiff_p95"])
+    csw_n = _norm_pct(csw, lo=mr["csw_p5"], hi=mr["csw_p95"])
+    chase_n = _norm_pct(chase, lo=mr["chase_p5"], hi=mr["chase_p95"])
     cmd_n = _cmd_norm(cmd)
 
-    # 3-2 is the highest-leverage count: must throw a strike, but putaway still matters.
-    if b == 3 and s == 2:
-        delta += 4.5 * cmd_n
-        delta += 4.5 * wh_n
+    # ── Calibrated count weights (unified formula for all counts) ──
+    cw = _get_count_weights().get(f"{b}-{s}")
+    if cw is None:
+        # Defensive fallback for unexpected count values
+        from analytics.count_calibration import CountWeights
+        cw = CountWeights(whiff_w=2.0, csw_w=2.0, chase_w=0.0, cmd_w=2.0,
+                          hard_delta=0.0, offspeed_delta=0.0)
+
+    delta += cw.whiff_w * wh_n
+    delta += cw.csw_w * csw_n
+    delta += cw.chase_w * chase_n
+    delta += cw.cmd_w * cmd_n
+    if is_hard:
+        delta += cw.hard_delta
+    elif is_offspeed:
+        delta += cw.offspeed_delta
+
+    # Hard pitch command premium — scales with count leverage.
+    # Well-commanded hard pitches are extra valuable at counts where you MUST
+    # throw strikes (3-ball, hitter's counts).  cmd_w already tells us how
+    # important command is at each count; this gives hard pitches a bonus on
+    # top of the shared cmd_w * cmd_n that all pitches receive.
+    if is_hard and cmd_n > 0.35:
+        hard_cmd_premium = cmd_n * min(cw.cmd_w, 6.0) * 0.4
+        delta += hard_cmd_premium
+        if hard_cmd_premium > 1.0:
+            reasons.append(f"hard cmd premium (Cmd+ {cmd:.0f}): +{hard_cmd_premium:.1f}")
+
+    # ── Additive overlays (hitter-specific, not calibratable from our history) ──
+    h_fp_swing_hard = _safe_hd(hd.get("fp_swing_hard"))
+    h_fp_swing_ch = _safe_hd(hd.get("fp_swing_ch"))
+    h_whiff_2k_os = _safe_hd(hd.get("whiff_2k_os"))
+    h_whiff_2k_hard = _safe_hd(hd.get("whiff_2k_hard"))
+    h_chase_pct = _safe_hd(hd.get("chase_pct"))
+    h_bb_pct = _safe_hd(hd.get("bb_pct"))
+
+    # Usage penalties at 3-ball: rarely-used pitch = risky.
+    # Only reward high-usage hard pitches; offspeed shouldn't get a usage
+    # bonus at 3-ball — the calibrated offspeed_delta already handles this.
+    if b == 3 and not np.isnan(usage):
+        if usage >= 15 and is_hard:
+            delta += 2.0 if s < 2 else 1.0
+        elif usage < 5:
+            delta -= 3.0 if s < 2 else 2.0
+
+    # Disciplined hitter at 3-ball: extra offspeed penalty (will take ball for walk)
+    if b == 3 and is_offspeed and not np.isnan(h_bb_pct) and h_bb_pct > 12:
+        penalty = min((h_bb_pct - 12) / 8 * 2.0, 2.0)
+        delta -= penalty
+        reasons.append(f"disciplined ({h_bb_pct:.0f}% BB): risky offspeed at 3-ball")
+
+    # 0-2 extra chase emphasis: strategic intent beyond statistical weight
+    if b == 0 and s == 2:
         delta += 2.0 * chase_n
-        if not np.isnan(usage):
-            if usage >= 15:
-                delta += 1.0
-            elif usage < 5:
-                delta -= 2.0
-        reasons.append("3-2: leverage (command + putaway)")
-        return delta, reasons
+        reasons.append("0-2: extra chase emphasis")
 
-    # 3-ball counts: must-strike, command-forward.
-    if b == 3:
-        delta += 6.0 * cmd_n
-        delta += 4.0 if is_hard else -4.0
-        if not np.isnan(usage):
-            if usage >= 15:
-                delta += 2.0
-            elif usage < 5:
-                delta -= 3.0
-        reasons.append("3-ball: prioritize strike probability (command/primary)")
-        return delta, reasons
+    # EV >= 90 penalty at 2 strikes: domain knowledge overlay
+    if s == 2 and not np.isnan(ev) and ev >= 90:
+        delta -= 3.0
 
-    # Two-strike: putaway bias.
+    # Hitter 2K whiff: boost the pitch class the hitter actually whiffs on
     if s == 2:
-        delta += 8.0 * wh_n
-        if not is_hard:
-            delta += 2.0
-        # 0-2: allow waste (expand) if this pitch creates chase.
-        if b == 0:
-            delta += 4.0 * chase_n
-            reasons.append("0-2: allow chase/waste to set up putaway")
-        else:
-            delta += 1.5 * chase_n
-            reasons.append("2-strike: lean putaway (whiff/chase)")
-        if not np.isnan(ev) and ev >= 90:
-            delta -= 3.0
-        return delta, reasons
+        if is_offspeed and h_whiff_2k_os > 30:
+            boost = min((h_whiff_2k_os - 30) / 10 * 5.0, 5.0)
+            delta += boost
+            reasons.append(f"2K: hitter whiffs {h_whiff_2k_os:.0f}% on OS")
+        if is_hard and h_whiff_2k_hard > 35:
+            boost = min((h_whiff_2k_hard - 35) / 10 * 4.0, 4.0)
+            delta += boost
+            reasons.append(f"2K: hitter whiffs {h_whiff_2k_hard:.0f}% on hard")
 
-    # Hitter's count (2-0, 3-1): reduce walk risk.
-    if b >= 2 and b > s:
-        delta += 4.0 * cmd_n
-        delta += 2.0 if is_hard else -2.0
-        reasons.append("behind: reduce free passes (command-forward)")
-        return delta, reasons
-
-    # First pitch: CSW/strike-forward, but avoid ultra-rare offerings.
+    # 0-0 hitter FP swing tendencies
     if b == 0 and s == 0:
-        delta += 4.0 * csw_n
-        if not np.isnan(usage) and usage < 5:
-            delta -= 2.0
-        reasons.append("0-0: steal a strike (CSW/primary)")
-        return delta, reasons
+        if is_offspeed and h_fp_swing_hard > 40:
+            boost = min((h_fp_swing_hard - 40) / 15 * 3.0, 3.0)
+            delta += boost
+            reasons.append(f"FP: hitter attacks hard {h_fp_swing_hard:.0f}%, offspeed boost")
+        if h_fp_swing_ch > 35 and pitch_name in {"Changeup", "Splitter"}:
+            delta += min((h_fp_swing_ch - 35) / 15 * 2.0, 2.0)
+            reasons.append(f"FP: hitter swings at CH {h_fp_swing_ch:.0f}%")
 
-    # Neutral counts: slight preference for CSW + command.
-    delta += 2.0 * csw_n + 2.0 * cmd_n
+    # Hitter chase data at hitter's counts: chasers still swing at offspeed.
+    # But NOT at 3-ball counts — a walk is too costly to risk offspeed there.
+    if b >= 2 and b > s and b < 3 and is_offspeed:
+        if h_chase_pct > 28:
+            boost = min((h_chase_pct - 28) / 8 * 3.0, 3.0)
+            delta += boost
+            reasons.append(f"chaser ({h_chase_pct:.0f}%): OS viable behind")
+        elif h_chase_pct < 22 and not np.isnan(h_chase_pct):
+            delta += 1.0
+            reasons.append(f"disciplined ({h_chase_pct:.0f}%): partial OS offset")
+
     return delta, reasons
 
 
-def _base_adjustments(pitch_name: str, info: Dict[str, Any], state: GameState) -> Tuple[float, List[str]]:
+def _safe_hd(v) -> float:
+    """Safely extract a hitter data value as float, defaulting to NaN."""
+    try:
+        f = float(v)
+        return f if not np.isnan(f) else float("nan")
+    except Exception:
+        return float("nan")
+
+
+def _base_adjustments(
+    pitch_name: str, info: Dict[str, Any], state: GameState, *, hd: Dict = None,
+) -> Tuple[float, List[str]]:
     bstate = state.bases
     outs = int(state.outs)
     reasons: List[str] = []
     delta = 0.0
-
-    is_hard = pitch_name in _HARD_PITCHES
-    is_gb = pitch_name in _GB_PITCHES
+    hd = hd or {}
 
     wh = info.get("shrunk_whiff", info.get("our_whiff"))
     cmd = info.get("command_plus", np.nan)
 
-    wh_n = _norm_pct(wh, lo=12.0, hi=40.0)
+    mr = _get_metric_ranges()
+    wh_n = _norm_pct(wh, lo=mr["whiff_p5"], hi=mr["whiff_p95"])
     cmd_n = _cmd_norm(cmd)
 
-    # Runner on 3B (<2 outs): prioritize ground ball / contact management.
-    if bstate.on_3b and outs < 2:
-        if is_gb:
-            delta += 10.0
-        elif is_hard:
-            delta -= 6.0
-        reasons.append("R3, <2 outs: favor GB/contact suppression")
+    gb_dp = _get_gb_dp_rates()
+    league_avg_gb = gb_dp.get("_league_avg_gb", 47.0)
+    league_avg_dp = gb_dp.get("_league_avg_dp", 4.1)
+    pitch_rates = gb_dp.get(pitch_name, {})
+    pitch_gb = pitch_rates.get("gb_pct", league_avg_gb)
+    pitch_dp = pitch_rates.get("dp_pct", league_avg_dp)
 
-    # Double-play spot (R1, <2 outs): sinker/CB bias.
+    # Runner on 3B (<2 outs): scale GB bonus by actual GB% differential.
+    if bstate.on_3b and outs < 2:
+        gb_bonus = (pitch_gb / league_avg_gb - 1.0) * 10.0 if league_avg_gb > 0 else 0.0
+        delta += gb_bonus
+        if gb_bonus > 0.5:
+            reasons.append(f"R3, <2 outs: GB bias ({pitch_name} {pitch_gb:.0f}% GB)")
+        elif gb_bonus < -0.5:
+            reasons.append(f"R3, <2 outs: low GB risk ({pitch_name} {pitch_gb:.0f}% GB)")
+
+    # Double-play spot (R1, <2 outs): pitch-type-specific DP bonus.
     if bstate.on_1b and not bstate.on_2b and not bstate.on_3b and outs < 2:
-        if pitch_name in {"Sinker", "Changeup", "Splitter", "Curveball", "Knuckle Curve"}:
-            delta += 8.0
-            reasons.append("R1, <2 outs: DP ball bias (sinker/CH/CB)")
+        dp_bonus = (pitch_dp / league_avg_dp - 1.0) * 10.0 if league_avg_dp > 0 else 0.0
+        delta += dp_bonus
+        if abs(dp_bonus) > 0.3:
+            reasons.append(f"R1, <2 outs: DP rate {pitch_dp:.1f}% ({pitch_name})")
+
+        # Hitter GB%: if the batter is GB-prone, boost GB pitch types in DP spot
+        h_gb = _safe_hd(hd.get("gb_pct"))
+        if not np.isnan(h_gb) and h_gb > 50 and pitch_name in _GB_PITCHES:
+            boost = min((h_gb - 50) / 15 * 3.0, 3.0)
+            delta += boost
+            reasons.append(f"GB hitter ({h_gb:.0f}%): DP boost with {pitch_name}")
 
     # Bases loaded: K + strikes.
     if bstate.is_loaded:
@@ -168,7 +325,11 @@ def _base_adjustments(pitch_name: str, info: Dict[str, Any], state: GameState) -
 
 
 def _steal_adjustments(pitch_name: str, info: Dict[str, Any], state: GameState) -> Tuple[float, List[str]]:
-    """Adjust pitch scores based on stolen base pressure (Module A)."""
+    """Adjust pitch scores based on stolen base pressure.
+
+    Penalties/bonuses are derived from empirical SB success rates by pitch
+    velocity class (slow=80.7%, med=79.2%, fast=76.1%, elite=71.5%).
+    """
     rc = getattr(state, "runner", None)
     if rc is None:
         return 0.0, []
@@ -178,16 +339,29 @@ def _steal_adjustments(pitch_name: str, info: Dict[str, Any], state: GameState) 
     if pressure < 0.2:
         return 0.0, []
 
+    steal_cal = _get_steal_rates()
+    slow_pct = steal_cal["slow_sb_pct"]
+    med_pct = steal_cal["med_sb_pct"]
+    fast_pct = steal_cal["fast_sb_pct"]
+    elite_pct = steal_cal["elite_sb_pct"]
+    mid = (slow_pct + elite_pct) / 2.0
+    spread = slow_pct - elite_pct
+    # Scale factor: map the empirical spread to ~±8 point range for continuity
+    scale = 8.0 / spread if spread > 0 else 1.0
+
     delta = 0.0
     reasons: List[str] = []
 
     if pitch_name in _SLOW_PITCHES:
-        delta -= 8.0 * pressure
+        penalty = (slow_pct - mid) * scale * pressure
+        delta -= penalty
         reasons.append(f"steal risk: slow delivery ({pitch_name})")
     elif pitch_name in _MEDIUM_PITCHES:
-        delta -= 4.0 * pressure
+        penalty = (med_pct - mid) * scale * pressure
+        delta -= penalty
     elif pitch_name in _QUICK_PITCHES:
-        delta += 4.0 * pressure
+        bonus = (mid - fast_pct) * scale * pressure
+        delta += bonus
         if pressure >= 0.7:
             reasons.append("steal risk: quick pitch helps hold runner")
 
@@ -233,23 +407,91 @@ def _squeeze_adjustments(pitch_name: str, info: Dict[str, Any], state: GameState
     return float(delta), reasons
 
 
+def _sequence_adjustments(
+    pitch_name: str,
+    state: GameState,
+    tun_df: Optional[pd.DataFrame] = None,
+    seq_df: Optional[pd.DataFrame] = None,
+) -> Tuple[float, List[str]]:
+    """Module E: Adjust pitch scores based on tunnel context with the last pitch thrown."""
+    last = getattr(state, "last_pitch", None)
+    if not last:
+        return 0.0, []
+
+    delta = 0.0
+    reasons: List[str] = []
+
+    # ── Same-pitch repetition penalty ──
+    # Repeating the exact same pitch is predictable; penalize it.
+    # Tunnel/sequence data for X→X reflects whiff rate but ignores the
+    # hitter adjusting after seeing the same pitch.  Skip tunnel/seq
+    # lookups entirely for same-pitch and just apply a flat penalty.
+    if pitch_name == last:
+        delta -= 5.0
+        reasons.append(f"same pitch repeated ({last}): predictability penalty")
+        delta = max(-8.0, min(8.0, delta))
+        return float(delta), reasons
+
+    # Tunnel score between last pitch and current candidate
+    tun_score = np.nan
+    if isinstance(tun_df, pd.DataFrame) and not tun_df.empty:
+        m = tun_df[
+            ((tun_df["Pitch A"] == last) & (tun_df["Pitch B"] == pitch_name))
+            | ((tun_df["Pitch A"] == pitch_name) & (tun_df["Pitch B"] == last))
+        ]
+        if not m.empty:
+            tun_score = float(m.iloc[0]["Tunnel Score"])
+
+    if not np.isnan(tun_score):
+        if tun_score >= 70:
+            # Elite deception off prior pitch
+            boost = min((tun_score - 70) / 30 * 6.0, 6.0)
+            delta += boost
+            reasons.append(f"tunnel {last}->{pitch_name}: {tun_score:.0f} (elite)")
+        elif tun_score < 30:
+            # Poor transition
+            penalty = min((30 - tun_score) / 30 * 4.0, 4.0)
+            delta -= penalty
+            reasons.append(f"tunnel {last}->{pitch_name}: {tun_score:.0f} (poor)")
+
+    # Sequence outcome data: whiff%/chase% when this pitch follows last_pitch
+    if isinstance(seq_df, pd.DataFrame) and not seq_df.empty:
+        m = seq_df[(seq_df["Setup Pitch"] == last) & (seq_df["Follow Pitch"] == pitch_name)]
+        if not m.empty:
+            sw = m.iloc[0].get("Whiff%", np.nan)
+            if not np.isnan(sw) and sw > 25:
+                boost = min((sw - 25) / 25 * 3.0, 3.0)
+                delta += boost
+                reasons.append(f"seq {last}->{pitch_name}: {sw:.0f}% whiff")
+
+    # Bound total delta
+    delta = max(-8.0, min(8.0, delta))
+    return float(delta), reasons
+
+
 def recommend_pitch_call(
     matchup: Dict[str, Any],
     state: GameState,
     top_n: int = 3,
+    *,
+    tun_df: Optional[pd.DataFrame] = None,
+    seq_df: Optional[pd.DataFrame] = None,
 ) -> List[Dict[str, Any]]:
     """Return top pitch call recommendations given a matchup + current game state."""
     if not matchup or not matchup.get("pitch_scores"):
         return []
 
+    hd = matchup.get("hitter_data") or {}
+
     rows: List[Dict[str, Any]] = []
     for pitch_name, info in matchup["pitch_scores"].items():
         base_score = float(info.get("score", 50.0))
-        c_delta, c_reasons = _count_adjustments(pitch_name, info, state)
-        b_delta, b_reasons = _base_adjustments(pitch_name, info, state)
+        c_delta, c_reasons = _count_adjustments(pitch_name, info, state, hd=hd)
+        b_delta, b_reasons = _base_adjustments(pitch_name, info, state, hd=hd)
         sb_delta, sb_reasons = _steal_adjustments(pitch_name, info, state)
         sq_delta, sq_reasons = _squeeze_adjustments(pitch_name, info, state)
-        final_score = _clamp(base_score + c_delta + b_delta + sb_delta + sq_delta)
+        se_delta, se_reasons = _sequence_adjustments(pitch_name, state, tun_df=tun_df, seq_df=seq_df)
+        final_score = _clamp(base_score + c_delta + b_delta + sb_delta + sq_delta + se_delta)
 
         reasons = []
         reasons.extend(info.get("reasons") or [])
@@ -257,6 +499,7 @@ def recommend_pitch_call(
         reasons.extend(b_reasons)
         reasons.extend(sb_reasons)
         reasons.extend(sq_reasons)
+        reasons.extend(se_reasons)
 
         rows.append(
             {
@@ -267,6 +510,7 @@ def recommend_pitch_call(
                 "adj_base": float(round(b_delta, 1)),
                 "adj_steal": float(round(sb_delta, 1)),
                 "adj_squeeze": float(round(sq_delta, 1)),
+                "adj_sequence": float(round(se_delta, 1)),
                 "confidence": info.get("confidence", "Low"),
                 "confidence_n": info.get("confidence_n", info.get("count", 0)),
                 "reasons": reasons,
@@ -275,4 +519,197 @@ def recommend_pitch_call(
         )
 
     rows.sort(key=lambda r: r["score"], reverse=True)
+    return rows[: max(1, int(top_n))]
+
+
+# ── RE-based pitch call recommendation ──────────────────────────────────────
+
+_RE_CAL = None
+
+
+def _get_re_calibration():
+    global _RE_CAL
+    if _RE_CAL is None:
+        from analytics.run_expectancy import load_run_expectancy_calibration
+        _RE_CAL = load_run_expectancy_calibration()
+    return _RE_CAL
+
+
+def recommend_pitch_call_re(
+    matchup: Dict[str, Any],
+    state: GameState,
+    top_n: int = 3,
+    *,
+    tun_df: Optional[pd.DataFrame] = None,
+    seq_df: Optional[pd.DataFrame] = None,
+    re_cal=None,
+) -> List[Dict[str, Any]]:
+    """Return top pitch call recommendations scored by ΔRE (run expectancy).
+
+    Lower ΔRE = better for pitcher. Displayed as RS/100 = -ΔRE × 100.
+    """
+    if not matchup or not matchup.get("pitch_scores"):
+        return []
+
+    from analytics.run_expectancy import (
+        PitchOutcomeProbs,
+        compute_delta_re,
+        re24_lookup,
+    )
+    from decision_engine.core.matchup import compute_matchup_adjusted_probs
+
+    cal = re_cal or _get_re_calibration()
+    if cal is None:
+        # Fallback to old scoring if no RE calibration available
+        return recommend_pitch_call(matchup, state, top_n=top_n,
+                                    tun_df=tun_df, seq_df=seq_df)
+
+    hd = matchup.get("hitter_data") or {}
+    b, s = state.count()
+    count_str = f"{b}-{s}"
+    on1b = int(bool(state.bases.on_1b))
+    on2b = int(bool(state.bases.on_2b))
+    on3b = int(bool(state.bases.on_3b))
+    outs = int(state.outs)
+    base_out = (on1b, on2b, on3b, outs)
+
+    # Linear weights for contact RV computation
+    lw = {
+        "Out": 0.0, "FieldersChoice": 0.0, "Sacrifice": 0.0,
+        "Single": 0.47, "Double": 0.78, "Triple": 1.05, "HomeRun": 1.40,
+        "Error": 0.47,
+    }
+    # Try to load from historical calibration
+    hist_cal = _get_historical_cal()
+    if hist_cal and hist_cal.linear_weights:
+        lw["Single"] = hist_cal.linear_weights.get("single_w", 0.47)
+        lw["Double"] = hist_cal.linear_weights.get("double_w", 0.78)
+        lw["Triple"] = hist_cal.linear_weights.get("triple_w", 1.05)
+        lw["HomeRun"] = hist_cal.linear_weights.get("hr_w", 1.40)
+        lw["Error"] = hist_cal.linear_weights.get("single_w", 0.47)
+
+    rows: List[Dict[str, Any]] = []
+    for pitch_name, info in matchup["pitch_scores"].items():
+        reasons: List[str] = []
+
+        # 1. Get league-average outcome probs for this pitch at this count
+        league_probs_obj = None
+        if pitch_name in cal.outcome_probs and count_str in cal.outcome_probs[pitch_name]:
+            league_probs_obj = cal.outcome_probs[pitch_name][count_str]
+        else:
+            # Fallback: try pitch-type average across counts
+            if pitch_name in cal.outcome_probs:
+                # Average across available counts
+                all_probs = list(cal.outcome_probs[pitch_name].values())
+                if all_probs:
+                    league_probs_obj = all_probs[0]  # use first available
+
+        if league_probs_obj is None:
+            # Ultimate fallback
+            league_probs_obj = PitchOutcomeProbs(
+                p_ball=0.38, p_called_strike=0.17, p_swinging_strike=0.10,
+                p_foul=0.18, p_in_play=0.16, p_hbp=0.01,
+            )
+
+        league_probs_dict = league_probs_obj.as_dict() if hasattr(league_probs_obj, 'as_dict') else {
+            "p_ball": league_probs_obj.p_ball,
+            "p_called_strike": league_probs_obj.p_called_strike,
+            "p_swinging_strike": league_probs_obj.p_swinging_strike,
+            "p_foul": league_probs_obj.p_foul,
+            "p_in_play": league_probs_obj.p_in_play,
+            "p_hbp": league_probs_obj.p_hbp,
+        }
+
+        # 2. Apply matchup adjustments
+        pitcher_metrics = {
+            "whiff_pct": info.get("shrunk_whiff", info.get("our_whiff")),
+            "csw_pct": info.get("shrunk_csw", info.get("our_csw")),
+            "chase_pct": info.get("shrunk_chase", info.get("our_chase")),
+            "ev_against": info.get("shrunk_ev", info.get("our_ev_against")),
+            "count": info.get("count", 0),
+        }
+        hitter_metrics = {
+            "k_pct": hd.get("k_pct"),
+            "chase_pct": hd.get("chase_pct"),
+            "contact_pct": hd.get("contact_pct"),
+            "pa": hd.get("pa"),
+        }
+
+        adjusted = compute_matchup_adjusted_probs(
+            league_probs_dict, pitcher_metrics, hitter_metrics,
+        )
+
+        adj_probs = PitchOutcomeProbs(
+            p_ball=adjusted["p_ball"],
+            p_called_strike=adjusted["p_called_strike"],
+            p_swinging_strike=adjusted["p_swinging_strike"],
+            p_foul=adjusted["p_foul"],
+            p_in_play=adjusted["p_in_play"],
+            p_hbp=adjusted["p_hbp"],
+        )
+
+        # Adjust contact RV for matchup
+        base_crv = cal.contact_rv.get(pitch_name, 0.12)
+        crv_adj = adjusted.get("contact_rv_adj", 1.0)
+        adjusted_crv = base_crv * crv_adj
+        adjusted_contact_rv = dict(cal.contact_rv)
+        adjusted_contact_rv[pitch_name] = adjusted_crv
+
+        # 3. Compute ΔRE
+        delta_re_base = compute_delta_re(
+            pitch_type=pitch_name,
+            count=count_str,
+            base_out_state=base_out,
+            outcome_probs=adj_probs,
+            re24=cal.re24,
+            contact_rv=adjusted_contact_rv,
+            linear_weights=lw,
+        )
+
+        # 4. Sequence/steal/squeeze modifiers (expressed in RE terms)
+        # Scale from old ±5 point range to ~±0.002 runs
+        RE_SCALE = 0.0004  # 1 old point ≈ 0.0004 runs
+
+        _, se_reasons = _sequence_adjustments(pitch_name, state, tun_df=tun_df, seq_df=seq_df)
+        se_delta_old, _ = _sequence_adjustments(pitch_name, state, tun_df=tun_df, seq_df=seq_df)
+        delta_re_seq = -se_delta_old * RE_SCALE  # negative old delta = good = negative ΔRE
+
+        _, sb_reasons = _steal_adjustments(pitch_name, info, state)
+        sb_delta_old, _ = _steal_adjustments(pitch_name, info, state)
+        delta_re_steal = -sb_delta_old * RE_SCALE
+
+        _, sq_reasons = _squeeze_adjustments(pitch_name, info, state)
+        sq_delta_old, _ = _squeeze_adjustments(pitch_name, info, state)
+        delta_re_squeeze = -sq_delta_old * RE_SCALE
+
+        delta_re_total = delta_re_base + delta_re_seq + delta_re_steal + delta_re_squeeze
+        rs100 = -delta_re_total * 100.0  # runs saved per 100 pitches
+
+        # Build reasons
+        reasons.extend(info.get("reasons") or [])
+        reasons.extend(se_reasons)
+        reasons.extend(sb_reasons)
+        reasons.extend(sq_reasons)
+
+        # Confidence
+        n_p = int(info.get("count", 0) or 0)
+        from decision_engine.core.shrinkage import confidence_tier
+        conf = confidence_tier(n_p)
+
+        rows.append({
+            "pitch": pitch_name,
+            "delta_re": float(round(delta_re_total, 5)),
+            "rs100": float(round(rs100, 2)),
+            "delta_re_base": float(round(delta_re_base, 5)),
+            "delta_re_seq": float(round(delta_re_seq, 5)),
+            "delta_re_steal": float(round(delta_re_steal, 5)),
+            "delta_re_squeeze": float(round(delta_re_squeeze, 5)),
+            "confidence": conf,
+            "confidence_n": n_p,
+            "reasons": reasons,
+            "raw": info,
+        })
+
+    # Sort by ΔRE ascending (most negative = best for pitcher)
+    rows.sort(key=lambda r: r["delta_re"])
     return rows[: max(1, int(top_n))]
