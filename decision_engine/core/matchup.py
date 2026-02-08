@@ -186,7 +186,7 @@ def score_pitcher_vs_hitter_shrunk(
             "barrel_pct_against": pt_data.get("barrel_pct_against", np.nan),
             "stuff_plus": stuff,
             "command_plus": pt_data.get("command_plus", np.nan),
-            "usage": pt_data.get("usage_pct", np.nan),
+            "usage": pt_data.get("stabilised_usage", pt_data.get("usage_pct", np.nan)),
             "velo": pt_data.get("avg_velo", np.nan),
             "eff_velo": pt_data.get("eff_velo", np.nan),
             "spin": pt_data.get("avg_spin", np.nan),

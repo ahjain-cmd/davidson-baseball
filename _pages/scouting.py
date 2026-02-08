@@ -508,6 +508,49 @@ def _get_our_pitcher_arsenal(data, pitcher_name, season_filter=None, tunnel_pop=
             "zone_eff": zone_eff,
             "zone_eff_3x3": zone_eff_3x3,
         }
+    # ── Usage stabilisation: blend current + prior season for reliability ──
+    # Pitchers develop over time, so raw usage_pct is kept for display.
+    # For the RE engine's reliability dampening we compute a *stabilised*
+    # usage that blends current-season usage with the prior season, capping
+    # the YoY swing to ±MAX_DELTA pp.  This prevents a newly-added pitch
+    # (e.g. 2% sinker that was 0% last year) from being treated as if the
+    # pitcher throws it regularly, while giving credit to pitches that had
+    # prior-season evidence even if current-season sample is small.
+    MAX_USAGE_DELTA = 8.0  # max pp change assumed realistic per season
+    if "Season" in pdf.columns and arsenal["pitches"]:
+        valid_seasons = sorted([int(s) for s in pdf["Season"].dropna().unique() if int(s) > 0])
+        if len(valid_seasons) >= 2:
+            current_season = valid_seasons[-1]
+            prior_season = valid_seasons[-2]
+            prior_pdf = pdf[pdf["Season"] == prior_season]
+            current_pdf = pdf[pdf["Season"] == current_season]
+            if len(prior_pdf) >= 30 and len(current_pdf) >= 20:
+                prior_usage = {}
+                for pt, g in prior_pdf.groupby("TaggedPitchType"):
+                    if len(g) >= 3:
+                        prior_usage[pt] = len(g) / len(prior_pdf) * 100
+                current_usage = {}
+                for pt, g in current_pdf.groupby("TaggedPitchType"):
+                    if len(g) >= 3:
+                        current_usage[pt] = len(g) / len(current_pdf) * 100
+                for pt_name, pt_data in arsenal["pitches"].items():
+                    prior = prior_usage.get(pt_name, 0.0)
+                    cur = current_usage.get(pt_name, pt_data["usage_pct"])
+                    # Cap the delta
+                    delta = cur - prior
+                    if abs(delta) > MAX_USAGE_DELTA:
+                        stabilised = prior + MAX_USAGE_DELTA * (1 if delta > 0 else -1)
+                    else:
+                        stabilised = cur
+                    pt_data["stabilised_usage"] = max(stabilised, 0.0)
+                    pt_data["prior_season_usage"] = prior
+                # Renormalize stabilised so they sum to 100%
+                total_stab = sum(p.get("stabilised_usage", p["usage_pct"]) for p in arsenal["pitches"].values())
+                if total_stab > 0:
+                    for pt_data in arsenal["pitches"].values():
+                        if "stabilised_usage" in pt_data:
+                            pt_data["stabilised_usage"] = pt_data["stabilised_usage"] / total_stab * 100
+
     # Tunnel scores and pitch pair sequencing results
     tunnels = _compute_tunnel_score(pdf, tunnel_pop=tunnel_pop)
     arsenal["tunnels"] = tunnels
