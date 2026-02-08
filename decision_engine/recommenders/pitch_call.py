@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -691,12 +692,12 @@ def recommend_pitch_call_re(
             usage_f = float(usage)
 
             # Reliability multiplier: how much of the base ΔRE benefit to credit.
-            # Ramps linearly from 0.40 at 0% usage to 1.0 at 25%+ usage.
-            # At 5%:  0.52 → only ~half the benefit credited
-            # At 10%: 0.64
-            # At 15%: 0.76
-            # At 25%+: 1.00 (full credit)
-            reliability = min(1.0, 0.40 + 0.024 * usage_f)
+            # Sigmoid ramp centred at 12% usage — very-low-usage pitches
+            # (sub-5%) get almost no credit; established pitches (15%+) get
+            # near-full credit.
+            # At 2%:  0.03   At 5%:  0.08   At 10%: 0.33
+            # At 12%: 0.50   At 15%: 0.74   At 20%+: ~1.0
+            reliability = min(1.0, max(0.0, 1.0 / (1.0 + math.exp(-0.35 * (usage_f - 12.0)))))
 
             if delta_re_base < 0:
                 # Pitch has run-saving value; dampen by reliability
