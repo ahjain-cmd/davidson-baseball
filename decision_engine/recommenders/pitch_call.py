@@ -423,14 +423,13 @@ def _sequence_adjustments(
     reasons: List[str] = []
 
     # ── Same-pitch repetition penalty ──
-    # Repeating the exact same pitch is predictable; penalize it.
-    # Tunnel/sequence data for X→X reflects whiff rate but ignores the
-    # hitter adjusting after seeing the same pitch.  Skip tunnel/seq
-    # lookups entirely for same-pitch and just apply a flat penalty.
+    # Repeating the exact same pitch is predictable; penalize it heavily.
+    # At RE_SCALE=0.0004 each old point ≈ 0.0004 runs, so -15 → +0.006 ΔRE
+    # penalty — enough to drop most pitches below a different option.
     if pitch_name == last:
-        delta -= 5.0
+        delta -= 15.0
         reasons.append(f"same pitch repeated ({last}): predictability penalty")
-        delta = max(-8.0, min(8.0, delta))
+        delta = max(-20.0, min(20.0, delta))
         return float(delta), reasons
 
     # Tunnel score between last pitch and current candidate
