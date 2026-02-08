@@ -301,7 +301,12 @@ def compute_matchup_adjusted_probs(
             return 1.0
         raw_ratio = obs_f / league_f
         # Shrink toward 1.0 based on sample size
-        n = float(n_obs) if n_obs is not None and not np.isnan(float(n_obs)) else 0.0
+        try:
+            n = float(n_obs) if n_obs is not None else 0.0
+            if np.isnan(n):
+                n = 0.0
+        except (TypeError, ValueError):
+            n = 0.0
         w = n / (n + n_prior)
         shrunk = w * raw_ratio + (1.0 - w) * 1.0
         return max(0.5, min(2.0, shrunk))
@@ -371,20 +376,7 @@ def compute_matchup_adjusted_probs(
 
     # ── Contact RV adjustment (EV-based) ──
     contact_rv_adj = 1.0
-    # Use calibrated D1 median EV as baseline if available
-    _ev_baseline = 85.0
-    try:
-        import os as _os, json as _json2
-        _hc = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), ".cache", "historical_calibration.json")
-        if _os.path.exists(_hc):
-            with open(_hc) as _hf:
-                _mr = _json2.load(_hf).get("calibration", {}).get("metric_ranges", {})
-                _ev_r = _mr.get("ev_against", {})
-                if _ev_r:
-                    _ev_baseline = (_ev_r.get("p50", 85.0) if "p50" in _ev_r
-                                    else (_ev_r.get("p5", 80) + _ev_r.get("p95", 95)) / 2)
-    except Exception:
-        pass
+    _ev_baseline = 85.0  # D1 average EV against
     p_ev = pitcher_metrics.get("ev_against")
     if p_ev is not None and not np.isnan(float(p_ev or 0)):
         ev_ratio = float(p_ev) / _ev_baseline

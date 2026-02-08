@@ -592,6 +592,9 @@ def recommend_pitch_call_re(
     except Exception:
         pass
 
+    # Load gb_dp_rates for compute_delta_re (avoids per-call file I/O)
+    _gb_dp = _get_gb_dp_rates()
+
     # Linear weights for contact RV computation
     lw = {
         "Out": 0.0, "FieldersChoice": 0.0, "Sacrifice": 0.0,
@@ -692,6 +695,7 @@ def recommend_pitch_call_re(
             count_ball_cost=_count_ball_cost,
             count_strike_gain=_count_strike_gain,
             bip_profile=cal.bip_profiles,
+            gb_dp_rates=_gb_dp,
         )
 
         # 4. Sequence adjustments — native RE: modify probs then recompute ΔRE
@@ -727,6 +731,7 @@ def recommend_pitch_call_re(
                 re24=cal.re24, contact_rv=adjusted_contact_rv,
                 linear_weights=lw, count_ball_cost=_count_ball_cost,
                 count_strike_gain=_count_strike_gain, bip_profile=cal.bip_profiles,
+                gb_dp_rates=_gb_dp,
             )
             delta_re_seq = delta_re_with_seq - delta_re_base
         else:
@@ -739,6 +744,67 @@ def recommend_pitch_call_re(
 
         sq_delta_old, sq_reasons = _squeeze_adjustments(pitch_name, info, state)
         delta_re_squeeze = -sq_delta_old * RE_SCALE
+
+        # 4b. Hitter-specific game-theory adjustments (not captured by base ΔRE)
+        # The RE computation handles mechanical count/base value, but these
+        # hitter-specific tendencies need explicit modelling.
+        gt_delta_old = 0.0  # accumulate in old-system points
+        gt_reasons: List[str] = []
+        is_hard = pitch_name in _HARD_PITCHES
+        is_offspeed = pitch_name in _OFFSPEED_PITCHES
+
+        h_bb_pct = _safe_hd(hd.get("bb_pct"))
+        h_chase_pct = _safe_hd(hd.get("chase_pct"))
+        h_whiff_2k_os = _safe_hd(hd.get("whiff_2k_os"))
+        h_whiff_2k_hard = _safe_hd(hd.get("whiff_2k_hard"))
+        h_fp_swing_hard = _safe_hd(hd.get("fp_swing_hard"))
+        h_fp_swing_ch = _safe_hd(hd.get("fp_swing_ch"))
+        h_gb = _safe_hd(hd.get("gb_pct"))
+
+        # Disciplined hitter at 3-ball: offspeed penalty
+        if b == 3 and is_offspeed and not np.isnan(h_bb_pct) and h_bb_pct > 12:
+            penalty = min((h_bb_pct - 12) / 8 * 2.0, 2.0)
+            gt_delta_old -= penalty
+            gt_reasons.append(f"disciplined ({h_bb_pct:.0f}% BB): risky offspeed at 3-ball")
+
+        # Hitter 2K whiff rates
+        if s == 2:
+            if is_offspeed and not np.isnan(h_whiff_2k_os) and h_whiff_2k_os > 30:
+                boost = min((h_whiff_2k_os - 30) / 10 * 5.0, 5.0)
+                gt_delta_old += boost
+                gt_reasons.append(f"2K: hitter whiffs {h_whiff_2k_os:.0f}% on OS")
+            if is_hard and not np.isnan(h_whiff_2k_hard) and h_whiff_2k_hard > 35:
+                boost = min((h_whiff_2k_hard - 35) / 10 * 4.0, 4.0)
+                gt_delta_old += boost
+                gt_reasons.append(f"2K: hitter whiffs {h_whiff_2k_hard:.0f}% on hard")
+
+        # 0-0 FP swing tendencies
+        if b == 0 and s == 0:
+            if is_offspeed and not np.isnan(h_fp_swing_hard) and h_fp_swing_hard > 40:
+                boost = min((h_fp_swing_hard - 40) / 15 * 3.0, 3.0)
+                gt_delta_old += boost
+                gt_reasons.append(f"FP: hitter attacks hard {h_fp_swing_hard:.0f}%, offspeed boost")
+            if not np.isnan(h_fp_swing_ch) and h_fp_swing_ch > 35 and pitch_name in {"Changeup", "Splitter"}:
+                gt_delta_old += min((h_fp_swing_ch - 35) / 15 * 2.0, 2.0)
+
+        # Hitter chase at hitter's counts (not 3-ball)
+        if b >= 2 and b > s and b < 3 and is_offspeed:
+            if not np.isnan(h_chase_pct) and h_chase_pct > 28:
+                boost = min((h_chase_pct - 28) / 8 * 3.0, 3.0)
+                gt_delta_old += boost
+                gt_reasons.append(f"chaser ({h_chase_pct:.0f}%): OS viable behind")
+            elif not np.isnan(h_chase_pct) and h_chase_pct < 22:
+                gt_delta_old -= 1.5
+                gt_reasons.append(f"disciplined ({h_chase_pct:.0f}%): OS penalised")
+
+        # GB hitter DP boost
+        if on1b and not on2b and not on3b and outs < 2:
+            if not np.isnan(h_gb) and h_gb > 50 and pitch_name in _GB_PITCHES:
+                boost = min((h_gb - 50) / 15 * 3.0, 3.0)
+                gt_delta_old += boost
+                gt_reasons.append(f"GB hitter ({h_gb:.0f}%): DP boost with {pitch_name}")
+
+        delta_re_gametheory = -gt_delta_old * RE_SCALE
 
         # 5. Usage adjustment — dampen base ΔRE by reliability factor.
         # League-average outcome probs don't reflect THIS pitcher's execution
@@ -788,7 +854,7 @@ def recommend_pitch_call_re(
                 usage_reasons.append("3-ball: low-usage risk amplified")
 
         delta_re_total = (delta_re_base + delta_re_seq + delta_re_steal
-                         + delta_re_squeeze + delta_re_usage)
+                         + delta_re_squeeze + delta_re_gametheory + delta_re_usage)
         rs100 = -delta_re_total * 100.0  # runs saved per 100 pitches
 
         # Build reasons
@@ -796,6 +862,7 @@ def recommend_pitch_call_re(
         reasons.extend(se_reasons)
         reasons.extend(sb_reasons)
         reasons.extend(sq_reasons)
+        reasons.extend(gt_reasons)
         reasons.extend(usage_reasons)
 
         # Confidence
@@ -811,6 +878,7 @@ def recommend_pitch_call_re(
             "delta_re_seq": float(round(delta_re_seq, 5)),
             "delta_re_steal": float(round(delta_re_steal, 5)),
             "delta_re_squeeze": float(round(delta_re_squeeze, 5)),
+            "delta_re_gametheory": float(round(delta_re_gametheory, 5)),
             "delta_re_usage": float(round(delta_re_usage, 5)),
             "confidence": conf,
             "confidence_n": n_p,

@@ -368,6 +368,7 @@ def render_ingame_panel(data):
             dre_steal = r.get("delta_re_steal", 0.0)
             dre_squeeze = r.get("delta_re_squeeze", 0.0)
             dre_usage = r.get("delta_re_usage", 0.0)
+            dre_gt = r.get("delta_re_gametheory", 0.0)
             parts = f"ΔRE: base {dre_base:+.4f}"
             if dre_seq != 0.0:
                 parts += f" + seq {dre_seq:+.4f}"
@@ -375,6 +376,8 @@ def render_ingame_panel(data):
                 parts += f" + steal {dre_steal:+.4f}"
             if dre_squeeze != 0.0:
                 parts += f" + squeeze {dre_squeeze:+.4f}"
+            if dre_gt != 0.0:
+                parts += f" + hitter {dre_gt:+.4f}"
             if dre_usage != 0.0:
                 parts += f" + usage {dre_usage:+.4f}"
             parts += f" = {r.get('delta_re', 0.0):+.4f}"

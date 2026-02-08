@@ -167,23 +167,20 @@ def _reconstruct_half_inning(pa_sequence: List[Dict]) -> List[Dict]:
             on1b, on2b, on3b, _ = _advance_runners_hr(on1b, on2b, on3b)
         elif outcome in ("Walk", "HitByPitch"):
             on1b, on2b, on3b, _ = _advance_runners_walk(on1b, on2b, on3b)
-        elif outcome == "SacFly":
-            outs += 1
-            # R3 scores on sac fly
-            if on3b:
+        elif outcome == "Sacrifice":
+            # Sac bunt/fly: R3 scores if present and < 2 outs
+            if on3b and outs < 2:
                 on3b = 0
+            outs += 1
         elif outcome == "FieldersChoice":
             # Model as double play when R1 on with < 2 outs
             if on1b and outs < 2:
                 outs += 2
-                on1b = 0
-                # Batter reaches 1B on FC
-                on1b = 1
+                on1b = 0  # both R1 and batter out
             else:
                 outs += 1
-        elif outcome in ("Strikeout", "Out", "Sacrifice"):
+        elif outcome in ("Strikeout", "Out"):
             outs += 1
-        # else: unknown, treat as out
         else:
             outs += 1
 
@@ -748,6 +745,7 @@ def compute_delta_re(
     count_ball_cost: Optional[Dict[str, float]] = None,
     count_strike_gain: Optional[Dict[str, float]] = None,
     bip_profile: Optional[Dict[str, float]] = None,
+    gb_dp_rates: Optional[Dict[str, Any]] = None,
 ) -> float:
     """Compute ΔRE for a pitch at the given game state.
 
@@ -829,8 +827,6 @@ def compute_delta_re(
 
     if bip_profile and pitch_type in bip_profile:
         bp = bip_profile[pitch_type]
-    elif bip_profile and "_league" in bip_profile:
-        bp = bip_profile["_league"]
     else:
         bp = _FALLBACK_BIP_PROFILE
 
@@ -869,35 +865,22 @@ def compute_delta_re(
 
     # Out on BIP — split into regular out and DP when applicable
     re_out = _get_re(re24, on1b, on2b, on3b, outs + 1)
-    # Load pitch-type GB% for DP and tag-up modelling
+    # Get pitch-type GB% for DP and tag-up modelling from gb_dp_rates param
     _gb_pct_for_bip = 0.43
-    try:
-        _hcal_path2 = os.path.join(CACHE_DIR, "historical_calibration.json")
-        if os.path.exists(_hcal_path2):
-            with open(_hcal_path2) as _hf2:
-                _hblob2 = json.load(_hf2)
-            _gdp2 = _hblob2.get("calibration", _hblob2).get("gb_dp_rates", {})
-            _pt_gdp2 = _gdp2.get(pitch_type, {})
-            if _pt_gdp2:
-                _gb_pct_for_bip = _pt_gdp2.get("gb_pct", 43.0) / 100.0
-    except Exception:
-        pass
+    _dp_rate = 0.06  # ~6% of ground outs become DP
+    if gb_dp_rates:
+        _pt_gdp = gb_dp_rates.get(pitch_type, {})
+        if _pt_gdp:
+            _gb_pct_for_bip = _pt_gdp.get("gb_pct", 43.0) / 100.0
+            if _pt_gdp.get("gb_pct", 0) > 0:
+                _dp_rate = _pt_gdp.get("dp_pct", 2.5) / _pt_gdp["gb_pct"]
 
     if on1b and outs < 2:
         # DP probability: GB% × (DP rate among GBs)
-        dp_rate = 0.06  # ~6% of ground outs become DP
-        try:
-            if os.path.exists(_hcal_path2):
-                _gdp3 = _hblob2.get("calibration", _hblob2).get("gb_dp_rates", {})
-                _pt3 = _gdp3.get(pitch_type, {})
-                if _pt3 and _pt3.get("gb_pct", 0) > 0:
-                    dp_rate = _pt3.get("dp_pct", 2.5) / _pt3["gb_pct"]
-        except Exception:
-            pass
-        p_dp_of_out = _gb_pct_for_bip * dp_rate
+        p_dp_of_out = _gb_pct_for_bip * _dp_rate
         p_dp_of_out = min(p_dp_of_out, 0.15)  # cap at 15%
-        # DP: +2 outs, R1 cleared, batter at 1B
-        re_dp = _get_re(re24, 1, on2b, on3b, outs + 2)
+        # DP: +2 outs, R1 and batter both out — nobody on 1B
+        re_dp = _get_re(re24, 0, on2b, on3b, outs + 2)
         delta_ip = (adj_out * (1.0 - p_dp_of_out)) * (re_out - re_current) + \
                    (adj_out * p_dp_of_out) * (re_dp - re_current)
     else:
