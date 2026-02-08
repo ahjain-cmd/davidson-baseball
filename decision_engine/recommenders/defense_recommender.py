@@ -327,7 +327,7 @@ def estimate_shift_contact_rv(
 
     if shift_type == "Infield Shift":
         # Strong shift: big benefit on pull-side GBs, small cost on oppo
-        benefit = 0.04 * pull_factor * gb_factor  # up to ~0.04 wOBA saved
+        benefit = 0.025 * pull_factor * gb_factor  # up to ~0.025 wOBA saved (D1)
         cost = 0.01 * (1.0 - pull_factor)  # small oppo-side cost
         return standard_contact_rv - benefit + cost
 

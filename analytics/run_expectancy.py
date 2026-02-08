@@ -77,6 +77,7 @@ class RunExpectancyCalibration:
     outcome_probs: Dict[str, Dict[str, Dict[str, float]]]    # pitch -> count -> probs dict
     contact_rv: Dict[str, float]                              # pitch_type -> expected wOBA on contact
     count_rv: Dict[str, float]                                # "b-s" -> count run value
+    bip_profiles: Optional[Dict[str, Dict[str, float]]] = None  # pitch_type -> BIP outcome dist
 
 
 # ── RE24 state key helpers ────────────────────────────────────────────────────
@@ -124,19 +125,13 @@ def _advance_runners_hr(on1b: int, on2b: int, on3b: int) -> Tuple[int, int, int,
 
 def _advance_runners_walk(on1b: int, on2b: int, on3b: int) -> Tuple[int, int, int, int]:
     """BB/HBP: forced advances only."""
-    runs = 0
+    new_1b, new_2b, new_3b, runs = 1, on2b, on3b, 0
     if on1b:
         new_2b = 1
         if on2b:
             new_3b = 1
             if on3b:
                 runs = 1
-        else:
-            new_3b = on3b
-    else:
-        new_2b = on2b
-        new_3b = on3b
-    new_1b = 1
     return new_1b, new_2b, new_3b, runs
 
 
@@ -177,7 +172,16 @@ def _reconstruct_half_inning(pa_sequence: List[Dict]) -> List[Dict]:
             # R3 scores on sac fly
             if on3b:
                 on3b = 0
-        elif outcome in ("Strikeout", "Out", "FieldersChoice", "Sacrifice"):
+        elif outcome == "FieldersChoice":
+            # Model as double play when R1 on with < 2 outs
+            if on1b and outs < 2:
+                outs += 2
+                on1b = 0
+                # Batter reaches 1B on FC
+                on1b = 1
+            else:
+                outs += 1
+        elif outcome in ("Strikeout", "Out", "Sacrifice"):
             outs += 1
         # else: unknown, treat as out
         else:
@@ -418,16 +422,13 @@ def compute_pitch_outcome_probs(
             p_ball = _shrink(raw.get("BallCalled", 0), "BallCalled")
             p_cs = _shrink(raw.get("StrikeCalled", 0), "StrikeCalled")
             p_ss = _shrink(raw.get("StrikeSwinging", 0), "StrikeSwinging")
-            p_foul = _shrink(
-                raw.get("FoulBall", 0) + raw.get("FoulBallNotFieldable", 0) + raw.get("FoulBallFieldable", 0),
-                "FoulBall",
-            )
-            # For foul shrinkage, combine all foul types
+            # Combine all foul types before shrinking toward overall
+            foul_raw = (raw.get("FoulBall", 0) + raw.get("FoulBallNotFieldable", 0) +
+                        raw.get("FoulBallFieldable", 0))
             foul_overall = (overall_rates.get("FoulBall", 0) +
-                          overall_rates.get("FoulBallNotFieldable", 0) +
-                          overall_rates.get("FoulBallFieldable", 0))
-            p_foul = w * (raw.get("FoulBall", 0) + raw.get("FoulBallNotFieldable", 0) +
-                         raw.get("FoulBallFieldable", 0)) + (1.0 - w) * foul_overall
+                           overall_rates.get("FoulBallNotFieldable", 0) +
+                           overall_rates.get("FoulBallFieldable", 0))
+            p_foul = w * foul_raw + (1.0 - w) * foul_overall
 
             p_ip = _shrink(raw.get("InPlay", 0), "InPlay")
             p_hbp = _shrink(raw.get("HitByPitch", 0), "HitByPitch")
@@ -477,15 +478,42 @@ def _fallback_outcome_probs_table() -> Dict[str, Dict[str, PitchOutcomeProbs]]:
         p_ball=0.38, p_called_strike=0.16, p_swinging_strike=0.12,
         p_foul=0.16, p_in_play=0.17, p_hbp=0.01,
     )
-    # Apply across all counts
+    # Apply count-based adjustments to reflect how count changes probabilities:
+    # More balls → more P(ball), less P(ss); More strikes → more P(ss), less P(ball)
+    COUNT_ADJ = {
+        # (balls, strikes): (ball_mult, cs_mult, ss_mult, foul_mult, ip_mult)
+        (0, 0): (1.00, 1.00, 1.00, 1.00, 1.00),
+        (0, 1): (0.92, 1.05, 1.15, 1.05, 0.95),
+        (0, 2): (0.85, 0.80, 1.50, 1.10, 1.10),
+        (1, 0): (1.05, 0.95, 0.90, 1.00, 1.05),
+        (1, 1): (1.00, 1.00, 1.10, 1.05, 0.95),
+        (1, 2): (0.90, 0.75, 1.40, 1.10, 1.15),
+        (2, 0): (1.12, 0.85, 0.80, 0.95, 1.10),
+        (2, 1): (1.08, 0.90, 0.95, 1.00, 1.00),
+        (2, 2): (0.95, 0.70, 1.30, 1.10, 1.20),
+        (3, 0): (1.25, 0.60, 0.50, 0.80, 1.30),
+        (3, 1): (1.15, 0.75, 0.70, 0.90, 1.15),
+        (3, 2): (1.00, 0.65, 1.10, 1.05, 1.30),
+    }
     result = {}
-    for pt, probs in [("Fastball", fb), ("Sinker", fb), ("Cutter", fb),
-                       ("Slider", sl), ("Sweeper", sl), ("Curveball", cb),
-                       ("Knuckle Curve", cb), ("Changeup", ch), ("Splitter", ch)]:
+    for pt, base_probs in [("Fastball", fb), ("Sinker", fb), ("Cutter", fb),
+                            ("Slider", sl), ("Sweeper", sl), ("Curveball", cb),
+                            ("Knuckle Curve", cb), ("Changeup", ch), ("Splitter", ch)]:
         result[pt] = {}
         for b in range(4):
             for s in range(3):
-                result[pt][f"{b}-{s}"] = probs
+                bm, cm, sm, fm, im = COUNT_ADJ.get((b, s), (1, 1, 1, 1, 1))
+                raw = {
+                    "p_ball": base_probs.p_ball * bm,
+                    "p_called_strike": base_probs.p_called_strike * cm,
+                    "p_swinging_strike": base_probs.p_swinging_strike * sm,
+                    "p_foul": base_probs.p_foul * fm,
+                    "p_in_play": base_probs.p_in_play * im,
+                    "p_hbp": base_probs.p_hbp,
+                }
+                total = sum(raw.values())
+                result[pt][f"{b}-{s}"] = PitchOutcomeProbs(
+                    **{k: round(v / total, 5) for k, v in raw.items()})
     return result
 
 
@@ -603,6 +631,103 @@ def _fallback_contact_rv() -> Dict[str, float]:
     }
 
 
+def compute_bip_profiles(parquet_path: str) -> Dict[str, Dict[str, float]]:
+    """Compute per-pitch-type BIP outcome distributions.
+
+    Returns dict mapping pitch_type -> {p_out, p_single, p_double, p_triple,
+    p_hr, p_error, p_sac}.  Shrinks toward league-average BIP profile with
+    n_prior=300 BIPs.
+    """
+    if not os.path.exists(parquet_path):
+        return {}
+
+    pq = parquet_path.replace("'", "''")
+    con = duckdb.connect(database=":memory:")
+
+    rows = con.execute(f"""
+        SELECT
+            {_PT_NORM} AS pitch_type,
+            PlayResult,
+            COUNT(*) AS n
+        FROM read_parquet('{pq}')
+        WHERE PitchCall = 'InPlay'
+          AND PlayResult IS NOT NULL
+          AND ({_PT_NORM}) IS NOT NULL
+        GROUP BY pitch_type, PlayResult
+    """).fetchall()
+    con.close()
+
+    # Aggregate by pitch type
+    pt_counts: Dict[str, Dict[str, int]] = {}
+    league_counts: Dict[str, int] = {}
+    for pt, result, n in rows:
+        n = int(n)
+        if pt not in pt_counts:
+            pt_counts[pt] = {}
+        pt_counts[pt][result] = pt_counts[pt].get(result, 0) + n
+        league_counts[result] = league_counts.get(result, 0) + n
+
+    # League-average BIP rates
+    league_total = sum(league_counts.values()) or 1
+    league_rates: Dict[str, float] = {}
+    for r, c in league_counts.items():
+        league_rates[r] = c / league_total
+
+    # Map PlayResult to canonical BIP outcome
+    def _map_result(r: str) -> str:
+        if r in ("Out", "FieldersChoice"):
+            return "p_out"
+        elif r == "Sacrifice":
+            return "p_sac"
+        elif r == "Single":
+            return "p_single"
+        elif r == "Double":
+            return "p_double"
+        elif r == "Triple":
+            return "p_triple"
+        elif r == "HomeRun":
+            return "p_hr"
+        elif r == "Error":
+            return "p_error"
+        return "p_out"  # fallback
+
+    # League profile in canonical keys
+    league_profile: Dict[str, float] = {}
+    for r, rate in league_rates.items():
+        k = _map_result(r)
+        league_profile[k] = league_profile.get(k, 0) + rate
+
+    N_PRIOR = 300
+    profiles: Dict[str, Dict[str, float]] = {}
+    for pt, counts in pt_counts.items():
+        total = sum(counts.values())
+        if total < 20:
+            continue
+        # Raw rates in canonical keys
+        raw: Dict[str, float] = {}
+        for r, c in counts.items():
+            k = _map_result(r)
+            raw[k] = raw.get(k, 0) + c / total
+
+        # Shrink toward league
+        w = total / (total + N_PRIOR)
+        profile: Dict[str, float] = {}
+        for k in ("p_out", "p_single", "p_double", "p_triple", "p_hr", "p_error", "p_sac"):
+            profile[k] = w * raw.get(k, 0.0) + (1 - w) * league_profile.get(k, 0.0)
+
+        # Renormalize
+        tot = sum(profile.values()) or 1.0
+        profiles[pt] = {k: round(v / tot, 6) for k, v in profile.items()}
+
+    return profiles
+
+
+_FALLBACK_BIP_PROFILE: Dict[str, float] = {
+    "p_out": 0.70, "p_single": 0.17, "p_double": 0.05,
+    "p_triple": 0.005, "p_hr": 0.03, "p_error": 0.025, "p_sac": 0.02,
+}
+
+
 # ── 1D. ΔRE Computation ──────────────────────────────────────────────────────
 
 def _get_re(re24: Dict[str, float], on1b: int, on2b: int, on3b: int, outs: int) -> float:
@@ -620,6 +745,9 @@ def compute_delta_re(
     re24: Dict[str, float],
     contact_rv: Dict[str, float],
     linear_weights: Dict[str, float],
+    count_ball_cost: Optional[Dict[str, float]] = None,
+    count_strike_gain: Optional[Dict[str, float]] = None,
+    bip_profile: Optional[Dict[str, float]] = None,
 ) -> float:
     """Compute ΔRE for a pitch at the given game state.
 
@@ -640,19 +768,12 @@ def compute_delta_re(
 
     # ── Ball ──
     if b < 3:
-        # Count advances: next count RE (from count_rv perspective, the "state"
-        # is just the count; base-out doesn't change on a ball)
-        # We approximate: RE stays the same base-out state but count changes.
-        # The count-level cost is captured in the count_rv transition.
-        # For ΔRE we just keep current base-out state (ball doesn't change it).
-        re_next = re_current  # base-out unchanged on ball
-        delta_ball = re_next - re_current  # = 0 for base-out, but count worsens
-        # The count worsening is implicit: the next pitch will be at a worse count.
-        # To capture count-level effects, we use a simple approximation:
-        # Getting deeper in the count raises RE proportionally.
-        # Use a fixed ball cost per count from general data.
-        ball_cost = _ball_cost_approx(b, s)
-        delta_ball = ball_cost
+        # Use calibrated ball cost if available, else hardcoded fallback
+        count_key = f"{b}-{s}"
+        if count_ball_cost and count_key in count_ball_cost:
+            delta_ball = count_ball_cost[count_key]
+        else:
+            delta_ball = _ball_cost_approx(b, s)
     else:
         # Walk: forced advances
         n1, n2, n3, runs = _advance_runners_walk(on1b, on2b, on3b)
@@ -663,7 +784,10 @@ def compute_delta_re(
 
     # ── Called strike ──
     if s < 2:
-        strike_gain = _strike_gain_approx(b, s)
+        count_key = f"{b}-{s}"
+        strike_gain = (count_strike_gain[count_key]
+                       if count_strike_gain and count_key in count_strike_gain
+                       else _strike_gain_approx(b, s))
         delta_cs = -strike_gain  # negative = good for pitcher
     else:
         # Strikeout
@@ -674,7 +798,10 @@ def compute_delta_re(
 
     # ── Swinging strike ──
     if s < 2:
-        strike_gain = _strike_gain_approx(b, s)
+        count_key_ss = f"{b}-{s}"
+        strike_gain = (count_strike_gain[count_key_ss]
+                       if count_strike_gain and count_key_ss in count_strike_gain
+                       else _strike_gain_approx(b, s))
         delta_ss = -strike_gain
     else:
         re_after = _get_re(re24, on1b, on2b, on3b, outs + 1)
@@ -684,7 +811,10 @@ def compute_delta_re(
 
     # ── Foul ──
     if s < 2:
-        strike_gain = _strike_gain_approx(b, s)
+        count_key_f = f"{b}-{s}"
+        strike_gain = (count_strike_gain[count_key_f]
+                       if count_strike_gain and count_key_f in count_strike_gain
+                       else _strike_gain_approx(b, s))
         delta_foul = -strike_gain
     else:
         delta_foul = 0.0  # no count change on foul with 2 strikes
@@ -692,49 +822,42 @@ def compute_delta_re(
     delta_re += outcome_probs.p_foul * delta_foul
 
     # ── In play ──
-    # Weighted average across BIP outcomes (out/1B/2B/3B/HR)
+    # Use per-pitch-type BIP profile if available, else fall back to
+    # uniform rates scaled by contact_rv.
     crv = contact_rv.get(pitch_type, 0.12)
     lw = linear_weights
 
-    # BIP outcome distribution from contact_rv:
-    # We derive approximate outcome probabilities from the contact_rv value
-    # using the linear weights as anchors.
-    # Simpler approach: directly compute RE changes for each BIP outcome
-    # and weight by approximate rates.
+    if bip_profile and pitch_type in bip_profile:
+        bp = bip_profile[pitch_type]
+    elif bip_profile and "_league" in bip_profile:
+        bp = bip_profile["_league"]
+    else:
+        bp = _FALLBACK_BIP_PROFILE
 
-    # Approximate BIP outcome rates (league-average, can be refined)
-    p_out_bip = 0.70  # ~70% of BIPs are outs
-    p_single_bip = 0.17
-    p_double_bip = 0.05
-    p_triple_bip = 0.005
-    p_hr_bip = 0.03
-    p_error_bip = 0.025
-    p_sac_bip = 0.02
+    p_out_bip = bp.get("p_out", 0.70)
+    p_single_bip = bp.get("p_single", 0.17)
+    p_double_bip = bp.get("p_double", 0.05)
+    p_triple_bip = bp.get("p_triple", 0.005)
+    p_hr_bip = bp.get("p_hr", 0.03)
+    p_error_bip = bp.get("p_error", 0.025)
+    p_sac_bip = bp.get("p_sac", 0.02)
 
-    # Scale BIP outcome rates so their weighted wOBA ≈ contact_rv
-    # First compute what the default rates imply
+    # Scale hit rates so their weighted wOBA matches the matchup-adjusted
+    # contact_rv (accounts for pitcher EV, hitter quality, etc.)
     default_crv = (p_single_bip * lw.get("Single", 0.47) +
                    p_double_bip * lw.get("Double", 0.78) +
                    p_triple_bip * lw.get("Triple", 1.05) +
                    p_hr_bip * lw.get("HomeRun", 1.40) +
                    p_error_bip * lw.get("Single", 0.47))
-    # Scale hit rates to match actual contact_rv
-    if default_crv > 0:
-        hit_scale = crv / default_crv
-    else:
-        hit_scale = 1.0
-    hit_scale = max(0.3, min(3.0, hit_scale))  # clamp
+    hit_scale = max(0.3, min(3.0, crv / default_crv if default_crv > 0 else 1.0))
 
-    # Adjusted rates
     adj_single = p_single_bip * hit_scale
     adj_double = p_double_bip * hit_scale
     adj_triple = p_triple_bip * hit_scale
     adj_hr = p_hr_bip * hit_scale
     adj_error = p_error_bip * hit_scale
-    adj_out = 1.0 - adj_single - adj_double - adj_triple - adj_hr - adj_error - p_sac_bip
-    adj_out = max(0.3, adj_out)
+    adj_out = max(0.3, 1.0 - adj_single - adj_double - adj_triple - adj_hr - adj_error - p_sac_bip)
 
-    # Renormalize
     total_bip = adj_out + adj_single + adj_double + adj_triple + adj_hr + adj_error + p_sac_bip
     adj_out /= total_bip
     adj_single /= total_bip
@@ -744,9 +867,49 @@ def compute_delta_re(
     adj_error /= total_bip
     adj_sac = p_sac_bip / total_bip
 
-    # Out on BIP
+    # Out on BIP — split into regular out and DP when applicable
     re_out = _get_re(re24, on1b, on2b, on3b, outs + 1)
-    delta_ip = adj_out * (re_out - re_current)
+    # Load pitch-type GB% for DP and tag-up modelling
+    _gb_pct_for_bip = 0.43
+    try:
+        _hcal_path2 = os.path.join(CACHE_DIR, "historical_calibration.json")
+        if os.path.exists(_hcal_path2):
+            with open(_hcal_path2) as _hf2:
+                _hblob2 = json.load(_hf2)
+            _gdp2 = _hblob2.get("calibration", _hblob2).get("gb_dp_rates", {})
+            _pt_gdp2 = _gdp2.get(pitch_type, {})
+            if _pt_gdp2:
+                _gb_pct_for_bip = _pt_gdp2.get("gb_pct", 43.0) / 100.0
+    except Exception:
+        pass
+
+    if on1b and outs < 2:
+        # DP probability: GB% × (DP rate among GBs)
+        dp_rate = 0.06  # ~6% of ground outs become DP
+        try:
+            if os.path.exists(_hcal_path2):
+                _gdp3 = _hblob2.get("calibration", _hblob2).get("gb_dp_rates", {})
+                _pt3 = _gdp3.get(pitch_type, {})
+                if _pt3 and _pt3.get("gb_pct", 0) > 0:
+                    dp_rate = _pt3.get("dp_pct", 2.5) / _pt3["gb_pct"]
+        except Exception:
+            pass
+        p_dp_of_out = _gb_pct_for_bip * dp_rate
+        p_dp_of_out = min(p_dp_of_out, 0.15)  # cap at 15%
+        # DP: +2 outs, R1 cleared, batter at 1B
+        re_dp = _get_re(re24, 1, on2b, on3b, outs + 2)
+        delta_ip = (adj_out * (1.0 - p_dp_of_out)) * (re_out - re_current) + \
+                   (adj_out * p_dp_of_out) * (re_dp - re_current)
+    else:
+        delta_ip = adj_out * (re_out - re_current)
+
+    # Tag-up on fly outs: R3 scores ~40% of the time on air-ball outs
+    if on3b and outs < 2:
+        air_pct = 1.0 - _gb_pct_for_bip
+        tag_up_rate = 0.40 * air_pct  # 40% of air-ball outs score R3
+        re_tag = _get_re(re24, on1b, on2b, 0, outs + 1) + 1.0
+        delta_ip = (delta_ip +
+                    adj_out * tag_up_rate * ((re_tag - re_current) - (re_out - re_current)))
 
     # Sacrifice (out + R3 scores if R3 and < 2 outs)
     if on3b and outs < 2:
@@ -842,13 +1005,16 @@ def _serialize_calibration(cal: RunExpectancyCalibration) -> dict:
             else:
                 outcome_probs_ser[pt][count_key] = probs
 
-    return {
+    result = {
         "re24": cal.re24,
         "re24_n": cal.re24_n,
         "outcome_probs": outcome_probs_ser,
         "contact_rv": cal.contact_rv,
         "count_rv": cal.count_rv,
     }
+    if cal.bip_profiles:
+        result["bip_profiles"] = cal.bip_profiles
+    return result
 
 
 def _deserialize_calibration(blob: dict) -> RunExpectancyCalibration:
@@ -864,6 +1030,7 @@ def _deserialize_calibration(blob: dict) -> RunExpectancyCalibration:
         outcome_probs=outcome_probs,
         contact_rv=blob.get("contact_rv", {}),
         count_rv=blob.get("count_rv", {}),
+        bip_profiles=blob.get("bip_profiles"),
     )
 
 
@@ -874,6 +1041,7 @@ def compute_run_expectancy_calibration(
     re24_matrix = compute_re24_matrix(parquet_path)
     outcome_probs = compute_pitch_outcome_probs(parquet_path)
     contact_rv = compute_contact_rv(parquet_path)
+    bip_profiles = compute_bip_profiles(parquet_path)
 
     # Load count RVs from existing count calibration cache
     count_rv = _load_count_rv()
@@ -884,6 +1052,7 @@ def compute_run_expectancy_calibration(
         outcome_probs=outcome_probs,
         contact_rv=contact_rv,
         count_rv=count_rv,
+        bip_profiles=bip_profiles,
     )
 
 

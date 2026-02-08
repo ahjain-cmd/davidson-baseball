@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -218,9 +219,10 @@ def _count_adjustments(
         delta += 2.0 * chase_n
         reasons.append("0-2: extra chase emphasis")
 
-    # EV >= 90 penalty at 2 strikes: domain knowledge overlay
-    if s == 2 and not np.isnan(ev) and ev >= 90:
-        delta -= 3.0
+    # EV penalty at 2 strikes: continuous ramp from 85 mph (0) to 95 mph (-6.0)
+    if s == 2 and not np.isnan(ev) and ev > 85:
+        ev_penalty = min((ev - 85) / 5.0 * 3.0, 6.0)
+        delta -= ev_penalty
 
     # Hitter 2K whiff: boost the pitch class the hitter actually whiffs on
     if s == 2:
@@ -251,8 +253,8 @@ def _count_adjustments(
             delta += boost
             reasons.append(f"chaser ({h_chase_pct:.0f}%): OS viable behind")
         elif h_chase_pct < 22 and not np.isnan(h_chase_pct):
-            delta += 1.0
-            reasons.append(f"disciplined ({h_chase_pct:.0f}%): partial OS offset")
+            delta -= 1.5
+            reasons.append(f"disciplined ({h_chase_pct:.0f}%): OS penalised")
 
     return delta, reasons
 
@@ -423,11 +425,13 @@ def _sequence_adjustments(
     reasons: List[str] = []
 
     # ── Same-pitch repetition penalty ──
-    # Repeating the exact same pitch is predictable; penalize it heavily.
-    # At RE_SCALE=0.0004 each old point ≈ 0.0004 runs, so -15 → +0.006 ΔRE
-    # penalty — enough to drop most pitches below a different option.
+    # Back-to-back fastballs are common and effective; back-to-back
+    # curveballs are much more predictable.  Pitch-class-dependent.
     if pitch_name == last:
-        delta -= 15.0
+        if pitch_name in _HARD_PITCHES:
+            delta -= 8.0   # hard pitches: mild penalty
+        else:
+            delta -= 15.0  # offspeed/breaking: strong penalty
         reasons.append(f"same pitch repeated ({last}): predictability penalty")
         delta = max(-20.0, min(20.0, delta))
         return float(delta), reasons
@@ -573,6 +577,21 @@ def recommend_pitch_call_re(
     outs = int(state.outs)
     base_out = (on1b, on2b, on3b, outs)
 
+    # Load calibrated ball/strike costs from count_calibration
+    _count_ball_cost = None
+    _count_strike_gain = None
+    try:
+        import json as _json
+        _cc_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".cache", "count_calibration.json")
+        if os.path.exists(_cc_path):
+            with open(_cc_path) as _ccf:
+                _cc = _json.load(_ccf)
+            _ccd = _cc.get("calibration", _cc)
+            _count_ball_cost = _ccd.get("ball_cost")
+            _count_strike_gain = _ccd.get("strike_gain")
+    except Exception:
+        pass
+
     # Linear weights for contact RV computation
     lw = {
         "Out": 0.0, "FieldersChoice": 0.0, "Sacrifice": 0.0,
@@ -597,12 +616,18 @@ def recommend_pitch_call_re(
         if pitch_name in cal.outcome_probs and count_str in cal.outcome_probs[pitch_name]:
             league_probs_obj = cal.outcome_probs[pitch_name][count_str]
         else:
-            # Fallback: try pitch-type average across counts
+            # Fallback: find nearest available count by Manhattan distance
             if pitch_name in cal.outcome_probs:
-                # Average across available counts
-                all_probs = list(cal.outcome_probs[pitch_name].values())
-                if all_probs:
-                    league_probs_obj = all_probs[0]  # use first available
+                avail = cal.outcome_probs[pitch_name]
+                if avail:
+                    def _count_dist(c_str):
+                        try:
+                            cb, cs = int(c_str.split("-")[0]), int(c_str.split("-")[1])
+                            return abs(cb - b) + abs(cs - s)
+                        except (ValueError, IndexError):
+                            return 99
+                    nearest = min(avail.keys(), key=_count_dist)
+                    league_probs_obj = avail[nearest]
 
         if league_probs_obj is None:
             # Ultimate fallback
@@ -664,15 +689,51 @@ def recommend_pitch_call_re(
             re24=cal.re24,
             contact_rv=adjusted_contact_rv,
             linear_weights=lw,
+            count_ball_cost=_count_ball_cost,
+            count_strike_gain=_count_strike_gain,
+            bip_profile=cal.bip_profiles,
         )
 
-        # 4. Sequence/steal/squeeze modifiers (expressed in RE terms)
-        # Scale from old ±5 point range to ~±0.002 runs
-        RE_SCALE = 0.0004  # 1 old point ≈ 0.0004 runs
-
+        # 4. Sequence adjustments — native RE: modify probs then recompute ΔRE
         se_delta_old, se_reasons = _sequence_adjustments(pitch_name, state, tun_df=tun_df, seq_df=seq_df)
-        delta_re_seq = -se_delta_old * RE_SCALE  # positive old delta (good) -> negative ΔRE (good)
 
+        # Apply sequence effects to outcome probabilities and recompute ΔRE
+        if abs(se_delta_old) > 0.5 and state.last_pitch:
+            # Convert old-system delta to probability multiplier:
+            # +8 old delta (max tunnel) → +15% P(ss) boost
+            # -15 repetition penalty → -25% P(ss), +10% P(ball)
+            ss_mult = 1.0 + se_delta_old * 0.02  # ~2% per old point
+            ss_mult = max(0.6, min(1.5, ss_mult))
+            ball_mult = 1.0 - se_delta_old * 0.008  # inverse, smaller
+            ball_mult = max(0.85, min(1.2, ball_mult))
+
+            seq_probs = {
+                "p_ball": adjusted["p_ball"] * ball_mult,
+                "p_called_strike": adjusted["p_called_strike"],
+                "p_swinging_strike": adjusted["p_swinging_strike"] * ss_mult,
+                "p_foul": adjusted["p_foul"],
+                "p_in_play": adjusted["p_in_play"],
+                "p_hbp": adjusted["p_hbp"],
+            }
+            # Renormalize
+            seq_total = sum(seq_probs.values())
+            if seq_total > 0:
+                seq_probs = {k: v / seq_total for k, v in seq_probs.items()}
+
+            seq_adj_probs = PitchOutcomeProbs(**seq_probs)
+            delta_re_with_seq = compute_delta_re(
+                pitch_type=pitch_name, count=count_str,
+                base_out_state=base_out, outcome_probs=seq_adj_probs,
+                re24=cal.re24, contact_rv=adjusted_contact_rv,
+                linear_weights=lw, count_ball_cost=_count_ball_cost,
+                count_strike_gain=_count_strike_gain, bip_profile=cal.bip_profiles,
+            )
+            delta_re_seq = delta_re_with_seq - delta_re_base
+        else:
+            delta_re_seq = 0.0
+
+        # Steal/squeeze: still use RE_SCALE conversion (smaller effects)
+        RE_SCALE = 0.0004
         sb_delta_old, sb_reasons = _steal_adjustments(pitch_name, info, state)
         delta_re_steal = -sb_delta_old * RE_SCALE
 
@@ -690,13 +751,17 @@ def recommend_pitch_call_re(
         if not np.isnan(usage):
             usage_f = float(usage)
 
-            # Reliability multiplier: how much of the base ΔRE benefit to credit.
-            # Sigmoid ramp centred at 12% usage — very-low-usage pitches
-            # (sub-5%) get almost no credit; established pitches (15%+) get
-            # near-full credit.
-            # At 2%:  0.03   At 5%:  0.08   At 10%: 0.33
-            # At 12%: 0.50   At 15%: 0.74   At 20%+: ~1.0
-            reliability = min(1.0, max(0.0, 1.0 / (1.0 + math.exp(-0.35 * (usage_f - 12.0)))))
+            # Reliability multiplier: sigmoid ramp with pitch-class-aware centre.
+            # Fastball/Sinker: centre=15% (unusual to throw few hard pitches)
+            # Slider/Curveball/Changeup: centre=10% (standard secondaries)
+            # Other (Splitter, Sweeper, Cutter, Knuckle Curve): centre=8%
+            if pitch_name in _HARD_PITCHES:
+                sigmoid_centre = 15.0
+            elif pitch_name in {"Slider", "Curveball", "Changeup"}:
+                sigmoid_centre = 10.0
+            else:
+                sigmoid_centre = 8.0
+            reliability = min(1.0, max(0.0, 1.0 / (1.0 + math.exp(-0.35 * (usage_f - sigmoid_centre)))))
 
             if delta_re_base < 0:
                 # Pitch has run-saving value; dampen by reliability

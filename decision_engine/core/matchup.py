@@ -312,6 +312,8 @@ def compute_matchup_adjusted_probs(
     p_chase = pitcher_metrics.get("chase_pct")
     p_n = pitcher_metrics.get("count", pitcher_metrics.get("n_pitches", 0))
 
+    p_ss_original = p_ss  # save for cumulative cap after all adjustments
+
     # Whiff ratio -> adjusts P(swinging_strike)
     whiff_ratio = _shrunk_ratio(p_whiff, p_n, lm["whiff_pct"])
     p_ss = _logistic_adjust(p_ss, whiff_ratio)
@@ -359,12 +361,33 @@ def compute_matchup_adjusted_probs(
         whiff_contact_adj = 1.0 / max(contact_ratio, 0.5)
         p_ss = _logistic_adjust(p_ss, whiff_contact_adj)
 
+    # ── Cap cumulative P(ss) adjustment to max 2.5x original ──
+    # Prevents extreme compounding when pitcher whiff, hitter K%, and
+    # hitter contact% adjustments all push in the same direction.
+    if p_ss_original > 0:
+        max_ss = p_ss_original * 2.5
+        min_ss = p_ss_original * 0.3
+        p_ss = max(min_ss, min(max_ss, p_ss))
+
     # ── Contact RV adjustment (EV-based) ──
     contact_rv_adj = 1.0
+    # Use calibrated D1 median EV as baseline if available
+    _ev_baseline = 85.0
+    try:
+        import os as _os, json as _json2
+        _hc = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), ".cache", "historical_calibration.json")
+        if _os.path.exists(_hc):
+            with open(_hc) as _hf:
+                _mr = _json2.load(_hf).get("calibration", {}).get("metric_ranges", {})
+                _ev_r = _mr.get("ev_against", {})
+                if _ev_r:
+                    _ev_baseline = (_ev_r.get("p50", 85.0) if "p50" in _ev_r
+                                    else (_ev_r.get("p5", 80) + _ev_r.get("p95", 95)) / 2)
+    except Exception:
+        pass
     p_ev = pitcher_metrics.get("ev_against")
     if p_ev is not None and not np.isnan(float(p_ev or 0)):
-        # Higher EV = worse for pitcher
-        ev_ratio = float(p_ev) / 85.0  # 85 mph as baseline EV
+        ev_ratio = float(p_ev) / _ev_baseline
         contact_rv_adj = max(0.7, min(1.5, ev_ratio))
 
     # ── Renormalize ──
