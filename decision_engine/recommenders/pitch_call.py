@@ -682,33 +682,44 @@ def recommend_pitch_call_re(
         sq_delta_old, _ = _squeeze_adjustments(pitch_name, info, state)
         delta_re_squeeze = -sq_delta_old * RE_SCALE
 
-        # 5. Usage adjustment — penalize rarely-used pitches, boost primary pitches
-        # A pitch the pitcher barely throws is less reliable (command, feel, deception).
-        # Express as ΔRE: positive penalty (bad) for low usage, small negative bonus
-        # (good) for high usage.
+        # 5. Usage adjustment — dampen base ΔRE by reliability factor.
+        # League-average outcome probs don't reflect THIS pitcher's execution
+        # of a rarely-thrown pitch.  A 5% usage sinker doesn't perform like
+        # the average sinker — the pitcher lacks feel, command, and deception
+        # on it.  We dampen the *benefit* portion of base ΔRE proportionally.
         usage = info.get("usage", np.nan)
         delta_re_usage = 0.0
         usage_reasons: List[str] = []
         if not np.isnan(usage):
             usage_f = float(usage)
-            if usage_f < 5.0:
-                # Rarely thrown (<5%): substantial penalty — unreliable pitch
-                delta_re_usage = 0.006  # +0.006 RE = -0.6 RS/100
-                usage_reasons.append(f"low usage ({usage_f:.0f}%): reliability penalty")
-            elif usage_f < 10.0:
-                # Secondary pitch (5-10%): moderate penalty
-                delta_re_usage = 0.003  # +0.003 RE = -0.3 RS/100
-                usage_reasons.append(f"low usage ({usage_f:.0f}%): minor penalty")
-            elif usage_f >= 30.0:
-                # Primary pitch (30%+): small bonus — well-practiced, hitter must respect
-                delta_re_usage = -0.002  # -0.002 RE = +0.2 RS/100
+
+            # Reliability multiplier: how much of the base ΔRE benefit to credit.
+            # Ramps linearly from 0.40 at 0% usage to 1.0 at 25%+ usage.
+            # At 5%:  0.52 → only ~half the benefit credited
+            # At 10%: 0.64
+            # At 15%: 0.76
+            # At 25%+: 1.00 (full credit)
+            reliability = min(1.0, 0.40 + 0.024 * usage_f)
+
+            if delta_re_base < 0:
+                # Pitch has run-saving value; dampen by reliability
+                dampened = delta_re_base * reliability
+                delta_re_usage = dampened - delta_re_base  # positive = penalty
+            # else: pitch is run-costing; don't help it — keep full penalty
+
+            # Small bonus for primary pitches (hitter must respect them)
+            if usage_f >= 30.0:
+                delta_re_usage -= 0.002
                 usage_reasons.append(f"primary pitch ({usage_f:.0f}%)")
             elif usage_f >= 20.0:
-                # Solid secondary (20-30%): tiny bonus
-                delta_re_usage = -0.001
+                delta_re_usage -= 0.001
 
-            # Extra penalty for low-usage pitches at 3-ball counts
-            # (high walk cost makes unreliable pitches riskier)
+            if usage_f < 8.0:
+                usage_reasons.append(f"low usage ({usage_f:.0f}%): reliability {reliability:.0%}")
+            elif usage_f < 15.0:
+                usage_reasons.append(f"secondary ({usage_f:.0f}%)")
+
+            # Extra penalty at 3-ball counts — walk cost makes unreliable pitches riskier
             if b == 3 and usage_f < 10.0:
                 extra = 0.004 if usage_f < 5.0 else 0.002
                 delta_re_usage += extra
