@@ -1,6 +1,6 @@
 # Davidson Baseball Audit Report
 
-Generated: 2026-02-03T20:37:50+00:00
+Generated: 2026-02-05T01:43:49+00:00
 Parquet: `/Users/ahanjain/davidson_baseball/all_trackman.parquet`
 DuckDB: `/Users/ahanjain/davidson_baseball/davidson.duckdb`
 

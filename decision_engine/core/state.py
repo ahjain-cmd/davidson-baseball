@@ -39,6 +39,7 @@ class GameState:
     score_our: Optional[int] = None
     score_opp: Optional[int] = None
     runner: RunnerContext = field(default_factory=RunnerContext)
+    last_pitch: Optional[str] = None
 
     def count(self) -> Tuple[int, int]:
         return (int(self.balls), int(self.strikes))

@@ -6,6 +6,29 @@ import numpy as np
 from config import SWING_CALLS, CONTACT_CALLS, is_barrel
 
 
+# ── Lazy-loaded calibrated outcome probs & wOBA weights ─────────────────────
+_OUTCOME_PROBS = None
+_LINEAR_WEIGHTS = None
+
+
+def _get_outcome_probs():
+    global _OUTCOME_PROBS
+    if _OUTCOME_PROBS is None:
+        from analytics.historical_calibration import load_historical_calibration, fallback_outcome_probs
+        cal = load_historical_calibration()
+        _OUTCOME_PROBS = cal.outcome_probs if cal else fallback_outcome_probs()
+    return _OUTCOME_PROBS
+
+
+def _get_woba_weights():
+    global _LINEAR_WEIGHTS
+    if _LINEAR_WEIGHTS is None:
+        from analytics.historical_calibration import load_historical_calibration, fallback_linear_weights
+        cal = load_historical_calibration()
+        _LINEAR_WEIGHTS = cal.linear_weights if cal else fallback_linear_weights()
+    return _LINEAR_WEIGHTS
+
+
 def _create_zone_grid_data(df, metric="swing_rate", batter_side="Right"):
     """Create 5x5 zone grid data for heatmaps.
 
@@ -61,42 +84,55 @@ def _create_zone_grid_data(df, metric="swing_rate", batter_side="Right"):
 def _compute_expected_outcomes(batted_df):
     """Compute expected outcomes based on EV/LA buckets.
 
-    Probabilities calibrated for D1 college baseball (lower HR rates,
-    more singles than MLB).  wOBA weights use 2024 NCAA run-environment
-    scaling (slightly lower than MLB linear weights).
+    Probabilities are calibrated from D1 college Trackman data via
+    ``analytics.historical_calibration``, with fallback to hardcoded values
+    if the parquet is unavailable.
     """
     if batted_df.empty:
         return {}
+
+    probs = _get_outcome_probs()
+    lw = _get_woba_weights()
+
     outcomes = []
     for _, row in batted_df.iterrows():
         ev, la = row.get("ExitSpeed", 0), row.get("Angle", 0)
         if pd.isna(ev) or pd.isna(la):
             continue
-        # Barrel zone — college HR rate ~30% vs MLB ~40%
+        # Classify into bucket
         if is_barrel(ev, la):
-            outcomes.append({"xOut": 0.30, "x1B": 0.10, "x2B": 0.22, "x3B": 0.05, "xHR": 0.33})
-        # High-EV fly ball
+            bucket = "Barrel"
         elif ev >= 95 and 25 <= la <= 45:
-            outcomes.append({"xOut": 0.45, "x1B": 0.05, "x2B": 0.18, "x3B": 0.05, "xHR": 0.27})
-        # Line drive / hard-hit
+            bucket = "HiEV_FB"
         elif 10 <= la <= 25 and ev >= 85:
-            outcomes.append({"xOut": 0.28, "x1B": 0.47, "x2B": 0.20, "x3B": 0.03, "xHR": 0.02})
-        # Ground ball
+            bucket = "Hard_LD"
         elif la < 10:
-            outcomes.append({"xOut": 0.76, "x1B": 0.22, "x2B": 0.02, "x3B": 0.00, "xHR": 0.00})
-        # Pop-up / extreme fly ball
+            bucket = "GB"
         elif la > 45:
-            outcomes.append({"xOut": 0.95, "x1B": 0.03, "x2B": 0.01, "x3B": 0.00, "xHR": 0.01})
-        # Soft contact
+            bucket = "Popup"
         elif ev < 70:
-            outcomes.append({"xOut": 0.90, "x1B": 0.08, "x2B": 0.02, "x3B": 0.00, "xHR": 0.00})
-        # Medium contact catchall
+            bucket = "Soft"
         else:
-            outcomes.append({"xOut": 0.68, "x1B": 0.22, "x2B": 0.07, "x3B": 0.01, "xHR": 0.02})
+            bucket = "Medium"
+
+        d = probs.get(bucket)
+        if d is None:
+            continue
+        outcomes.append({
+            "xOut": d["xOut"],
+            "x1B": d["x1B"],
+            "x2B": d["x2B"],
+            "x3B": d["x3B"],
+            "xHR": d["xHR"],
+        })
+
     if not outcomes:
         return {}
     odf = pd.DataFrame(outcomes)
-    # NCAA-adjusted wOBA weights (lower run environment than MLB)
-    odf["xwOBAcon"] = (0.0 * odf["xOut"] + 0.88 * odf["x1B"] + 1.24 * odf["x2B"]
-                       + 1.56 * odf["x3B"] + 2.0 * odf["xHR"])
+    # Calibrated wOBA weights from D1 run environment
+    odf["xwOBAcon"] = (lw["out_w"] * odf["xOut"]
+                       + lw["single_w"] * odf["x1B"]
+                       + lw["double_w"] * odf["x2B"]
+                       + lw["triple_w"] * odf["x3B"]
+                       + lw["hr_w"] * odf["xHR"])
     return odf.mean().to_dict()

@@ -75,6 +75,77 @@ POSITION = {
     "Suarez, Jake": "C", "Ban, Jason": "LHP", "Katz, Adam": "Util",
 }
 
+# ── Bryant 2026 Roster ────────────────────────
+BRYANT_TEAM_NAME = "Bryant University"
+BRYANT_COMBINED_TEAM_ID = "BRYANT_COMBINED_2026"
+
+# Transfers: "Last, First" -> previous school search name.
+# Players NOT in this dict are assumed to have been at Bryant for 2024-2025.
+BRYANT_TRANSFERS = {
+    "Wensley, Casey": "Wheaton College (Massachusetts)",
+    "Greger, Gavin": "University of Connecticut",
+    "Story, Hudson": "LA Mission",  # community college — not in TrueMedia
+    "Galusha, Thomas": "University of Connecticut",
+    "Irizarry, Carlos": "Penn State Harrisburg",
+    "Scudder, Dylan": "Eastern Connecticut",
+    "Garcia, Ellis": "West Virginia",
+    "Dressler, Justin": "Pace",
+    "Vining, Aidan": "Johnson and Wales",
+    "Durand, Brandyn": "Chipola",
+    "Salsberg, Zev": "Ohio State",
+    "Flaherty, Tommy": "Clark University",
+    "Schiff, Cole": "UNC Asheville",
+    "White, Landon": "Ithaca",
+}
+BRYANT_ROSTER_2026 = {
+    "Vazquez, Alejandro", "Kingsbury, Hunter", "Prince, Dylan", "Zyons, Zac",
+    "Belcher, Michael", "Wensley, Casey", "Greger, Gavin", "Ferrell, Vince",
+    "Papetti, Cam", "Fiatarone, Mike", "Carter, Ian", "Hilburger, Kaden",
+    "Story, Hudson", "Hackett, Justin", "Gaudreau, Jacob", "Davis, Ty",
+    "Gorman, Greg", "Galusha, Thomas", "Saul, Charlie", "Irizarry, Carlos",
+    "Scudder, Dylan", "Garcia, Ellis", "Dressler, Justin", "Hurley, Will",
+    "Burkholz, Max", "Vining, Aidan", "Durand, Brandyn", "Soroko, Cameron",
+    "Birchard, Owen", "Malloy, Tommy", "Davis, Zach", "Vanesko, Jackson",
+    "Perez, Yamil", "Zaslaw, Sean", "Lewis, Bradley", "Salsberg, Zev",
+    "Flaherty, Tommy", "Schiff, Cole", "White, Landon", "Mulholland, Billy",
+    "Maher, Thomas", "Dobis, Jameson", "Clifford, Sean",
+}
+
+BRYANT_JERSEY = {
+    "Vazquez, Alejandro": 1, "Kingsbury, Hunter": 2, "Prince, Dylan": 3,
+    "Zyons, Zac": 4, "Belcher, Michael": 5, "Wensley, Casey": 6,
+    "Greger, Gavin": 7, "Ferrell, Vince": 9, "Papetti, Cam": 10,
+    "Fiatarone, Mike": 11, "Carter, Ian": 12, "Hilburger, Kaden": 13,
+    "Story, Hudson": 14, "Hackett, Justin": 15, "Gaudreau, Jacob": 16,
+    "Davis, Ty": 17, "Gorman, Greg": 18, "Galusha, Thomas": 19,
+    "Saul, Charlie": 20, "Irizarry, Carlos": 21, "Scudder, Dylan": 22,
+    "Garcia, Ellis": 23, "Dressler, Justin": 24, "Hurley, Will": 25,
+    "Burkholz, Max": 26, "Vining, Aidan": 27, "Durand, Brandyn": 28,
+    "Soroko, Cameron": 29, "Birchard, Owen": 30, "Malloy, Tommy": 31,
+    "Davis, Zach": 32, "Vanesko, Jackson": 33, "Perez, Yamil": 34,
+    "Zaslaw, Sean": 35, "Lewis, Bradley": 36, "Salsberg, Zev": 37,
+    "Flaherty, Tommy": 39, "Schiff, Cole": 40, "White, Landon": 41,
+    "Mulholland, Billy": 42, "Maher, Thomas": 43, "Dobis, Jameson": 50,
+}
+
+BRYANT_POSITION = {
+    "Vazquez, Alejandro": "NF", "Kingsbury, Hunter": "OF", "Prince, Dylan": "INF",
+    "Zyons, Zac": "INF", "Belcher, Michael": "RHP", "Wensley, Casey": "INF",
+    "Greger, Gavin": "OF", "Ferrell, Vince": "OF", "Papetti, Cam": "C/INF",
+    "Fiatarone, Mike": "INF", "Carter, Ian": "RHP", "Hilburger, Kaden": "OF/RHP",
+    "Story, Hudson": "INF", "Hackett, Justin": "INF", "Gaudreau, Jacob": "C",
+    "Davis, Ty": "RHP", "Gorman, Greg": "OF", "Galusha, Thomas": "RHP",
+    "Saul, Charlie": "OF", "Irizarry, Carlos": "INF", "Scudder, Dylan": "RHP",
+    "Garcia, Ellis": "INF", "Dressler, Justin": "RHP", "Hurley, Will": "RHP",
+    "Burkholz, Max": "OF", "Vining, Aidan": "LHP", "Durand, Brandyn": "C",
+    "Soroko, Cameron": "INF/OF", "Birchard, Owen": "RHP", "Malloy, Tommy": "C",
+    "Davis, Zach": "RHP", "Vanesko, Jackson": "LHP", "Perez, Yamil": "C",
+    "Zaslaw, Sean": "RHP", "Lewis, Bradley": "LHP", "Salsberg, Zev": "RHP",
+    "Flaherty, Tommy": "RHP", "Schiff, Cole": "LHP", "White, Landon": "RHP",
+    "Mulholland, Billy": "RHP/C", "Maher, Thomas": "LHP", "Dobis, Jameson": "RHP",
+    "Clifford, Sean": "RHP",
+}
+
 NAME_MAP = {
     "Laughlin, Theo": "Loughlin, Theo",
     "Laughlin , Theo": "Loughlin, Theo",

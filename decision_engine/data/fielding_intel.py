@@ -112,8 +112,26 @@ def _position_avg_range() -> Dict[str, float]:
     return sub.groupby("pos")["_range_proxy"].mean().to_dict()
 
 
+def _get_fielding_benchmarks():
+    """Lazy-load D1 fielding benchmarks from historical calibration."""
+    try:
+        from analytics.historical_calibration import load_historical_calibration, fallback_fielding_benchmarks
+        cal = load_historical_calibration()
+        return cal.fielding_benchmarks if cal else fallback_fielding_benchmarks()
+    except Exception:
+        return {"fld_pct_median": 0.9727, "fld_pct_p75": 0.980, "fld_pct_p90": 0.990,
+                "error_rate_median": 0.0273, "n_bip": 0}
+
+
 def _fielder_quality(row: Dict[str, Any], position_avg_range: Dict[str, float]) -> int:
-    """Rate a fielder 1-5 based on FLD%, error rate, and a simple range proxy."""
+    """Rate a fielder 1-5 based on FLD%, error rate, and a simple range proxy.
+
+    Thresholds are calibrated from D1 fielding data (P90 for elite, P75 for good).
+    """
+    bench = _get_fielding_benchmarks()
+    elite_fld = bench.get("fld_pct_p90", 0.990)
+    good_fld = bench.get("fld_pct_p75", 0.980)
+
     fld = row.get("FLD%")
     try:
         fld_pct = float(fld) if fld is not None and pd.notna(fld) else np.nan
@@ -140,11 +158,11 @@ def _fielder_quality(row: Dict[str, Any], position_avg_range: Dict[str, float]) 
 
     score = 0
     if pd.notna(fld_pct):
-        if fld_pct >= 0.985:
+        if fld_pct >= elite_fld:
             score += 2
-        elif fld_pct >= 0.970:
+        elif fld_pct >= good_fld:
             score += 1
-    if error_rate <= 0.02:
+    if error_rate <= bench.get("error_rate_median", 0.02):
         score += 1
     pos = str(row.get("pos", "")).strip()
     base = position_avg_range.get(pos)
@@ -204,13 +222,15 @@ def team_defense_profile(team_name: str) -> Dict[str, pd.DataFrame]:
                 continue
             row = g.sort_values("Inn", ascending=False).iloc[0].to_dict()
             row["quality"] = _fielder_quality(row, pos_avg)
-            # Basic attackability flag.
+            # Basic attackability flag — threshold from D1 fielding median.
             fld_pct = row.get("FLD%")
             try:
                 fld_pct = float(fld_pct) if fld_pct is not None and pd.notna(fld_pct) else np.nan
             except Exception:
                 fld_pct = np.nan
-            if pd.notna(fld_pct) and fld_pct < 0.965:
+            fld_bench = _get_fielding_benchmarks()
+            attackable_threshold = fld_bench.get("fld_pct_median", 0.9727)
+            if pd.notna(fld_pct) and fld_pct < attackable_threshold:
                 row["note"] = "attackable (low FLD%)"
             else:
                 row["note"] = ""

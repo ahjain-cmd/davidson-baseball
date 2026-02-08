@@ -114,7 +114,7 @@ class RunnerContext:
 
     # Our control
     catcher_pop_time: float = 2.03  # D1 average as default
-    pitcher_sb_pct: float = 75.0    # D1 average as default
+    pitcher_sb_pct: float = 76.2    # D1 average from historical calibration
     pitcher_pk_rate: float = 0.0    # pickoff attempts per runner on base
 
     def steal_context(self, *, on_1b: bool, on_2b: bool) -> Dict[str, Any]:

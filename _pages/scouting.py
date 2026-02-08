@@ -44,6 +44,11 @@ from viz.percentiles import savant_color, render_savant_percentile_section
 from analytics.stuff_plus import _compute_stuff_plus, _compute_stuff_plus_all
 from analytics.tunnel import _compute_tunnel_score, _build_tunnel_population
 from analytics.command_plus import _compute_command_plus, _compute_pitch_pair_results
+from analytics.zone_vulnerability import (
+    compute_zone_swing_metrics as _zv_compute_zone_swing_metrics,
+    analyze_zone_patterns as _zv_analyze_zone_patterns,
+    swing_path_vulnerability as _zv_swing_path_vulnerability,
+)
 
 
 def _fmt_bats(bats):
@@ -371,6 +376,14 @@ def _get_opp_hitter_profile(tm, hitter, team, pitch_df=None):
             v = _safe_num(pt, tm_col)
             if not pd.isna(v) and v > 0 and str(trackman_name).strip().upper() not in bad_pitch_labels:
                 profile["pitch_type_pcts"][trackman_name] = v
+
+    # Zone vulnerability summary (when pitch-level data is available)
+    if pitch_df is not None and not pitch_df.empty:
+        from analytics.zone_vulnerability import compute_zone_vulnerability_summary
+        hitter_pitches = pitch_df[pitch_df["Batter"].astype(str).str.strip() == str(hitter).strip()] if "Batter" in pitch_df.columns else pd.DataFrame()
+        if len(hitter_pitches) >= 50:
+            profile["zone_vuln"] = compute_zone_vulnerability_summary(hitter_pitches, bats)
+
     return profile
 
 
@@ -437,6 +450,27 @@ def _get_our_pitcher_arsenal(data, pitcher_name, season_filter=None, tunnel_pop=
                     "csw_pct": len(zdf[zdf["PitchCall"].isin(["StrikeCalled", "StrikeSwinging"])]) / len(zdf) * 100,
                     "ev_against": z_ip["ExitSpeed"].mean() if len(z_ip) > 0 else np.nan,
                 }
+        # Per-pitch 3×3 zone effectiveness (finer grid matching hitter analysis)
+        zone_eff_3x3 = {}
+        x_edges = np.array([-1.5, -0.5, 0.5, 1.5])
+        y_edges = np.array([0.5, 2.0, 3.0, 4.5])
+        loc_grp3 = loc_grp.copy()
+        loc_grp3["xbin"] = np.clip(np.digitize(loc_grp3["PlateLocSide"], x_edges) - 1, 0, 2)
+        loc_grp3["ybin"] = np.clip(np.digitize(loc_grp3["PlateLocHeight"], y_edges) - 1, 0, 2)
+        for yb in range(3):
+            for xb in range(3):
+                zdf = loc_grp3[(loc_grp3["xbin"] == xb) & (loc_grp3["ybin"] == yb)]
+                if len(zdf) >= 5:
+                    z_sw = zdf[zdf["PitchCall"].isin(SWING_CALLS)]
+                    z_wh = zdf[zdf["PitchCall"] == "StrikeSwinging"]
+                    z_csw = zdf[zdf["PitchCall"].isin(["StrikeCalled", "StrikeSwinging"])]
+                    z_ip = zdf[zdf["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
+                    zone_eff_3x3[(xb, yb)] = {
+                        "n": len(zdf),
+                        "whiff_pct": len(z_wh) / max(len(z_sw), 1) * 100 if len(z_sw) > 0 else np.nan,
+                        "csw_pct": len(z_csw) / len(zdf) * 100,
+                        "ev_against": z_ip["ExitSpeed"].mean() if len(z_ip) > 0 else np.nan,
+                    }
         # Compute effective velocity estimate
         eff_velo = np.nan
         if loc_grp["RelSpeed"].notna().any() and len(loc_grp) >= 5:
@@ -472,6 +506,7 @@ def _get_our_pitcher_arsenal(data, pitcher_name, season_filter=None, tunnel_pop=
             "eff_velo": eff_velo,
             "extension": ext_val,
             "zone_eff": zone_eff,
+            "zone_eff_3x3": zone_eff_3x3,
         }
     # Tunnel scores and pitch pair sequencing results
     tunnels = _compute_tunnel_score(pdf, tunnel_pop=tunnel_pop)
@@ -1338,10 +1373,10 @@ def _pitch_score_composite(pt_name, pt_data, hd, tun_df, platoon_label="Neutral"
     if not pd.isna(csw):
         components.append(min(csw / 40 * 100, 100)); weights.append(7)
 
-    # 4. Their 2K Whiff Rate (13%) — matched to pitch class (hard/offspeed) + our hand
+    # 4. Their 2K Whiff Rate (8%) — matched to pitch class (hard/offspeed) + our hand
     their_2k = hd.get("whiff_2k_hard" if is_hard else "whiff_2k_os", np.nan)
     if not pd.isna(their_2k):
-        components.append(min(their_2k / 40 * 100, 100)); weights.append(13)
+        components.append(min(their_2k / 40 * 100, 100)); weights.append(8)
 
     # 5. Chase Exploitation (8%) — our chase generation × their chase tendency
     our_chase = pt_data.get("our_chase", pt_data.get("chase_pct", np.nan))
@@ -1366,12 +1401,10 @@ def _pitch_score_composite(pt_name, pt_data, hd, tun_df, platoon_label="Neutral"
     if not pd.isna(ev_ag):
         components.append(min(max((96 - ev_ag) / 18 * 100, 0), 100)); weights.append(5)
 
-    # 9. K-Prone Factor (4%) — high K hitters are exploitable
+    # 9. K-Prone Factor (4%) — high K hitters are exploitable (equal for all pitches)
     k_pct = hd.get("k_pct", np.nan)
     if not pd.isna(k_pct):
         k_score = min(max((k_pct - 10) / 25 * 100, 0), 100)
-        if not is_hard:
-            k_score = min(k_score * 1.25, 100)
         components.append(k_score); weights.append(4)
 
     # 10. Platoon Factor (4%)
@@ -1461,6 +1494,39 @@ def _pitch_score_composite(pt_name, pt_data, hd, tun_df, platoon_label="Neutral"
     if not pd.isna(ext):
         # 5.0 ft → 0, 6.0 → 50, 7.0+ → 100
         components.append(min(max((ext - 5.0) / 2.0 * 100, 0), 100)); weights.append(2)
+
+    # 23. Command+ (8%) — high command = more accurate; especially valuable for hard pitches
+    #     that need precise location to avoid getting hit hard
+    cmd_plus = ars_pt.get("command_plus", np.nan)
+    if not pd.isna(cmd_plus):
+        # 70 → 0, 100 → 50, 130+ → 100
+        cmd_score = min(max((cmd_plus - 70) / 60 * 100, 0), 100)
+        if is_hard:
+            cmd_score = min(cmd_score * 1.2, 100)
+        components.append(cmd_score); weights.append(8)
+
+    # 24. Swing Hole Match (4%) — pitch type matched to hitter's zone vulnerability
+    zone_vuln = hd.get("zone_vuln", {}) if hd else {}
+    if zone_vuln.get("available"):
+        _zvmap = {
+            "Fastball": "vuln_up",
+            "Sinker": "vuln_down",
+            "Slider": lambda zv: np.nanmean([zv.get("vuln_down", np.nan), zv.get("vuln_away", np.nan)]),
+            "Curveball": "vuln_chase_low",
+            "Changeup": "vuln_down",
+            "Sweeper": lambda zv: np.nanmean([zv.get("vuln_away", np.nan), zv.get("vuln_chase_away", np.nan)]),
+            "Cutter": lambda zv: np.nanmean([zv.get("vuln_away", np.nan), zv.get("vuln_inside", np.nan)]),
+            "Splitter": "vuln_chase_low",
+            "Knuckle Curve": "vuln_chase_low",
+        }
+        zv_lookup = _zvmap.get(pt_name)
+        zv_score = np.nan
+        if callable(zv_lookup):
+            zv_score = zv_lookup(zone_vuln)
+        elif isinstance(zv_lookup, str):
+            zv_score = zone_vuln.get(zv_lookup, np.nan)
+        if not pd.isna(zv_score):
+            components.append(min(max(zv_score, 0), 100)); weights.append(4)
 
     # 17. Zone Exploitation (5%) — cross our best zone with their zone weakness
     #     Formula: csw*0.6 + whiff*0.4, pitch-design multipliers (PZM),
@@ -3540,12 +3606,25 @@ def page_scouting(data):
         st.info("No opponent teams found.")
         return
 
-    team = st.selectbox("Opponent", all_team_names, key="sc_team_api")
-    team_id = team_lookup[team]
+    # Inject Bryant combined as a top option
+    _BRYANT_LABEL = "Bryant (2024-25 Combined)"
+    all_team_names_with_bryant = [_BRYANT_LABEL] + all_team_names
 
-    # ── Fetch team data via API ──
-    with st.spinner(f"Loading {team} scouting data..."):
-        tm = build_tm_dict_for_team(team_id, team, season_year)
+    team = st.selectbox("Opponent", all_team_names_with_bryant, key="sc_team_api")
+
+    if team == _BRYANT_LABEL:
+        from config import BRYANT_COMBINED_TEAM_ID
+        from data.bryant_combined import load_bryant_combined_pack
+        team_id = BRYANT_COMBINED_TEAM_ID
+        tm = load_bryant_combined_pack()
+        if tm is None:
+            st.warning("Bryant combined pack not built yet. Go to **Bryant Scouting** page first to build it.")
+            return
+    else:
+        team_id = team_lookup[team]
+        # ── Fetch team data via API ──
+        with st.spinner(f"Loading {team} scouting data..."):
+            tm = build_tm_dict_for_team(team_id, team, season_year)
 
     # ── v2: Local baserunning + defense intel (from CSV exports) ──
     with st.expander("Baserunning & Defense Intel (v2)", expanded=False):
@@ -5860,270 +5939,10 @@ def _swing_hole_finder(b_tm, hitter_name, bats=None, bats_norm=None, sp=None, is
         section_header("Swing Hole Finder")
     st.caption(f"Zone-level performance from {len(b_tm)} pitches")
 
-    def _compute_zone_swing_metrics(df, bats):
-        """Compute data-driven swing efficiency metrics by zone.
-
-        Returns a 3x3 dict grid with metrics for each zone:
-        - la_mean: mean launch angle on contact
-        - la_std: launch angle standard deviation (consistency)
-        - ev_mean: mean exit velo
-        - hard_hit_pct: % of contact >= 95 mph
-        - barrel_pct: barrel rate
-        """
-        d = df.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
-        if d.empty:
-            return None
-
-        x_edges = np.array([-1.5, -0.5, 0.5, 1.5])
-        y_edges = np.array([0.5, 2.0, 3.0, 4.5])
-        d["xbin"] = np.clip(np.digitize(d["PlateLocSide"], x_edges) - 1, 0, 2)
-        d["ybin"] = np.clip(np.digitize(d["PlateLocHeight"], y_edges) - 1, 0, 2)
-
-        # Optimal LA by height - matching pitch plane
-        optimal_la = {0: 8.0, 1: 14.0, 2: 20.0}  # by y_bin
-
-        metrics = {}
-        for yb in range(3):
-            for xb in range(3):
-                zdf = d[(d["xbin"] == xb) & (d["ybin"] == yb)]
-                ip = zdf[zdf["PitchCall"] == "InPlay"].copy() if "PitchCall" in zdf.columns else pd.DataFrame()
-
-                m = {"n_pitches": len(zdf), "n_contact": len(ip)}
-
-                if len(ip) >= 3 and "Angle" in ip.columns:
-                    la_vals = pd.to_numeric(ip["Angle"], errors="coerce").dropna()
-                    if len(la_vals) >= 3:
-                        m["la_mean"] = la_vals.mean()
-                        m["la_std"] = la_vals.std()
-                        m["optimal_la_delta"] = abs(la_vals.mean() - optimal_la[yb])
-
-                if len(ip) >= 3 and "ExitSpeed" in ip.columns:
-                    ev_vals = pd.to_numeric(ip["ExitSpeed"], errors="coerce").dropna()
-                    if len(ev_vals) >= 3:
-                        m["ev_mean"] = ev_vals.mean()
-                        m["hard_hit_pct"] = (ev_vals >= 95).mean() * 100
-
-                if len(ip) >= 3 and {"ExitSpeed", "Angle"}.issubset(ip.columns):
-                    ip_ba = ip.dropna(subset=["ExitSpeed", "Angle"])
-                    if len(ip_ba) >= 3:
-                        m["barrel_pct"] = is_barrel_mask(ip_ba).mean() * 100
-
-                metrics[(xb, yb)] = m
-
-        return metrics
-
-    def _analyze_zone_patterns(zone_metrics, df, bats):
-        """Analyze horizontal (inside/outside) and vertical (up/down) swing patterns.
-
-        Returns dict with:
-        - inside_hh_pct, middle_hh_pct, away_hh_pct: hard hit % by horizontal zone
-        - inside_barrel_pct, away_barrel_pct: barrel % by horizontal zone
-        - horizontal_pattern: "crushes inside", "crushes away", "struggles inside", "struggles away", "balanced"
-        - vertical_pattern: similar for up/down
-        """
-        if zone_metrics is None:
-            return {}
-
-        # Aggregate by horizontal (x_bin): 0=inside, 1=middle, 2=away
-        inside_hh, middle_hh, away_hh = [], [], []
-        inside_barrel, middle_barrel, away_barrel = [], [], []
-
-        for (xb, yb), m in zone_metrics.items():
-            xb_rel = _rel_xbin(xb, bats)
-            hh = m.get("hard_hit_pct")
-            barrel = m.get("barrel_pct")
-            if hh is not None and not pd.isna(hh) and m.get("n_contact", 0) >= 3:
-                if xb_rel == 0:
-                    inside_hh.append(hh)
-                elif xb_rel == 1:
-                    middle_hh.append(hh)
-                else:
-                    away_hh.append(hh)
-            if barrel is not None and not pd.isna(barrel) and m.get("n_contact", 0) >= 3:
-                if xb_rel == 0:
-                    inside_barrel.append(barrel)
-                elif xb_rel == 1:
-                    middle_barrel.append(barrel)
-                else:
-                    away_barrel.append(barrel)
-
-        result = {}
-
-        # Compute averages
-        in_hh_avg = np.mean(inside_hh) if inside_hh else np.nan
-        mid_hh_avg = np.mean(middle_hh) if middle_hh else np.nan
-        away_hh_avg = np.mean(away_hh) if away_hh else np.nan
-        in_barrel_avg = np.mean(inside_barrel) if inside_barrel else np.nan
-        away_barrel_avg = np.mean(away_barrel) if away_barrel else np.nan
-
-        result["inside_hh_pct"] = in_hh_avg
-        result["middle_hh_pct"] = mid_hh_avg
-        result["away_hh_pct"] = away_hh_avg
-        result["inside_barrel_pct"] = in_barrel_avg
-        result["away_barrel_pct"] = away_barrel_avg
-
-        # Determine horizontal pattern
-        h_pattern = "balanced"
-        if not pd.isna(in_hh_avg) and not pd.isna(away_hh_avg):
-            diff = in_hh_avg - away_hh_avg
-            if diff > 12:
-                h_pattern = "crushes inside, struggles away"
-            elif diff > 6:
-                h_pattern = "prefers inside"
-            elif diff < -12:
-                h_pattern = "crushes away, struggles inside"
-            elif diff < -6:
-                h_pattern = "prefers away"
-
-        # Also check barrel rate difference
-        if not pd.isna(in_barrel_avg) and not pd.isna(away_barrel_avg):
-            barrel_diff = in_barrel_avg - away_barrel_avg
-            if barrel_diff > 8 and "away" not in h_pattern:
-                h_pattern = "barrels inside, not away"
-            elif barrel_diff < -8 and "inside" not in h_pattern:
-                h_pattern = "barrels away, not inside"
-
-        result["horizontal_pattern"] = h_pattern
-
-        # Aggregate by vertical (y_bin): 0=down, 1=mid, 2=up
-        down_hh, mid_hh_v, up_hh = [], [], []
-        for (xb, yb), m in zone_metrics.items():
-            hh = m.get("hard_hit_pct")
-            if hh is not None and not pd.isna(hh) and m.get("n_contact", 0) >= 3:
-                if yb == 0:
-                    down_hh.append(hh)
-                elif yb == 1:
-                    mid_hh_v.append(hh)
-                else:
-                    up_hh.append(hh)
-
-        down_hh_avg = np.mean(down_hh) if down_hh else np.nan
-        up_hh_avg = np.mean(up_hh) if up_hh else np.nan
-        result["down_hh_pct"] = down_hh_avg
-        result["up_hh_pct"] = up_hh_avg
-
-        v_pattern = "balanced"
-        if not pd.isna(down_hh_avg) and not pd.isna(up_hh_avg):
-            v_diff = up_hh_avg - down_hh_avg
-            if v_diff > 12:
-                v_pattern = "crushes up, struggles down"
-            elif v_diff > 6:
-                v_pattern = "prefers up"
-            elif v_diff < -12:
-                v_pattern = "crushes down, struggles up"
-            elif v_diff < -6:
-                v_pattern = "prefers down"
-
-        result["vertical_pattern"] = v_pattern
-
-        return result
-
-    def _swing_path_vulnerability(zone_metrics, sp, x_bin, y_bin, bats=None):
-        """Calculate swing path vulnerability score for a zone (0-100).
-
-        DATA-DRIVEN approach combining:
-        1. LA consistency (high std = struggling to match plane)
-        2. Optimal LA deviation (far from zone-ideal = poor adjustment)
-        3. Hard hit rate (low = vulnerable)
-        4. Barrel rate (low = vulnerable)
-        5. Theoretical swing geometry as fallback
-
-        Higher score = MORE vulnerable (attack here).
-        """
-        if zone_metrics is None:
-            return np.nan
-
-        zm = zone_metrics.get((x_bin, y_bin), {})
-        if zm.get("n_contact", 0) < 3:
-            return np.nan
-
-        scores = []
-        weights = []
-
-        # 1. LA consistency (high variance = inconsistent swing plane)
-        la_std = zm.get("la_std")
-        if la_std is not None and not pd.isna(la_std):
-            # std of 8-12° is normal, >18° is very inconsistent
-            consistency_vuln = np.clip((la_std - 8) / 12, 0, 1) * 100
-            scores.append(consistency_vuln)
-            weights.append(0.20)
-
-        # 2. Optimal LA deviation (far from ideal = poor plane matching)
-        la_delta = zm.get("optimal_la_delta")
-        if la_delta is not None and not pd.isna(la_delta):
-            # Delta of 0-5° is good, >15° is poor
-            plane_vuln = np.clip(la_delta / 18, 0, 1) * 100
-            scores.append(plane_vuln)
-            weights.append(0.25)
-
-        # 3. Hard hit rate (low = vulnerable)
-        hh_pct = zm.get("hard_hit_pct")
-        if hh_pct is not None and not pd.isna(hh_pct):
-            # Invert: low hard hit = high vulnerability (typical 25-45%)
-            hh_vuln = np.clip((45 - hh_pct) / 35, 0, 1) * 100
-            scores.append(hh_vuln)
-            weights.append(0.30)
-
-        # 4. Barrel rate (low = vulnerable)
-        barrel_pct = zm.get("barrel_pct")
-        if barrel_pct is not None and not pd.isna(barrel_pct):
-            # Typical range 5-18%
-            barrel_vuln = np.clip((12 - barrel_pct) / 12, 0, 1) * 100
-            scores.append(barrel_vuln)
-            weights.append(0.25)
-
-        # 5. Use theoretical swing path as supplement/fallback
-        if sp:
-            attack_angle = sp.get("attack_angle")
-            path_adjust = sp.get("path_adjust", 0.0)
-            contact_depth = sp.get("contact_depth")
-
-            # Only add theoretical if we have swing path data
-            if attack_angle is not None and not pd.isna(attack_angle):
-                # Key insight: path_adjust tells us how well hitter adjusts LA to height
-                # High |path_adjust| (>2°/ft) = hitter CAN adjust to different heights
-                # Low |path_adjust| (<1°/ft) = hitter has fixed swing plane
-
-                can_adjust = abs(path_adjust) > 1.5 if path_adjust is not None else False
-
-                if can_adjust:
-                    # Hitter adjusts well - less vulnerable at vertical extremes
-                    v_vuln = 50  # neutral
-                else:
-                    # Fixed swing plane - theoretical vulnerability applies
-                    if attack_angle >= 12:
-                        # Steep uppercut - vulnerable DOWN (swings under)
-                        v_vuln = [85, 50, 25][y_bin]
-                    elif attack_angle >= 6:
-                        # Positive plane - slight vulnerability down
-                        v_vuln = [65, 50, 40][y_bin]
-                    elif attack_angle >= -2:
-                        # Level - neutral
-                        v_vuln = [50, 50, 50][y_bin]
-                    else:
-                        # Negative/chop - vulnerable UP (pops up)
-                        v_vuln = [25, 50, 85][y_bin]
-
-                scores.append(v_vuln)
-                weights.append(0.15 if len(scores) > 2 else 0.30)
-
-            # Horizontal from contact depth
-            if contact_depth is not None and not pd.isna(contact_depth):
-                x_rel = _rel_xbin(x_bin, bats)
-                if contact_depth > 2.0:
-                    h_vuln = [25, 50, 80][x_rel]  # out-front = vulnerable away
-                elif contact_depth < -2.0:
-                    h_vuln = [80, 50, 25][x_rel]  # deep = vulnerable inside
-                else:
-                    h_vuln = 50  # neutral
-                scores.append(h_vuln)
-                weights.append(0.10 if len(scores) > 3 else 0.20)
-
-        if not scores:
-            return np.nan
-
-        total_weight = sum(weights)
-        return sum(s * w for s, w in zip(scores, weights)) / total_weight if total_weight > 0 else np.nan
+    # Delegate to analytics.zone_vulnerability module
+    _compute_zone_swing_metrics = _zv_compute_zone_swing_metrics
+    _analyze_zone_patterns = lambda zm, df, bats: _zv_analyze_zone_patterns(zm, bats)
+    _swing_path_vulnerability = _zv_swing_path_vulnerability
 
     def _zone_label(x_bin, y_bin, bats):
         bats_label = _fmt_bats(bats)
