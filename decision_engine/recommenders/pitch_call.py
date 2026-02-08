@@ -827,7 +827,15 @@ def recommend_pitch_call_re(
                 sigmoid_centre = 10.0
             else:
                 sigmoid_centre = 8.0
-            reliability = min(1.0, max(0.0, 1.0 / (1.0 + math.exp(-0.35 * (usage_f - sigmoid_centre)))))
+            reliability_usage = min(1.0, max(0.0, 1.0 / (1.0 + math.exp(-0.35 * (usage_f - sigmoid_centre)))))
+
+            # Sample-size reliability: if the pitcher has enough raw
+            # observations, trust the metrics even at low usage%.
+            # n_prior=150 → a 195-pitch changeup gets ~0.565 reliability.
+            n_pitches = int(info.get("count", 0) or 0)
+            reliability_sample = n_pitches / (n_pitches + 150) if n_pitches > 0 else 0.0
+
+            reliability = max(reliability_usage, reliability_sample)
 
             if delta_re_base < 0:
                 # Pitch has run-saving value; dampen by reliability

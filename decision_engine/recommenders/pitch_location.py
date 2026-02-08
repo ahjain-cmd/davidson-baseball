@@ -9,6 +9,60 @@ from decision_engine.core.state import GameState
 
 
 _HARD_PITCHES = {"Fastball", "Sinker", "Cutter"}
+_OFFSPEED_PITCHES = {"Slider", "Curveball", "Changeup", "Splitter", "Sweeper", "Knuckle Curve"}
+
+# ── Pitch-design zone multipliers ────────────────────────────────────────────
+# (xb, yb) -> multiplier per pitch class.  Values > 1.0 = zone is natural for
+# this pitch design; < 1.0 = zone fights the pitch's movement profile.
+# Applied to pitcher_eff before combining with hitter_vuln so that each pitch
+# retains its natural location tendency even when hitter data is present.
+_PITCH_DESIGN_ZONE_MULT = {
+    "Fastball": {
+        (0, 2): 1.3, (1, 2): 1.3, (2, 2): 1.3,   # up = ride / miss barrels
+        (0, 1): 1.0, (1, 1): 0.9, (2, 1): 1.0,   # middle = ok
+        (0, 0): 0.7, (1, 0): 0.7, (2, 0): 0.7,   # low = fights design
+    },
+    "Sinker": {
+        (0, 2): 0.7, (1, 2): 0.8, (2, 2): 0.7,   # up = fights sink
+        (0, 1): 1.1, (1, 1): 1.0, (2, 1): 1.1,   # middle = ok
+        (0, 0): 1.3, (1, 0): 1.3, (2, 0): 1.2,   # low = natural sink
+    },
+    "Slider": {
+        (0, 2): 0.7, (1, 2): 0.7, (2, 2): 0.8,   # up = risky
+        (0, 1): 1.1, (1, 1): 0.9, (2, 1): 0.9,   # mid-in = backdoor
+        (0, 0): 1.3, (1, 0): 1.1, (2, 0): 1.0,   # low-in = sweep / bury
+    },
+    "Curveball": {
+        (0, 2): 0.6, (1, 2): 0.6, (2, 2): 0.6,   # up = hangs
+        (0, 1): 0.9, (1, 1): 1.0, (2, 1): 0.9,   # middle = ok
+        (0, 0): 1.3, (1, 0): 1.4, (2, 0): 1.3,   # low = bury
+    },
+    "Changeup": {
+        (0, 2): 0.6, (1, 2): 0.6, (2, 2): 0.6,   # up = mistake
+        (0, 1): 0.9, (1, 1): 0.9, (2, 1): 1.1,   # mid-away = fade
+        (0, 0): 1.2, (1, 0): 1.3, (2, 0): 1.3,   # low = natural fade
+    },
+}
+# Hard / offspeed defaults for pitch types not in the table above
+_PZM_HARD_DEFAULT = {
+    (0, 2): 1.1, (1, 2): 1.1, (2, 2): 1.1,
+    (0, 1): 1.0, (1, 1): 1.0, (2, 1): 1.0,
+    (0, 0): 0.9, (1, 0): 0.9, (2, 0): 0.9,
+}
+_PZM_OFFSPEED_DEFAULT = {
+    (0, 2): 0.7, (1, 2): 0.7, (2, 2): 0.7,
+    (0, 1): 1.0, (1, 1): 1.0, (2, 1): 1.0,
+    (0, 0): 1.2, (1, 0): 1.2, (2, 0): 1.2,
+}
+
+
+def _get_pzm(pitch_name: str, xb: int, yb: int) -> float:
+    """Return the pitch-design zone multiplier for a given pitch and cell."""
+    table = _PITCH_DESIGN_ZONE_MULT.get(pitch_name)
+    if table is None:
+        table = _PZM_HARD_DEFAULT if pitch_name in _HARD_PITCHES else _PZM_OFFSPEED_DEFAULT
+    return table.get((xb, yb), 1.0)
+
 
 # ── Legacy 5-zone labels (kept for backward compat display) ──────────────────
 _ZONE_LABELS = {
@@ -254,8 +308,10 @@ def recommend_pitch_location(
         if n < 5:
             continue
 
-        # Pitcher effectiveness score
+        # Pitcher effectiveness score, modulated by pitch-design zone mult
         pitcher_eff = _score_zone(zdata, mode=mode)
+        pzm = _get_pzm(pitch_name, xb, yb)
+        pitcher_eff_adj = pitcher_eff * pzm
 
         # Hitter vulnerability score
         hitter_vuln = 0.0
@@ -265,11 +321,12 @@ def recommend_pitch_location(
         # Count bonus
         cb = _count_bonus(xb, yb, mode)
 
-        # Combined score
+        # Combined score — PZM rebalances weights so hitter data doesn't
+        # override pitch design (0.30 vuln vs 0.45 pitcher_eff*pzm)
         if has_hitter:
-            combined = 0.45 * hitter_vuln + 0.35 * pitcher_eff + 0.20 * cb
+            combined = 0.30 * hitter_vuln + 0.45 * pitcher_eff_adj + 0.25 * cb
         else:
-            combined = 0.70 * pitcher_eff + 0.30 * cb
+            combined = 0.70 * pitcher_eff_adj + 0.30 * cb
 
         # In 0-2, boost bottom row (chase territory)
         if two_strike and b == 0 and yb == 0:
