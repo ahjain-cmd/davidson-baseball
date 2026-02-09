@@ -100,6 +100,47 @@ def _nickname_keys(n: str) -> Set[str]:
     return keys
 
 
+def _enrich_bats_from_pitches(rate_df: pd.DataFrame, pitches: pd.DataFrame) -> None:
+    """Infer batsHand from BatterSide in pitch-level data for hitters missing it.
+
+    Modifies rate_df in place — adds 'batsHand' column if not present and fills
+    missing values from the most common BatterSide for each hitter.
+    """
+    if "Batter" not in pitches.columns or "BatterSide" not in pitches.columns:
+        return
+
+    # Build batter -> most common side mapping
+    side_counts = (
+        pitches.groupby(["Batter", "BatterSide"])
+        .size()
+        .reset_index(name="n")
+        .sort_values("n", ascending=False)
+        .drop_duplicates(subset=["Batter"], keep="first")
+    )
+    batter_to_side = dict(zip(
+        side_counts["Batter"].astype(str).str.strip(),
+        side_counts["BatterSide"].astype(str).str.strip(),
+    ))
+
+    if "batsHand" not in rate_df.columns:
+        rate_df["batsHand"] = "?"
+
+    name_col = "playerFullName" if "playerFullName" in rate_df.columns else (
+        "fullName" if "fullName" in rate_df.columns else None
+    )
+    if name_col is None:
+        return
+
+    for idx, row in rate_df.iterrows():
+        current = row.get("batsHand", "?")
+        if current not in [None, "", "?"] and not (isinstance(current, float) and pd.isna(current)):
+            continue
+        name = str(row[name_col]).strip()
+        side = batter_to_side.get(name)
+        if side:
+            rate_df.at[idx, "batsHand"] = side
+
+
 def _roster_display_names() -> Set[str]:
     """Return set of 'First Last' names for the Bryant 2026 roster."""
     return {display_name(n, escape_html=False) for n in BRYANT_ROSTER_2026}
@@ -397,6 +438,94 @@ def build_bryant_combined_pack(
     # Merge all filtered packs
     _log("Merging data from all sources...")
     combined = _merge_packs(all_packs)
+
+    # ── Enrich with pitch-level data (hole scores, bats, count-zone metrics) ──
+    # Fetch GamePitchesTrackman from TrueMedia for each season.
+    # 1. Bryant team pitches (covers all returning players)
+    # 2. Transfer players' previous school pitches (covers transfers)
+    _log("Fetching pitch-level data for hole scores...")
+    from data.truemedia_api import fetch_team_all_pitches_trackman
+    from decision_engine.data.opponent_pack import _compute_and_store_hole_scores
+
+    all_pitch_dfs = []
+    # Track which (school, season) combos we've already fetched to avoid duplicates
+    _fetched: Set[Tuple[str, int]] = set()
+
+    for season in sorted(seasons):
+        teams_df = fetch_all_teams(season_year=season)
+        if teams_df is None or teams_df.empty:
+            continue
+
+        # Build list of (school_search_name, player_set_for_filter) to fetch
+        fetch_targets: List[Tuple[str, Set[str]]] = []
+
+        # Always fetch Bryant (covers returning players + transfers who already played for Bryant)
+        fetch_targets.append((BRYANT_TEAM_NAME, roster_display))
+
+        # Also fetch each transfer's previous school to get their pitch data there
+        for roster_name, prev_school in BRYANT_TRANSFERS.items():
+            disp = display_name(roster_name, escape_html=False)
+            fetch_targets.append((prev_school, {disp}))
+
+        for school_search, player_filter in fetch_targets:
+            fetch_key = (school_search, season)
+            if fetch_key in _fetched:
+                continue
+
+            result = _find_team_id(teams_df, school_search)
+            if result is None:
+                continue
+            team_id_season, team_full = result
+            _fetched.add(fetch_key)
+
+            try:
+                pitches = fetch_team_all_pitches_trackman(team_id_season, season)
+                if pitches is not None and not pitches.empty:
+                    # Filter to just the target players from this school
+                    if "Batter" in pitches.columns:
+                        exact_f, norm_f, fl_f, il_f = _build_name_matcher(player_filter)
+                        mask = pitches["Batter"].apply(
+                            lambda x, e=exact_f, n=norm_f, f=fl_f, i=il_f: _name_matches(x, e, n, f, i)
+                        )
+                        filtered_pitches = pitches[mask]
+                    else:
+                        filtered_pitches = pitches
+
+                    if len(filtered_pitches) > 0:
+                        _log(f"  {team_full} {season}: {len(filtered_pitches)} pitches (of {len(pitches)} total)")
+                        all_pitch_dfs.append(filtered_pitches)
+            except Exception as e:
+                _log(f"  {school_search} {season}: pitch fetch failed: {e}")
+
+    if all_pitch_dfs:
+        roster_pitches = pd.concat(all_pitch_dfs, ignore_index=True)
+
+        # Deduplicate: same pitch may appear if a transfer played Bryant (fetched via both paths)
+        # TrueMedia uses trackmanPitchUID as unique pitch identifier.
+        # Only dedup rows that have a non-null UID (null UIDs are kept as-is).
+        uid_col = "trackmanPitchUID"
+        if uid_col in roster_pitches.columns and "Batter" in roster_pitches.columns:
+            has_uid = roster_pitches[uid_col].notna()
+            with_uid = roster_pitches[has_uid]
+            without_uid = roster_pitches[~has_uid]
+            before = len(with_uid)
+            with_uid = with_uid.drop_duplicates(subset=[uid_col, "Batter"], keep="first")
+            roster_pitches = pd.concat([with_uid, without_uid], ignore_index=True)
+            if len(with_uid) < before:
+                _log(f"  Deduped: {before} -> {len(with_uid)} rows with UID")
+
+        _log(f"  Total roster pitches: {len(roster_pitches)}")
+
+        # Infer bats from BatterSide for hitters missing it in rate table
+        rate_df = combined.get("hitting", {}).get("rate", pd.DataFrame())
+        if not rate_df.empty and "BatterSide" in roster_pitches.columns:
+            _enrich_bats_from_pitches(rate_df, roster_pitches)
+
+        # Compute hole scores + count-zone metrics
+        if len(roster_pitches) >= 30:
+            _compute_and_store_hole_scores(combined, roster_pitches)
+            hs = combined.get("hitting", {}).get("hole_scores")
+            _log(f"  Hole scores: {len(hs)} rows" if hs is not None else "  No hole scores computed")
 
     # Cache it
     _log("Saving combined pack to cache...")

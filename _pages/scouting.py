@@ -316,15 +316,26 @@ def _pitcher_attack_plan(trad, mov, pr, ht):
 
 def _get_opp_hitter_profile(tm, hitter, team, pitch_df=None):
     """Extract opponent hitter vulnerability profile from TrueMedia."""
-    rate = _tm_player(_tm_team(tm["hitting"]["rate"], team), hitter)
-    pr = _tm_player(_tm_team(tm["hitting"]["pitch_rates"], team), hitter)
-    pt = _tm_player(_tm_team(tm["hitting"]["pitch_types"], team), hitter)
-    exit_d = _tm_player(_tm_team(tm["hitting"]["exit"], team), hitter)
-    ht = _tm_player(_tm_team(tm["hitting"]["hit_types"], team), hitter)
-    hl = _tm_player(_tm_team(tm["hitting"]["hit_locations"], team), hitter)
-    pl = _tm_player(_tm_team(tm["hitting"].get("pitch_locations", pd.DataFrame()), team), hitter) if "pitch_locations" in tm["hitting"] else pd.DataFrame()
-    sw = _tm_player(_tm_team(tm["hitting"].get("swing_stats", pd.DataFrame()), team), hitter) if "swing_stats" in tm["hitting"] else pd.DataFrame()
-    fp = _tm_player(_tm_team(tm["hitting"].get("swing_pct", pd.DataFrame()), team), hitter) if "swing_pct" in tm["hitting"] else pd.DataFrame()
+    def _lookup(table_key, default=None):
+        """Team-filtered player lookup with fallback to player-only if team filter misses."""
+        df = tm["hitting"].get(table_key, default if default is not None else pd.DataFrame())
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            return pd.DataFrame()
+        result = _tm_player(_tm_team(df, team), hitter)
+        if result.empty:
+            # Fallback: skip team filter (handles combined packs with mixed team names)
+            result = _tm_player(df, hitter)
+        return result
+
+    rate = _lookup("rate")
+    pr = _lookup("pitch_rates")
+    pt = _lookup("pitch_types")
+    exit_d = _lookup("exit")
+    ht = _lookup("hit_types")
+    hl = _lookup("hit_locations")
+    pl = _lookup("pitch_locations") if "pitch_locations" in tm["hitting"] else pd.DataFrame()
+    sw = _lookup("swing_stats") if "swing_stats" in tm["hitting"] else pd.DataFrame()
+    fp = _lookup("swing_pct") if "swing_pct" in tm["hitting"] else pd.DataFrame()
     bats = rate.iloc[0].get("batsHand", "?") if not rate.empty else "?"
     if bats in [None, "", "?"] or (isinstance(bats, float) and pd.isna(bats)):
         bats = _infer_hand_from_pitch_df(pitch_df, hitter, role="batter") if pitch_df is not None else "?"
