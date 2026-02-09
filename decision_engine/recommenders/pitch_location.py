@@ -267,6 +267,64 @@ def _is_adjacent(a: Tuple[int, int], b: Tuple[int, int]) -> bool:
     return abs(a[0] - b[0]) <= 1 and abs(a[1] - b[1]) <= 1
 
 
+# ── Count-zone adjustment ────────────────────────────────────────────────────
+
+def _count_zone_adjustment(
+    xb: int,
+    yb: int,
+    count_metrics: Dict[str, Dict[Tuple[int, int], Dict]],
+    mode: str,
+    balls: int,
+    strikes: int,
+) -> float:
+    """Data-driven count-zone adjustment (clamped to [-20, +20]).
+
+    Uses count-zone metrics to add bonus/penalty based on what the hitter
+    actually does in the current count group at this zone.
+    """
+    if not count_metrics:
+        return 0.0
+
+    # Map current count to a count group
+    if strikes == 2:
+        cg = "two_strike"
+    elif balls >= 2 and balls > strikes:
+        cg = "hitter_count"
+    else:
+        cg = "early"
+
+    cg_data = count_metrics.get(cg, {})
+    cell = cg_data.get((xb, yb))
+    if cell is None:
+        return 0.0
+
+    swing_rate = cell.get("swing_rate", 0.5)
+    whiff_rate = cell.get("whiff_rate", 0.0)
+    slg = cell.get("slg", 0.3)
+
+    adj = 0.0
+
+    if mode not in ("putaway", "must_strike", "hybrid_3-2"):
+        # Early counts: reward low swing_rate zones (free called strikes)
+        # and low SLG zones (safe to attack)
+        adj += (1.0 - swing_rate) * 12.0  # up to +12 for zones they ignore
+        adj += (1.0 - min(slg / 1.0, 1.0)) * 8.0  # up to +8 for low SLG
+    elif mode == "putaway":
+        # Two-strike: reward high whiff zones
+        adj += whiff_rate * 15.0  # up to +15 for high whiff zones
+        adj += (1.0 - min(slg / 1.0, 1.0)) * 5.0  # small bonus for low SLG
+    elif mode == "must_strike":
+        # Behind in count: target lowest SLG zones (minimize damage)
+        adj += (1.0 - min(slg / 1.0, 1.0)) * 15.0  # up to +15 for low SLG
+        adj -= swing_rate * 5.0  # mild penalty for zones they swing at (they'll make contact)
+    elif mode == "hybrid_3-2":
+        # 3-2 blend: whiff bonus + low SLG
+        adj += whiff_rate * 10.0
+        adj += (1.0 - min(slg / 1.0, 1.0)) * 10.0
+
+    return float(np.clip(adj, -20.0, 20.0))
+
+
 # ── Main recommender ─────────────────────────────────────────────────────────
 
 def recommend_pitch_location(
@@ -280,6 +338,9 @@ def recommend_pitch_location(
     throws: str = "R",
 ) -> Optional[Dict[str, Any]]:
     """Location suggestion combining pitcher zone effectiveness and hitter vulnerability.
+
+    Uses a pitch-type-specific fallback chain for hitter hole scores and
+    count-aware zone adjustments for data-driven count context.
 
     Returns a dict with primary and optional secondary location recommendations,
     including zone label, metrics, and a reason string.
@@ -313,9 +374,36 @@ def recommend_pitch_location(
         and hitter_zone_vuln.get("available", False)
     )
 
-    # Check for hole scores (3x3 grid from Swing Hole Finder)
-    hole_scores = (hitter_data or {}).get("hole_scores_3x3", {})
-    has_holes = bool(hole_scores)
+    # ── Pitch-type hole score lookup with fallback chain ─────────────────────
+    # Priority: 1. Pitch-type-specific  2. Aggregate ("ALL")  3. Directional zone_vuln  4. Pitcher-only
+    hole_scores_by_pt = (hitter_data or {}).get("hole_scores_by_pt", {})
+    hole_scores_agg = (hitter_data or {}).get("hole_scores_3x3", {})
+
+    pt_holes = hole_scores_by_pt.get(pitch_name, {})
+    has_pt_holes = bool(pt_holes)
+    has_agg_holes = bool(hole_scores_agg)
+
+    # Count-zone metrics
+    count_metrics = (hitter_data or {}).get("count_zone_metrics", {})
+
+    # ── Stuff+-driven weight allocation with pitch-type tier boost ───────────
+    stuff_plus = arsenal_pitch.get("stuff_plus", np.nan)
+    stuff_plus = float(stuff_plus) if pd.notna(stuff_plus) else 100.0
+    sp_clamped = max(90.0, min(120.0, stuff_plus))
+
+    if has_pt_holes:
+        # Pitch-type data = highest confidence → boost hitter weight by ~0.08
+        w_hitter = float(np.interp(sp_clamped, [90, 105, 120], [0.60, 0.45, 0.20]))
+    elif has_agg_holes:
+        # Aggregate data = good confidence
+        w_hitter = float(np.interp(sp_clamped, [90, 105, 120], [0.55, 0.40, 0.15]))
+    elif has_hitter:
+        w_hitter = 0.30  # directional only
+    else:
+        w_hitter = 0.0   # pitcher-only
+
+    w_pitcher = 0.75 - w_hitter
+    w_count = 0.25
 
     # Score all 3×3 cells
     scored: List[Tuple[Tuple[int, int], float, Dict, str]] = []
@@ -332,22 +420,31 @@ def recommend_pitch_location(
         pzm = _get_pzm(pitch_name, xb, yb)
         pitcher_eff_adj = pitcher_eff * pzm
 
-        # Hitter vulnerability score — prefer hole scores over directional vuln
+        # Hitter vulnerability score — pitch-type fallback chain
         hitter_vuln = 0.0
-        if has_holes and (xb, yb) in hole_scores:
-            hitter_vuln = hole_scores[(xb, yb)]  # 0-100, higher = attack here
+        vuln_source = None
+        pt_cell = None
+        if has_pt_holes and (xb, yb) in pt_holes:
+            pt_cell = pt_holes[(xb, yb)]
+            hitter_vuln = pt_cell["score"]
+            vuln_source = "pt"
+        elif has_agg_holes and (xb, yb) in hole_scores_agg:
+            hitter_vuln = hole_scores_agg[(xb, yb)]
+            vuln_source = "agg"
         elif has_hitter:
             hitter_vuln = _hitter_vuln_score(xb, yb, hitter_zone_vuln, bats)
+            vuln_source = "dir"
 
-        # Count bonus
+        # Count-zone adjustment (data-driven layer on top of static _count_bonus)
         cb = _count_bonus(xb, yb, mode)
+        cz_adj = _count_zone_adjustment(xb, yb, count_metrics, mode, b, s)
+        count_score = cb + cz_adj
 
-        # Combined score — PZM rebalances weights so hitter data doesn't
-        # override pitch design (0.30 vuln vs 0.45 pitcher_eff*pzm)
-        if has_holes or has_hitter:
-            combined = 0.30 * hitter_vuln + 0.45 * pitcher_eff_adj + 0.25 * cb
+        # Combined score — weights shift based on stuff+ and data tier
+        if has_pt_holes or has_agg_holes or has_hitter:
+            combined = w_hitter * hitter_vuln + w_pitcher * pitcher_eff_adj + w_count * count_score
         else:
-            combined = 0.70 * pitcher_eff_adj + 0.30 * cb
+            combined = 0.70 * pitcher_eff_adj + 0.30 * count_score
 
         # In 0-2, boost bottom row (chase territory)
         if two_strike and b == 0 and yb == 0:
@@ -359,9 +456,11 @@ def recommend_pitch_location(
 
         # Build reason string
         reasons = []
-        if has_holes and (xb, yb) in hole_scores:
-            reasons.append(f"hole score {hitter_vuln:.0f}")
-        elif has_hitter:
+        if vuln_source == "pt" and pt_cell is not None:
+            reasons.append(f"{pitch_name} hole {hitter_vuln:.0f} (n={pt_cell['n']})")
+        elif vuln_source == "agg":
+            reasons.append(f"hole {hitter_vuln:.0f}")
+        elif vuln_source == "dir":
             reasons.append(f"hitter vuln {hitter_vuln:.0f}")
         wh = zdata.get("whiff_pct", np.nan)
         if pd.notna(wh):
@@ -369,6 +468,8 @@ def recommend_pitch_location(
         csw = zdata.get("csw_pct", np.nan)
         if pd.notna(csw):
             reasons.append(f"CSW {csw:.0f}%")
+        if cz_adj != 0:
+            reasons.append(f"count adj {cz_adj:+.0f}")
         if mode != "neutral":
             reasons.append(f"count: {mode}")
         reason = " + ".join(reasons)

@@ -180,8 +180,13 @@ def load_opponent_pack(team_id: str, season_year: int) -> Optional[Dict[str, Any
 
 
 def _compute_and_store_hole_scores(pack: Dict[str, Any], opp_pitches: pd.DataFrame) -> None:
-    """Compute per-hitter hole scores and store in pack["hitting"]["hole_scores"]."""
-    from analytics.zone_vulnerability import compute_hole_scores_3x3
+    """Compute per-hitter hole scores (pitch-type-specific + aggregate) and count-zone metrics.
+
+    Stores:
+      pack["hitting"]["hole_scores"] — columns: playerFullName, pitch_type, xb, yb, score, swing_pct, whiff_pct, slg, ev_mean, n
+      pack["hitting"]["count_zone_metrics"] — columns: playerFullName, count_group, xb, yb, swing_rate, whiff_rate, slg, n
+    """
+    from analytics.zone_vulnerability import compute_all_pitch_type_holes, compute_count_zone_metrics
 
     rate_df = pack.get("hitting", {}).get("rate", pd.DataFrame())
     if rate_df.empty:
@@ -199,7 +204,8 @@ def _compute_and_store_hole_scores(pack: Dict[str, Any], opp_pitches: pd.DataFra
 
     has_batter_col = "Batter" in opp_pitches.columns
 
-    rows = []
+    hole_rows = []
+    czm_rows = []
     for hitter in hitter_names:
         if has_batter_col:
             hitter_pitches = opp_pitches[
@@ -217,17 +223,42 @@ def _compute_and_store_hole_scores(pack: Dict[str, Any], opp_pitches: pd.DataFra
         if not hitter_rate.empty and "batsHand" in hitter_rate.columns:
             bats = hitter_rate.iloc[0].get("batsHand", "?")
 
-        scores = compute_hole_scores_3x3(hitter_pitches, bats)
-        for (xb, yb), score in scores.items():
-            rows.append({
-                "playerFullName": hitter,
-                "xb": xb,
-                "yb": yb,
-                "score": score,
-            })
+        # Pitch-type-specific + aggregate hole scores
+        all_holes = compute_all_pitch_type_holes(hitter_pitches, bats)
+        for pt, zone_dict in all_holes.items():
+            for (xb, yb), detail in zone_dict.items():
+                hole_rows.append({
+                    "playerFullName": hitter,
+                    "pitch_type": pt,
+                    "xb": xb,
+                    "yb": yb,
+                    "score": detail["score"],
+                    "swing_pct": detail.get("swing_pct", 0.5),
+                    "whiff_pct": detail.get("whiff_pct", 0.0),
+                    "slg": detail.get("slg", 0.0),
+                    "ev_mean": detail.get("ev_mean", 85.0),
+                    "n": detail.get("n", 0),
+                })
 
-    if rows:
-        pack.setdefault("hitting", {})["hole_scores"] = pd.DataFrame(rows)
+        # Count-zone metrics
+        czm = compute_count_zone_metrics(hitter_pitches)
+        for cg, zone_dict in czm.items():
+            for (xb, yb), metrics in zone_dict.items():
+                czm_rows.append({
+                    "playerFullName": hitter,
+                    "count_group": cg,
+                    "xb": xb,
+                    "yb": yb,
+                    "swing_rate": metrics["swing_rate"],
+                    "whiff_rate": metrics["whiff_rate"],
+                    "slg": metrics["slg"],
+                    "n": metrics["n"],
+                })
+
+    if hole_rows:
+        pack.setdefault("hitting", {})["hole_scores"] = pd.DataFrame(hole_rows)
+    if czm_rows:
+        pack.setdefault("hitting", {})["count_zone_metrics"] = pd.DataFrame(czm_rows)
 
 
 def load_or_build_opponent_pack(

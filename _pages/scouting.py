@@ -390,10 +390,53 @@ def _get_opp_hitter_profile(tm, hitter, team, pitch_df=None):
     if isinstance(hole_df, pd.DataFrame) and not hole_df.empty:
         hitter_holes = hole_df[hole_df["playerFullName"].astype(str).str.strip() == str(hitter).strip()]
         if not hitter_holes.empty:
+            # Aggregate scores (pitch_type="ALL" or old packs without pitch_type)
+            if "pitch_type" in hitter_holes.columns:
+                agg = hitter_holes[hitter_holes["pitch_type"] == "ALL"]
+            else:
+                agg = hitter_holes
             profile["hole_scores_3x3"] = {
                 (int(r["xb"]), int(r["yb"])): float(r["score"])
-                for _, r in hitter_holes.iterrows()
+                for _, r in agg.iterrows()
             }
+
+            # Per-pitch-type scores
+            if "pitch_type" in hitter_holes.columns:
+                by_pt = {}
+                for pt in hitter_holes["pitch_type"].unique():
+                    if pt == "ALL":
+                        continue
+                    pt_rows = hitter_holes[hitter_holes["pitch_type"] == pt]
+                    by_pt[pt] = {
+                        (int(r["xb"]), int(r["yb"])): {
+                            "score": float(r["score"]),
+                            "swing_pct": float(r.get("swing_pct", 0.5)),
+                            "slg": float(r.get("slg", 0.4)),
+                            "ev_mean": float(r.get("ev_mean", 85)),
+                            "n": int(r.get("n", 0)),
+                        }
+                        for _, r in pt_rows.iterrows()
+                    }
+                profile["hole_scores_by_pt"] = by_pt
+
+    # Count-zone metrics
+    czm_df = tm["hitting"].get("count_zone_metrics", pd.DataFrame())
+    if isinstance(czm_df, pd.DataFrame) and not czm_df.empty:
+        hitter_czm = czm_df[czm_df["playerFullName"].astype(str).str.strip() == str(hitter).strip()]
+        if not hitter_czm.empty:
+            czm = {}
+            for cg in hitter_czm["count_group"].unique():
+                cg_rows = hitter_czm[hitter_czm["count_group"] == cg]
+                czm[cg] = {
+                    (int(r["xb"]), int(r["yb"])): {
+                        "swing_rate": float(r["swing_rate"]),
+                        "whiff_rate": float(r["whiff_rate"]),
+                        "slg": float(r["slg"]),
+                        "n": int(r["n"]),
+                    }
+                    for _, r in cg_rows.iterrows()
+                }
+            profile["count_zone_metrics"] = czm
 
     return profile
 
@@ -6008,7 +6051,7 @@ def _swing_hole_finder(b_tm, hitter_name, bats=None, bats_norm=None, sp=None, is
         y_lbl = ["Down", "Mid", "Up"][y_bin]
         return f"{y_lbl}-{x_lbl}"
 
-    def _definitive_holes(df, bats, sp, min_zone_n=15):
+    def _definitive_holes(df, bats, sp, min_zone_n=12):
         """Compute top definitive swing holes using shared compute_hole_scores_3x3."""
         if df.empty:
             return []

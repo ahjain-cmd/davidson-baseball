@@ -65,6 +65,8 @@ def _build_hitter_data(hitter_profile: Dict[str, Any], throws: str) -> Dict[str,
         "outside_pct": hitter_profile.get("outside_pct", np.nan),
         "zone_vuln": hitter_profile.get("zone_vuln", {}),
         "hole_scores_3x3": hitter_profile.get("hole_scores_3x3", {}),
+        "hole_scores_by_pt": hitter_profile.get("hole_scores_by_pt", {}),
+        "count_zone_metrics": hitter_profile.get("count_zone_metrics", {}),
     }
 
 
