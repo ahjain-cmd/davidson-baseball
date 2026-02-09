@@ -177,17 +177,34 @@ def render_ingame_panel(data):
             outs = int(st.number_input("Outs", min_value=0, max_value=2, value=0, step=1))
         with c4:
             inning = int(st.number_input("Inning", min_value=1, max_value=20, value=1, step=1))
+        _PITCH_TYPES_SORTED = sorted(
+            {"Fastball", "Sinker", "Cutter", "Slider", "Curveball",
+             "Changeup", "Splitter", "Sweeper", "Knuckle Curve"}
+        )
         with c5:
             last_pitch_opt = st.selectbox(
                 "Last Pitch Thrown",
-                ["(None)"] + sorted(
-                    {"Fastball", "Sinker", "Cutter", "Slider", "Curveball",
-                     "Changeup", "Splitter", "Sweeper", "Knuckle Curve"}
-                ),
+                ["(None)"] + _PITCH_TYPES_SORTED,
                 index=0,
-                help="The previous pitch thrown this AB (enables sequence/tunnel adjustments)",
+                help="The most recent pitch thrown this AB",
             )
             last_pitch = None if last_pitch_opt == "(None)" else last_pitch_opt
+
+        # Multi-pitch history (last 2-3 pitches for tunnel/sequence scoring)
+        lp2_col, lp3_col = st.columns(2)
+        with lp2_col:
+            lp2_opt = st.selectbox("2nd-to-Last Pitch", ["(None)"] + _PITCH_TYPES_SORTED, index=0, help="2 pitches ago")
+        with lp3_col:
+            lp3_opt = st.selectbox("3rd-to-Last Pitch", ["(None)"] + _PITCH_TYPES_SORTED, index=0, help="3 pitches ago")
+
+        _last_pitches_list = []
+        if lp3_opt != "(None)":
+            _last_pitches_list.append(lp3_opt)
+        if lp2_opt != "(None)":
+            _last_pitches_list.append(lp2_opt)
+        if last_pitch is not None:
+            _last_pitches_list.append(last_pitch)
+        last_pitches = tuple(_last_pitches_list)
 
         b1, b2, b3 = st.columns(3)
         with b1:
@@ -306,6 +323,7 @@ def render_ingame_panel(data):
             score_opp=int(score_opp),
             runner=runner_ctx,
             last_pitch=last_pitch,
+            last_pitches=last_pitches,
         )
 
     # ── Compute matchup & recommendations ───────────────────────────────────
@@ -343,6 +361,15 @@ def render_ingame_panel(data):
         return
 
     st.subheader(f"Pitch Call ({state.count_str()})")
+
+    # Scoring path + leverage transparency
+    li = state.leverage_index
+    li_label = "Low" if li < 0.35 else ("High" if li > 0.65 else "Medium")
+    if use_re:
+        st.caption(f"Scoring: **ΔRE (Run Expectancy)** — RS/100  |  Leverage: **{li_label}** ({li:.2f})")
+    else:
+        st.caption(f"Scoring: **Composite** (RE calibration unavailable)  |  Leverage: **{li_label}** ({li:.2f})")
+
     top_loc_zone = None
     top_loc_label = None
     top_pitch = recs[0]["pitch"] if recs else None
@@ -369,6 +396,7 @@ def render_ingame_panel(data):
             dre_squeeze = r.get("delta_re_squeeze", 0.0)
             dre_usage = r.get("delta_re_usage", 0.0)
             dre_gt = r.get("delta_re_gametheory", 0.0)
+            dre_holes = r.get("delta_re_holes", 0.0)
             parts = f"ΔRE: base {dre_base:+.4f}"
             if dre_seq != 0.0:
                 parts += f" + seq {dre_seq:+.4f}"
@@ -378,6 +406,11 @@ def render_ingame_panel(data):
                 parts += f" + squeeze {dre_squeeze:+.4f}"
             if dre_gt != 0.0:
                 parts += f" + hitter {dre_gt:+.4f}"
+            if dre_holes != 0.0:
+                parts += f" + holes {dre_holes:+.4f}"
+            dre_leverage = r.get("delta_re_leverage", 0.0)
+            if dre_leverage != 0.0:
+                parts += f" + leverage {dre_leverage:+.4f}"
             if dre_usage != 0.0:
                 parts += f" + usage {dre_usage:+.4f}"
             parts += f" = {r.get('delta_re', 0.0):+.4f}"

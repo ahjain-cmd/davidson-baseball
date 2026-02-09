@@ -746,6 +746,9 @@ def compute_delta_re(
     count_strike_gain: Optional[Dict[str, float]] = None,
     bip_profile: Optional[Dict[str, float]] = None,
     gb_dp_rates: Optional[Dict[str, Any]] = None,
+    pitcher_gb_pct: Optional[float] = None,
+    pitcher_fb_pct: Optional[float] = None,
+    tag_up_score_pct: Optional[float] = None,
 ) -> float:
     """Compute ΔRE for a pitch at the given game state.
 
@@ -865,13 +868,17 @@ def compute_delta_re(
 
     # Out on BIP — split into regular out and DP when applicable
     re_out = _get_re(re24, on1b, on2b, on3b, outs + 1)
-    # Get pitch-type GB% for DP and tag-up modelling from gb_dp_rates param
+    # Get GB% for DP and tag-up modelling.
+    # Priority: pitcher-specific gb_pct > pitch-type from gb_dp_rates > hardcoded fallback
     _gb_pct_for_bip = 0.43
     _dp_rate = 0.06  # ~6% of ground outs become DP
+    if pitcher_gb_pct is not None:
+        _gb_pct_for_bip = pitcher_gb_pct / 100.0 if pitcher_gb_pct > 1.0 else pitcher_gb_pct
     if gb_dp_rates:
         _pt_gdp = gb_dp_rates.get(pitch_type, {})
         if _pt_gdp:
-            _gb_pct_for_bip = _pt_gdp.get("gb_pct", 43.0) / 100.0
+            if pitcher_gb_pct is None:
+                _gb_pct_for_bip = _pt_gdp.get("gb_pct", 43.0) / 100.0
             if _pt_gdp.get("gb_pct", 0) > 0:
                 _dp_rate = _pt_gdp.get("dp_pct", 2.5) / _pt_gdp["gb_pct"]
 
@@ -886,10 +893,14 @@ def compute_delta_re(
     else:
         delta_ip = adj_out * (re_out - re_current)
 
-    # Tag-up on fly outs: R3 scores ~40% of the time on air-ball outs
+    # Tag-up on fly outs: R3 scores on a fraction of air-ball outs
     if on3b and outs < 2:
-        air_pct = 1.0 - _gb_pct_for_bip
-        tag_up_rate = 0.40 * air_pct  # 40% of air-ball outs score R3
+        _fb_pct = pitcher_fb_pct / 100.0 if pitcher_fb_pct is not None and pitcher_fb_pct > 1.0 else (
+            pitcher_fb_pct if pitcher_fb_pct is not None else None
+        )
+        air_pct = _fb_pct if _fb_pct is not None else (1.0 - _gb_pct_for_bip)
+        _tag_up_pct = tag_up_score_pct if tag_up_score_pct is not None else 0.40
+        tag_up_rate = _tag_up_pct * air_pct
         re_tag = _get_re(re24, on1b, on2b, 0, outs + 1) + 1.0
         delta_ip = (delta_ip +
                     adj_out * tag_up_rate * ((re_tag - re_current) - (re_out - re_current)))

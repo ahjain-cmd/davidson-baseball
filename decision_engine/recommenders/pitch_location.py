@@ -454,6 +454,20 @@ def recommend_pitch_location(
         if mode == "must_strike" and yb == 0:
             combined *= 0.75
 
+        # Leverage-aware zone adjustment
+        li = getattr(state, "leverage_index", 0.5)
+        if isinstance(li, (int, float)) and li > 0.7:
+            # High leverage: penalize middle-middle (fat pitch zone)
+            if xb == 1 and yb == 1:
+                combined *= 0.85
+            # Reward edge/corner zones (safer locations)
+            if xb in (0, 2) and yb in (0, 2):
+                combined *= 1.08
+        elif isinstance(li, (int, float)) and li < 0.3:
+            # Low leverage: reward attacking the zone (middle zones)
+            if xb == 1 and yb == 1:
+                combined *= 1.10
+
         # Build reason string
         reasons = []
         if vuln_source == "pt" and pt_cell is not None:
