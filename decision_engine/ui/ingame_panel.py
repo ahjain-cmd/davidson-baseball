@@ -168,7 +168,7 @@ def render_ingame_panel(data):
 
     # ── Game state inputs ───────────────────────────────────────────────────
     with st.expander("Game State", expanded=True):
-        c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 2, 2])
+        c1, c2, c3, c4, c4b, c5 = st.columns([1, 1, 1, 1, 1, 2])
         with c1:
             balls = int(st.number_input("Balls", min_value=0, max_value=3, value=0, step=1))
         with c2:
@@ -177,6 +177,8 @@ def render_ingame_panel(data):
             outs = int(st.number_input("Outs", min_value=0, max_value=2, value=0, step=1))
         with c4:
             inning = int(st.number_input("Inning", min_value=1, max_value=20, value=1, step=1))
+        with c4b:
+            top_bottom = st.selectbox("Half", ["Top", "Bot"], index=0, help="Top = away team batting (we're home); Bot = home team batting (we're away)")
         _PITCH_TYPES_SORTED = sorted(
             {"Fastball", "Sinker", "Cutter", "Slider", "Curveball",
              "Changeup", "Splitter", "Sweeper", "Knuckle Curve"}
@@ -318,6 +320,7 @@ def render_ingame_panel(data):
             strikes=strikes,
             outs=outs,
             inning=inning,
+            top_bottom=top_bottom,
             bases=BaseState(on_1b=on_1b, on_2b=on_2b, on_3b=on_3b),
             score_our=int(score_our),
             score_opp=int(score_opp),
@@ -345,15 +348,33 @@ def render_ingame_panel(data):
         st.error("Could not compute matchup.")
         return
 
-    # 3-tier scoring: WPA → ΔRE → Composite
-    recs_wpa = []
+    # Scoring priority: ΔRE (most granular, battle-tested) → Composite fallback.
+    # WPA used for leverage enrichment only (WP-derived leverage replaces heuristic).
+    wp_leverage_val = None
     try:
-        recs_wpa = recommend_pitch_call_wpa(
-            matchup, state, top_n=3,
-            tun_df=arsenal.get("tunnels"), seq_df=arsenal.get("sequences"),
-        )
+        from analytics.win_probability import load_wp_table, compute_wp_leverage
+        _wpt = load_wp_table()
+        if _wpt and _wpt.wp:
+            _half = "top" if state.top_bottom.lower().startswith("t") else "bot"
+            _sd = 0
+            if state.score_our is not None and state.score_opp is not None:
+                if _half == "top":
+                    _sd = int(state.score_our) - int(state.score_opp)
+                else:
+                    _sd = int(state.score_opp) - int(state.score_our)
+            wp_leverage_val = compute_wp_leverage(
+                _wpt, max(1, int(state.inning)), _half, _sd,
+                int(bool(state.bases.on_1b)), int(bool(state.bases.on_2b)),
+                int(bool(state.bases.on_3b)), int(state.outs),
+            )
     except Exception:
-        pass  # WPA is best-effort
+        pass
+
+    # Inject WP leverage into state for _leverage_adjustments()
+    if wp_leverage_val is not None:
+        from dataclasses import replace as dc_replace
+        state = dc_replace(state, wp_leverage=wp_leverage_val)
+
     recs_re = recommend_pitch_call_re(
         matchup, state, top_n=3,
         tun_df=arsenal.get("tunnels"), seq_df=arsenal.get("sequences"),
@@ -363,36 +384,26 @@ def render_ingame_panel(data):
         tun_df=arsenal.get("tunnels"), seq_df=arsenal.get("sequences"),
     )
 
-    use_wpa = bool(recs_wpa and "delta_wp" in recs_wpa[0])
     use_re = bool(recs_re and "delta_re" in recs_re[0])
-    if use_wpa:
-        recs = recs_wpa
-        scoring_path = "WPA"
-    elif use_re:
-        recs = recs_re
-        scoring_path = "ΔRE"
-    else:
-        recs = recs_old
-        scoring_path = "Composite"
+    recs = recs_re if use_re else recs_old
     if not recs:
         st.warning("No pitch recommendations available.")
         return
 
     st.subheader(f"Pitch Call ({state.count_str()})")
 
-    # Scoring path + leverage transparency
-    if use_wpa:
-        wp_lev = recs[0].get("wp_leverage", state.leverage_index)
-        li_label = "Low" if wp_lev < 0.35 else ("High" if wp_lev > 0.65 else "Medium")
-        st.caption(f"Scoring: **WPA (Win Probability)** — WP±/100  |  Leverage: **{li_label}** ({wp_lev:.2f}) [WP-derived]")
-    elif use_re:
-        li = state.leverage_index
-        li_label = "Low" if li < 0.35 else ("High" if li > 0.65 else "Medium")
-        st.caption(f"Scoring: **ΔRE (Run Expectancy)** — RS/100  |  Leverage: **{li_label}** ({li:.2f})")
+    # Scoring path + leverage transparency (use WP leverage when available)
+    if wp_leverage_val is not None:
+        li = wp_leverage_val
+        li_src = "WP"
     else:
         li = state.leverage_index
-        li_label = "Low" if li < 0.35 else ("High" if li > 0.65 else "Medium")
-        st.caption(f"Scoring: **Composite** (RE calibration unavailable)  |  Leverage: **{li_label}** ({li:.2f})")
+        li_src = "heuristic"
+    li_label = "Low" if li < 0.35 else ("High" if li > 0.65 else "Medium")
+    if use_re:
+        st.caption(f"Scoring: **ΔRE (Run Expectancy)** — RS/100  |  Leverage: **{li_label}** ({li:.2f}) [{li_src}]")
+    else:
+        st.caption(f"Scoring: **Composite** (RE calibration unavailable)  |  Leverage: **{li_label}** ({li:.2f}) [{li_src}]")
 
     top_loc_zone = None
     top_loc_label = None
@@ -403,42 +414,7 @@ def render_ingame_panel(data):
         conf = r.get("confidence", "Low")
         conf_n = r.get("confidence_n", 0)
 
-        if use_wpa:
-            wpa = r.get("wpa_per_100", 0.0)
-            if wpa > 5:
-                color = "🟢"
-            elif wpa < -5:
-                color = "🔴"
-            else:
-                color = "🟡"
-            st.markdown(f"**#{i} {pitch_name}**  |  WP±/100: `{wpa:+.1f}` {color}  |  Confidence: `{conf}` (n={conf_n})")
-            # ΔWP decomposition
-            dwp_base = r.get("delta_wp_base", 0.0)
-            dwp_seq = r.get("delta_wp_seq", 0.0)
-            dwp_steal = r.get("delta_wp_steal", 0.0)
-            dwp_squeeze = r.get("delta_wp_squeeze", 0.0)
-            dwp_usage = r.get("delta_wp_usage", 0.0)
-            dwp_gt = r.get("delta_wp_gametheory", 0.0)
-            dwp_holes = r.get("delta_wp_holes", 0.0)
-            parts = f"ΔWP: base {dwp_base:+.6f}"
-            if dwp_seq != 0.0:
-                parts += f" + seq {dwp_seq:+.6f}"
-            if dwp_steal != 0.0:
-                parts += f" + steal {dwp_steal:+.6f}"
-            if dwp_squeeze != 0.0:
-                parts += f" + squeeze {dwp_squeeze:+.6f}"
-            if dwp_gt != 0.0:
-                parts += f" + hitter {dwp_gt:+.6f}"
-            if dwp_holes != 0.0:
-                parts += f" + holes {dwp_holes:+.6f}"
-            dwp_leverage = r.get("delta_wp_leverage", 0.0)
-            if dwp_leverage != 0.0:
-                parts += f" + leverage {dwp_leverage:+.6f}"
-            if dwp_usage != 0.0:
-                parts += f" + usage {dwp_usage:+.6f}"
-            parts += f" = {r.get('delta_wp', 0.0):+.6f}"
-            st.caption(parts)
-        elif use_re:
+        if use_re:
             rs100 = r.get("rs100", 0.0)
             # Color coding: Green (>0.5), Yellow (±0.5), Red (<-0.5)
             if rs100 > 0.5:

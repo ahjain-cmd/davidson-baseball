@@ -372,8 +372,9 @@ def compute_wp_leverage(
         wp_after_k = lookup_wp(wp_table, inning, half, score_diff, on1b, on2b, on3b, new_outs)
 
     leverage = abs(wp_after_hr - wp_after_k)
-    # Normalize: typical WP swing ~0.03–0.15 → scale to [0, 1]
-    return float(min(1.0, leverage / 0.15))
+    # Normalize: empirical P90 swing ≈ 0.44, median ≈ 0.15 → scale to [0, 1]
+    # Using P90 as denominator: neutral ≈ 0.35, high-leverage ≈ 0.9-1.0, blowout ≈ 0.05
+    return float(min(1.0, leverage / 0.44))
 
 
 # ── ΔWP Computation ─────────────────────────────────────────────────────────

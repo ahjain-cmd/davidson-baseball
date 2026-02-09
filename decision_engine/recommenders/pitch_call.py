@@ -1074,8 +1074,10 @@ def recommend_pitch_call_re(
         hs_delta_old, hs_reasons = _hole_score_overlay(pitch_name, hd)
         delta_re_holes = -hs_delta_old * RE_SCALE
 
-        # 4d. Leverage adjustments
-        lv_delta_old, lv_reasons = _leverage_adjustments(pitch_name, info, state)
+        # 4d. Leverage adjustments (use WP leverage from state when available)
+        lv_delta_old, lv_reasons = _leverage_adjustments(
+            pitch_name, info, state, wp_leverage=getattr(state, "wp_leverage", None),
+        )
         delta_re_leverage = -lv_delta_old * RE_SCALE
 
         # 5. Usage adjustment — dampen base ΔRE by reliability factor.
