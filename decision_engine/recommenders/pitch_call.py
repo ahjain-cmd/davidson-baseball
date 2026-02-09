@@ -412,13 +412,18 @@ def _steal_adjustments(pitch_name: str, info: Dict[str, Any], state: GameState) 
 
 def _leverage_adjustments(
     pitch_name: str, info: Dict[str, Any], state: GameState,
+    wp_leverage: Optional[float] = None,
 ) -> Tuple[float, List[str]]:
     """Adjust pitch scoring based on game leverage.
 
     High leverage: favor command pitches (minimize damage).
     Low leverage: favor stuff pitches (attack aggressively).
+    Uses WP-derived leverage when available, falls back to heuristic.
     """
-    li = getattr(state, "leverage_index", 0.5)
+    if wp_leverage is not None and isinstance(wp_leverage, (int, float)):
+        li = float(wp_leverage)
+    else:
+        li = getattr(state, "leverage_index", 0.5)
     if not isinstance(li, (int, float)):
         li = 0.5
 
@@ -1168,4 +1173,397 @@ def recommend_pitch_call_re(
 
     # Sort by ΔRE ascending (most negative = best for pitcher)
     rows.sort(key=lambda r: r["delta_re"])
+    return rows[: max(1, int(top_n))]
+
+
+# ── WPA-based recommender ───────────────────────────────────────────────────
+
+_WP_TABLE = None
+
+
+def _get_wp_table():
+    global _WP_TABLE
+    if _WP_TABLE is None:
+        from analytics.win_probability import load_wp_table
+        _WP_TABLE = load_wp_table()
+    return _WP_TABLE
+
+
+def recommend_pitch_call_wpa(
+    matchup: Dict[str, Any],
+    state: GameState,
+    top_n: int = 3,
+    *,
+    tun_df: Optional[pd.DataFrame] = None,
+    seq_df: Optional[pd.DataFrame] = None,
+    re_cal=None,
+    wp_table=None,
+) -> List[Dict[str, Any]]:
+    """Return top pitch call recommendations scored by ΔWP (win probability).
+
+    Parallels recommend_pitch_call_re() but uses Win Probability Added instead
+    of Run Expectancy.  Lower ΔWP = better for pitcher.
+    Displayed as WP±/100 = -ΔWP × 10000 (WP basis points per 100 pitches).
+    """
+    if not matchup or not matchup.get("pitch_scores"):
+        return []
+
+    from analytics.run_expectancy import PitchOutcomeProbs
+    from analytics.win_probability import compute_delta_wp, compute_wp_leverage
+    from decision_engine.core.matchup import compute_matchup_adjusted_probs
+
+    cal = re_cal or _get_re_calibration()
+    wpt = wp_table or _get_wp_table()
+    if wpt is None or not wpt.wp:
+        return []  # no WP table available; caller should fall back to ΔRE
+
+    hd = matchup.get("hitter_data") or {}
+    b, s = state.count()
+    count_str = f"{b}-{s}"
+    on1b = int(bool(state.bases.on_1b))
+    on2b = int(bool(state.bases.on_2b))
+    on3b = int(bool(state.bases.on_3b))
+    outs = int(state.outs)
+    base_out = (on1b, on2b, on3b, outs)
+
+    # Determine score diff (home - away) and half
+    score_diff = 0
+    half = "top" if state.top_bottom.lower().startswith("t") else "bot"
+    if state.score_our is not None and state.score_opp is not None:
+        our = int(state.score_our)
+        opp = int(state.score_opp)
+        # "our" team is the pitching team, "opp" is the batting team.
+        # Convention: if we're pitching top of inning, away team bats, we're home.
+        # If we're pitching bottom, home team bats, we're away.
+        if half == "top":
+            # Away team is batting; we are home team pitcher
+            score_diff = our - opp  # home - away
+        else:
+            # Home team is batting; we are away team pitcher
+            score_diff = opp - our  # home - away (opp is home)
+    inning = max(1, int(state.inning))
+
+    # WP-based leverage
+    wp_lev = compute_wp_leverage(wpt, inning, half, score_diff, on1b, on2b, on3b, outs)
+
+    # Load calibrated ball/strike costs from count_calibration
+    _count_ball_cost = None
+    _count_strike_gain = None
+    try:
+        import json as _json
+        from config import CACHE_DIR
+        _cc_path = os.path.join(CACHE_DIR, "count_calibration.json")
+        if os.path.exists(_cc_path):
+            with open(_cc_path) as _ccf:
+                _cc = _json.load(_ccf)
+            _ccd = _cc.get("calibration", _cc)
+            _count_ball_cost = _ccd.get("ball_cost")
+            _count_strike_gain = _ccd.get("strike_gain")
+    except Exception:
+        pass
+
+    _gb_dp = _get_gb_dp_rates()
+
+    lw = {
+        "Out": 0.0, "FieldersChoice": 0.0, "Sacrifice": 0.0,
+        "Single": 0.47, "Double": 0.78, "Triple": 1.05, "HomeRun": 1.40,
+        "Error": 0.47,
+    }
+    hist_cal = _get_historical_cal()
+    if hist_cal and hist_cal.linear_weights:
+        lw["Single"] = hist_cal.linear_weights.get("single_w", 0.47)
+        lw["Double"] = hist_cal.linear_weights.get("double_w", 0.78)
+        lw["Triple"] = hist_cal.linear_weights.get("triple_w", 1.05)
+        lw["HomeRun"] = hist_cal.linear_weights.get("hr_w", 1.40)
+        lw["Error"] = hist_cal.linear_weights.get("single_w", 0.47)
+
+    # Pitcher-specific batted ball profile
+    _pitcher_gb_pct = None
+    _pitcher_fb_pct = None
+    _pitcher_scores = matchup.get("pitch_scores", {})
+    _usage_weighted_gb = 0.0
+    _usage_weighted_fb = 0.0
+    _usage_total = 0.0
+    for _pn, _pi in _pitcher_scores.items():
+        _raw = _pi.get("raw", _pi) if isinstance(_pi, dict) else {}
+        _u = float(_raw.get("usage", 0) or 0)
+        _gb = _raw.get("gb_pct", np.nan)
+        _fb = _raw.get("fb_pct", np.nan)
+        if not np.isnan(_u) and _u > 0:
+            if not np.isnan(_gb if isinstance(_gb, float) else float("nan")):
+                _usage_weighted_gb += float(_gb) * _u
+                _usage_total += _u
+            if not np.isnan(_fb if isinstance(_fb, float) else float("nan")):
+                _usage_weighted_fb += float(_fb) * _u
+    if _usage_total > 0:
+        _pitcher_gb_pct = _usage_weighted_gb / _usage_total
+        _pitcher_fb_pct = _usage_weighted_fb / _usage_total if _usage_weighted_fb > 0 else None
+
+    RE_SCALE = 0.0005
+    rows: List[Dict[str, Any]] = []
+
+    for pitch_name, info in matchup["pitch_scores"].items():
+        reasons: List[str] = []
+
+        # 1. Get league-average outcome probs
+        league_probs_obj = None
+        if cal and pitch_name in cal.outcome_probs and count_str in cal.outcome_probs[pitch_name]:
+            league_probs_obj = cal.outcome_probs[pitch_name][count_str]
+        elif cal and pitch_name in cal.outcome_probs:
+            avail = cal.outcome_probs[pitch_name]
+            if avail:
+                def _count_dist(c_str):
+                    try:
+                        cb, cs = int(c_str.split("-")[0]), int(c_str.split("-")[1])
+                        return abs(cb - b) + abs(cs - s)
+                    except (ValueError, IndexError):
+                        return 99
+                nearest = min(avail.keys(), key=_count_dist)
+                league_probs_obj = avail[nearest]
+
+        if league_probs_obj is None:
+            league_probs_obj = PitchOutcomeProbs(
+                p_ball=0.38, p_called_strike=0.17, p_swinging_strike=0.10,
+                p_foul=0.18, p_in_play=0.16, p_hbp=0.01,
+            )
+
+        league_probs_dict = league_probs_obj.as_dict() if hasattr(league_probs_obj, 'as_dict') else {
+            "p_ball": league_probs_obj.p_ball,
+            "p_called_strike": league_probs_obj.p_called_strike,
+            "p_swinging_strike": league_probs_obj.p_swinging_strike,
+            "p_foul": league_probs_obj.p_foul,
+            "p_in_play": league_probs_obj.p_in_play,
+            "p_hbp": league_probs_obj.p_hbp,
+        }
+
+        # 2. Apply matchup adjustments
+        pitcher_metrics = {
+            "whiff_pct": info.get("shrunk_whiff", info.get("our_whiff")),
+            "csw_pct": info.get("shrunk_csw", info.get("our_csw")),
+            "chase_pct": info.get("shrunk_chase", info.get("our_chase")),
+            "ev_against": info.get("shrunk_ev", info.get("our_ev_against")),
+            "count": info.get("count", 0),
+        }
+        hitter_metrics = {
+            "k_pct": hd.get("k_pct"),
+            "chase_pct": hd.get("chase_pct"),
+            "contact_pct": hd.get("contact_pct"),
+            "pa": hd.get("pa"),
+        }
+
+        adjusted = compute_matchup_adjusted_probs(
+            league_probs_dict, pitcher_metrics, hitter_metrics,
+        )
+
+        adj_probs = PitchOutcomeProbs(
+            p_ball=adjusted["p_ball"],
+            p_called_strike=adjusted["p_called_strike"],
+            p_swinging_strike=adjusted["p_swinging_strike"],
+            p_foul=adjusted["p_foul"],
+            p_in_play=adjusted["p_in_play"],
+            p_hbp=adjusted["p_hbp"],
+        )
+
+        # Adjust contact RV
+        base_crv = cal.contact_rv.get(pitch_name, 0.12) if cal else 0.12
+        crv_adj = adjusted.get("contact_rv_adj", 1.0)
+        adjusted_crv = base_crv * crv_adj
+        adjusted_contact_rv = dict(cal.contact_rv) if cal else {}
+        adjusted_contact_rv[pitch_name] = adjusted_crv
+
+        # 3. Compute ΔWP
+        delta_wp_base = compute_delta_wp(
+            pitch_type=pitch_name,
+            count=count_str,
+            base_out_state=base_out,
+            outcome_probs=adj_probs,
+            wp_table=wpt,
+            score_diff=score_diff,
+            inning=inning,
+            half=half,
+            contact_rv=adjusted_contact_rv,
+            linear_weights=lw,
+            bip_profile=cal.bip_profiles if cal else None,
+            gb_dp_rates=_gb_dp,
+            pitcher_gb_pct=_pitcher_gb_pct,
+            pitcher_fb_pct=_pitcher_fb_pct,
+            tag_up_score_pct=None,
+            count_ball_cost=_count_ball_cost,
+            count_strike_gain=_count_strike_gain,
+        )
+
+        # 4. Sequence adjustments (convert to ΔWP scale via ratio)
+        se_delta_old, se_reasons = _sequence_adjustments(pitch_name, state, tun_df=tun_df, seq_df=seq_df)
+        # Convert old-system sequence delta to ΔWP: use WP scale factor
+        # ΔWP is typically ~10x smaller than ΔRE, so WP_SCALE = RE_SCALE * 0.1
+        WP_SCALE = RE_SCALE * 0.1  # 0.00005
+        delta_wp_seq = -se_delta_old * WP_SCALE if abs(se_delta_old) > 0.5 else 0.0
+
+        # Steal/squeeze
+        sb_delta_old, sb_reasons = _steal_adjustments(pitch_name, info, state)
+        delta_wp_steal = -sb_delta_old * WP_SCALE
+
+        sq_delta_old, sq_reasons = _squeeze_adjustments(pitch_name, info, state)
+        delta_wp_squeeze = -sq_delta_old * WP_SCALE
+
+        # Game-theory hitter adjustments
+        gt_delta_old = 0.0
+        gt_reasons: List[str] = []
+        is_hard = pitch_name in _HARD_PITCHES
+        is_offspeed = pitch_name in _OFFSPEED_PITCHES
+
+        h_bb_pct = _safe_hd(hd.get("bb_pct"))
+        h_chase_pct = _safe_hd(hd.get("chase_pct"))
+        h_whiff_2k_os = _safe_hd(hd.get("whiff_2k_os"))
+        h_whiff_2k_hard = _safe_hd(hd.get("whiff_2k_hard"))
+        h_fp_swing_hard = _safe_hd(hd.get("fp_swing_hard"))
+        h_fp_swing_ch = _safe_hd(hd.get("fp_swing_ch"))
+        h_gb = _safe_hd(hd.get("gb_pct"))
+
+        if b == 3 and is_offspeed and not np.isnan(h_bb_pct) and h_bb_pct > 12:
+            penalty = min((h_bb_pct - 12) / 8 * 2.0, 2.0)
+            gt_delta_old -= penalty
+            gt_reasons.append(f"disciplined ({h_bb_pct:.0f}% BB): risky offspeed at 3-ball")
+
+        if s == 2:
+            if is_offspeed and not np.isnan(h_whiff_2k_os) and h_whiff_2k_os > 30:
+                boost = min((h_whiff_2k_os - 30) / 10 * 5.0, 5.0)
+                gt_delta_old += boost
+                gt_reasons.append(f"2K: hitter whiffs {h_whiff_2k_os:.0f}% on OS")
+            if is_hard and not np.isnan(h_whiff_2k_hard) and h_whiff_2k_hard > 35:
+                boost = min((h_whiff_2k_hard - 35) / 10 * 4.0, 4.0)
+                gt_delta_old += boost
+                gt_reasons.append(f"2K: hitter whiffs {h_whiff_2k_hard:.0f}% on hard")
+
+        if b == 0 and s == 0:
+            if is_offspeed and not np.isnan(h_fp_swing_hard) and h_fp_swing_hard > 40:
+                boost = min((h_fp_swing_hard - 40) / 15 * 3.0, 3.0)
+                gt_delta_old += boost
+                gt_reasons.append(f"FP: hitter attacks hard {h_fp_swing_hard:.0f}%, offspeed boost")
+            if not np.isnan(h_fp_swing_ch) and h_fp_swing_ch > 35 and pitch_name in {"Changeup", "Splitter"}:
+                gt_delta_old += min((h_fp_swing_ch - 35) / 15 * 2.0, 2.0)
+
+        if b >= 2 and b > s and b < 3 and is_offspeed:
+            if not np.isnan(h_chase_pct) and h_chase_pct > 28:
+                boost = min((h_chase_pct - 28) / 8 * 3.0, 3.0)
+                gt_delta_old += boost
+                gt_reasons.append(f"chaser ({h_chase_pct:.0f}%): OS viable behind")
+            elif not np.isnan(h_chase_pct) and h_chase_pct < 22:
+                gt_delta_old -= 1.5
+
+        # Count-group hitter performance overlay
+        h_by_count = hd.get("by_count", {})
+        if h_by_count:
+            _cg_map = {
+                (2, 0): "ahead", (3, 0): "ahead", (3, 1): "ahead", (2, 1): "ahead",
+                (0, 1): "behind", (0, 2): "behind", (1, 2): "behind",
+                (1, 1): "even", (2, 2): "even",
+                (3, 2): "full",
+            }
+            cg = _cg_map.get((b, s))
+            if cg and cg in h_by_count:
+                cg_data = h_by_count[cg]
+                cg_n = cg_data.get("n", 0) or 0
+                if cg_n >= 5:
+                    cg_whiff = _safe_hd(cg_data.get("whiff_pct"))
+                    cg_ev = _safe_hd(cg_data.get("avg_ev"))
+                    if not np.isnan(cg_whiff) and cg_whiff > 30 and is_offspeed:
+                        gt_delta_old += min((cg_whiff - 30) / 15 * 2.0, 2.0)
+                    if not np.isnan(cg_ev) and cg_ev < 82 and is_hard:
+                        gt_delta_old += 1.5
+                    if not np.isnan(cg_ev) and cg_ev > 90:
+                        if is_hard:
+                            gt_delta_old -= 1.5
+                        if not np.isnan(cg_whiff) and cg_whiff < 15:
+                            gt_delta_old -= 1.0
+
+        if on1b and not on2b and not on3b and outs < 2:
+            if not np.isnan(h_gb) and h_gb > 50 and pitch_name in _GB_PITCHES:
+                boost = min((h_gb - 50) / 15 * 3.0, 3.0)
+                gt_delta_old += boost
+                gt_reasons.append(f"GB hitter ({h_gb:.0f}%): DP boost with {pitch_name}")
+
+        delta_wp_gametheory = -gt_delta_old * WP_SCALE
+
+        # Hole-score overlay
+        hs_delta_old, hs_reasons = _hole_score_overlay(pitch_name, hd)
+        delta_wp_holes = -hs_delta_old * WP_SCALE
+
+        # Leverage adjustments (using WP-derived leverage)
+        lv_delta_old, lv_reasons = _leverage_adjustments(pitch_name, info, state, wp_leverage=wp_lev)
+        delta_wp_leverage = -lv_delta_old * WP_SCALE
+
+        # Usage dampening (same logic, WP scale)
+        usage = info.get("usage", np.nan)
+        delta_wp_usage = 0.0
+        usage_reasons: List[str] = []
+        if not np.isnan(usage):
+            usage_f = float(usage)
+            if pitch_name in _HARD_PITCHES:
+                sigmoid_centre = 15.0
+            elif pitch_name in {"Slider", "Curveball", "Changeup"}:
+                sigmoid_centre = 10.0
+            else:
+                sigmoid_centre = 8.0
+            reliability_usage = min(1.0, max(0.0, 1.0 / (1.0 + math.exp(-0.35 * (usage_f - sigmoid_centre)))))
+            n_pitches = int(info.get("count", 0) or 0)
+            reliability_sample = n_pitches / (n_pitches + 150) if n_pitches > 0 else 0.0
+            reliability = max(reliability_usage, reliability_sample)
+
+            if delta_wp_base < 0:
+                dampened = delta_wp_base * reliability
+                delta_wp_usage = dampened - delta_wp_base
+            if usage_f >= 30.0:
+                delta_wp_usage -= 0.0002
+            elif usage_f >= 20.0:
+                delta_wp_usage -= 0.0001
+            if usage_f < 8.0:
+                usage_reasons.append(f"low usage ({usage_f:.0f}%): reliability {reliability:.0%}")
+            if b == 3 and usage_f < 10.0:
+                extra = 0.0004 if usage_f < 5.0 else 0.0002
+                delta_wp_usage += extra
+
+        delta_wp_total = (delta_wp_base + delta_wp_seq + delta_wp_steal
+                         + delta_wp_squeeze + delta_wp_gametheory + delta_wp_holes
+                         + delta_wp_leverage + delta_wp_usage)
+        wpa_per_100 = -delta_wp_total * 10000  # WP basis points per 100 pitches
+
+        # Build reasons
+        reasons.extend(info.get("reasons") or [])
+        reasons.extend(se_reasons)
+        reasons.extend(sb_reasons)
+        reasons.extend(sq_reasons)
+        reasons.extend(gt_reasons)
+        reasons.extend(hs_reasons)
+        reasons.extend(lv_reasons)
+        reasons.extend(usage_reasons)
+
+        n_p = int(info.get("count", 0) or 0)
+        from decision_engine.core.shrinkage import confidence_tier
+        conf = confidence_tier(n_p)
+
+        rows.append({
+            "pitch": pitch_name,
+            "delta_wp": float(round(delta_wp_total, 7)),
+            "wpa_per_100": float(round(wpa_per_100, 2)),
+            # Also include ΔRE-equivalent fields for backward compat
+            "delta_re": float(round(delta_wp_total, 7)),
+            "rs100": float(round(wpa_per_100, 2)),
+            "delta_wp_base": float(round(delta_wp_base, 7)),
+            "delta_wp_seq": float(round(delta_wp_seq, 7)),
+            "delta_wp_steal": float(round(delta_wp_steal, 7)),
+            "delta_wp_squeeze": float(round(delta_wp_squeeze, 7)),
+            "delta_wp_gametheory": float(round(delta_wp_gametheory, 7)),
+            "delta_wp_holes": float(round(delta_wp_holes, 7)),
+            "delta_wp_leverage": float(round(delta_wp_leverage, 7)),
+            "delta_wp_usage": float(round(delta_wp_usage, 7)),
+            "wp_leverage": float(round(wp_lev, 3)),
+            "confidence": conf,
+            "confidence_n": n_p,
+            "reasons": reasons,
+            "raw": info,
+        })
+
+    # Sort by ΔWP ascending (most negative = best for pitcher)
+    rows.sort(key=lambda r: r["delta_wp"])
     return rows[: max(1, int(top_n))]

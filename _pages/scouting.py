@@ -390,53 +390,106 @@ def _get_opp_hitter_profile(tm, hitter, team, pitch_df=None):
     if isinstance(hole_df, pd.DataFrame) and not hole_df.empty:
         hitter_holes = hole_df[hole_df["playerFullName"].astype(str).str.strip() == str(hitter).strip()]
         if not hitter_holes.empty:
-            # Aggregate scores (pitch_type="ALL" or old packs without pitch_type)
-            if "pitch_type" in hitter_holes.columns:
-                agg = hitter_holes[hitter_holes["pitch_type"] == "ALL"]
-            else:
-                agg = hitter_holes
-            profile["hole_scores_3x3"] = {
-                (int(r["xb"]), int(r["yb"])): float(r["score"])
-                for _, r in agg.iterrows()
-            }
+            has_pitcher_throws = "pitcher_throws" in hitter_holes.columns
+            has_pitch_type = "pitch_type" in hitter_holes.columns
 
-            # Per-pitch-type scores
-            if "pitch_type" in hitter_holes.columns:
-                by_pt = {}
-                for pt in hitter_holes["pitch_type"].unique():
-                    if pt == "ALL":
-                        continue
-                    pt_rows = hitter_holes[hitter_holes["pitch_type"] == pt]
-                    by_pt[pt] = {
-                        (int(r["xb"]), int(r["yb"])): {
-                            "score": float(r["score"]),
-                            "swing_pct": float(r.get("swing_pct", 0.5)),
-                            "slg": float(r.get("slg", 0.4)),
-                            "ev_mean": float(r.get("ev_mean", 85)),
-                            "n": int(r.get("n", 0)),
+            # Helper: extract hole scores for a filtered subset
+            def _extract_holes(subset):
+                agg_sub = subset[subset["pitch_type"] == "ALL"] if has_pitch_type else subset
+                agg_dict = {
+                    (int(r["xb"]), int(r["yb"])): float(r["score"])
+                    for _, r in agg_sub.iterrows()
+                }
+                by_pt_dict = {}
+                if has_pitch_type:
+                    for pt in subset["pitch_type"].unique():
+                        if pt == "ALL":
+                            continue
+                        pt_rows = subset[subset["pitch_type"] == pt]
+                        by_pt_dict[pt] = {
+                            (int(r["xb"]), int(r["yb"])): {
+                                "score": float(r["score"]),
+                                "swing_pct": float(r.get("swing_pct", 0.5)),
+                                "slg": float(r.get("slg", 0.4)),
+                                "ev_mean": float(r.get("ev_mean", 85)),
+                                "n": int(r.get("n", 0)),
+                            }
+                            for _, r in pt_rows.iterrows()
                         }
-                        for _, r in pt_rows.iterrows()
-                    }
-                profile["hole_scores_by_pt"] = by_pt
+                return agg_dict, by_pt_dict
+
+            # Aggregate (pitcher_throws="ALL" or old packs without pitcher_throws)
+            if has_pitcher_throws:
+                agg_rows = hitter_holes[hitter_holes["pitcher_throws"] == "ALL"]
+            else:
+                agg_rows = hitter_holes
+            agg_3x3, agg_by_pt = _extract_holes(agg_rows)
+            if agg_3x3:
+                profile["hole_scores_3x3"] = agg_3x3
+            if agg_by_pt:
+                profile["hole_scores_by_pt"] = agg_by_pt
+
+            # Platoon-specific hole scores (vs RHP, vs LHP)
+            if has_pitcher_throws:
+                by_hand = {}
+                by_hand_3x3 = {}
+                for hand in ("R", "L"):
+                    hand_rows = hitter_holes[hitter_holes["pitcher_throws"] == hand]
+                    if hand_rows.empty:
+                        continue
+                    h_3x3, h_by_pt = _extract_holes(hand_rows)
+                    if h_by_pt:
+                        by_hand[hand] = h_by_pt
+                    if h_3x3:
+                        by_hand_3x3[hand] = h_3x3
+                if by_hand:
+                    profile["hole_scores_by_hand"] = by_hand
+                if by_hand_3x3:
+                    profile["hole_scores_3x3_by_hand"] = by_hand_3x3
 
     # Count-zone metrics
     czm_df = tm["hitting"].get("count_zone_metrics", pd.DataFrame())
     if isinstance(czm_df, pd.DataFrame) and not czm_df.empty:
         hitter_czm = czm_df[czm_df["playerFullName"].astype(str).str.strip() == str(hitter).strip()]
         if not hitter_czm.empty:
-            czm = {}
-            for cg in hitter_czm["count_group"].unique():
-                cg_rows = hitter_czm[hitter_czm["count_group"] == cg]
-                czm[cg] = {
-                    (int(r["xb"]), int(r["yb"])): {
-                        "swing_rate": float(r["swing_rate"]),
-                        "whiff_rate": float(r["whiff_rate"]),
-                        "slg": float(r["slg"]),
-                        "n": int(r["n"]),
+            has_pt_col = "pitcher_throws" in hitter_czm.columns
+
+            def _extract_czm(subset):
+                czm_out = {}
+                for cg in subset["count_group"].unique():
+                    cg_rows = subset[subset["count_group"] == cg]
+                    czm_out[cg] = {
+                        (int(r["xb"]), int(r["yb"])): {
+                            "swing_rate": float(r["swing_rate"]),
+                            "whiff_rate": float(r["whiff_rate"]),
+                            "slg": float(r["slg"]),
+                            "n": int(r["n"]),
+                        }
+                        for _, r in cg_rows.iterrows()
                     }
-                    for _, r in cg_rows.iterrows()
-                }
-            profile["count_zone_metrics"] = czm
+                return czm_out
+
+            # Aggregate count-zone metrics
+            if has_pt_col:
+                czm_agg = hitter_czm[hitter_czm["pitcher_throws"] == "ALL"]
+            else:
+                czm_agg = hitter_czm
+            czm = _extract_czm(czm_agg)
+            if czm:
+                profile["count_zone_metrics"] = czm
+
+            # Platoon-specific count-zone metrics
+            if has_pt_col:
+                czm_by_hand = {}
+                for hand in ("R", "L"):
+                    hand_rows = hitter_czm[hitter_czm["pitcher_throws"] == hand]
+                    if hand_rows.empty:
+                        continue
+                    h_czm = _extract_czm(hand_rows)
+                    if h_czm:
+                        czm_by_hand[hand] = h_czm
+                if czm_by_hand:
+                    profile["count_zone_by_hand"] = czm_by_hand
 
     return profile
 

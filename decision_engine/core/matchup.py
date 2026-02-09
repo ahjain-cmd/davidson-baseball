@@ -32,6 +32,27 @@ def _build_hitter_data(hitter_profile: Dict[str, Any], throws: str) -> Dict[str,
     woba_key = "woba_lhp" if throws == "L" else "woba_rhp"
     woba_split = hitter_profile.get(woba_key, np.nan)
     hand_key = "lhp" if throws == "L" else "rhp"
+
+    # Platoon-specific hole scores: prefer vs-this-hand, fall back to aggregate
+    by_hand = hitter_profile.get("hole_scores_by_hand", {})
+    by_hand_3x3 = hitter_profile.get("hole_scores_3x3_by_hand", {})
+    czm_by_hand = hitter_profile.get("count_zone_by_hand", {})
+
+    if throws in ("R", "L") and throws in by_hand:
+        hole_scores_by_pt = by_hand[throws]
+    else:
+        hole_scores_by_pt = hitter_profile.get("hole_scores_by_pt", {})
+
+    if throws in ("R", "L") and throws in by_hand_3x3:
+        hole_scores_3x3 = by_hand_3x3[throws]
+    else:
+        hole_scores_3x3 = hitter_profile.get("hole_scores_3x3", {})
+
+    if throws in ("R", "L") and throws in czm_by_hand:
+        count_zone_metrics = czm_by_hand[throws]
+    else:
+        count_zone_metrics = hitter_profile.get("count_zone_metrics", {})
+
     return {
         "pa": hitter_profile.get("pa", np.nan),
         "ops": hitter_profile.get("ops", np.nan),
@@ -64,9 +85,9 @@ def _build_hitter_data(hitter_profile: Dict[str, Any], throws: str) -> Dict[str,
         "inside_pct": hitter_profile.get("inside_pct", np.nan),
         "outside_pct": hitter_profile.get("outside_pct", np.nan),
         "zone_vuln": hitter_profile.get("zone_vuln", {}),
-        "hole_scores_3x3": hitter_profile.get("hole_scores_3x3", {}),
-        "hole_scores_by_pt": hitter_profile.get("hole_scores_by_pt", {}),
-        "count_zone_metrics": hitter_profile.get("count_zone_metrics", {}),
+        "hole_scores_3x3": hole_scores_3x3,
+        "hole_scores_by_pt": hole_scores_by_pt,
+        "count_zone_metrics": count_zone_metrics,
         "by_count": hitter_profile.get("by_count", {}),
         "by_pitch_class": hitter_profile.get("by_pitch_class", {}),
     }

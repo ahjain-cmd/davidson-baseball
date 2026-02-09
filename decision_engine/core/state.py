@@ -55,6 +55,8 @@ class GameState:
     last_pitches: Tuple[str, ...] = ()
     # Full pitch log for this game (for fatigue tracking)
     pitch_log: Tuple[PitchRecord, ...] = ()
+    # WP-derived leverage (set when WP table is available, None = use heuristic)
+    wp_leverage: Optional[float] = None
 
     def count(self) -> Tuple[int, int]:
         return (int(self.balls), int(self.strikes))
