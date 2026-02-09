@@ -391,16 +391,27 @@ def recommend_pitch_location(
     stuff_plus = float(stuff_plus) if pd.notna(stuff_plus) else 100.0
     sp_clamped = max(90.0, min(120.0, stuff_plus))
 
-    if has_pt_holes:
-        # Pitch-type data = highest confidence → boost hitter weight by ~0.08
-        w_hitter = float(np.interp(sp_clamped, [90, 105, 120], [0.60, 0.45, 0.20]))
-    elif has_agg_holes:
-        # Aggregate data = good confidence
-        w_hitter = float(np.interp(sp_clamped, [90, 105, 120], [0.55, 0.40, 0.15]))
-    elif has_hitter:
-        w_hitter = 0.30  # directional only
+    if pitch_name in _OFFSPEED_PITCHES:
+        # Secondary pitches: boost pitcher weight — command matters more for
+        # breaking balls, and pitcher whiff/CSW zones reflect pitch shape.
+        if has_pt_holes:
+            w_hitter = float(np.interp(sp_clamped, [90, 105, 120], [0.45, 0.30, 0.15]))
+        elif has_agg_holes:
+            w_hitter = float(np.interp(sp_clamped, [90, 105, 120], [0.40, 0.25, 0.10]))
+        elif has_hitter:
+            w_hitter = 0.20
+        else:
+            w_hitter = 0.0
     else:
-        w_hitter = 0.0   # pitcher-only
+        # Hard pitches (fastball/sinker/cutter): current behavior
+        if has_pt_holes:
+            w_hitter = float(np.interp(sp_clamped, [90, 105, 120], [0.60, 0.45, 0.20]))
+        elif has_agg_holes:
+            w_hitter = float(np.interp(sp_clamped, [90, 105, 120], [0.55, 0.40, 0.15]))
+        elif has_hitter:
+            w_hitter = 0.30
+        else:
+            w_hitter = 0.0
 
     w_pitcher = 0.75 - w_hitter
     w_count = 0.25
@@ -424,7 +435,35 @@ def recommend_pitch_location(
         hitter_vuln = 0.0
         vuln_source = None
         pt_cell = None
-        if has_pt_holes and (xb, yb) in pt_holes:
+        if pitch_name in _OFFSPEED_PITCHES and has_pt_holes and (xb, yb) in pt_holes:
+            # Secondary pitches: use SLG + whiff from pitch-type data
+            # instead of composite hole score (which conflates swing
+            # vulnerability across all pitch types).
+            pt_cell = pt_holes[(xb, yb)]
+            raw_slg = pt_cell.get("slg", 0.4)
+            raw_whiff = pt_cell.get("whiff_pct", 0.0)
+
+            # Inverse SLG (0-100): low SLG against this pitch = attackable
+            inv_slg = (1.0 - min(raw_slg / 1.5, 1.0)) * 100.0
+            # Whiff rate (0-100)
+            whiff_score = min(raw_whiff, 100.0)
+
+            # 55% damage avoidance + 45% whiff generation
+            secondary_vuln = 0.55 * inv_slg + 0.45 * whiff_score
+
+            # Sample-size shrinkage toward aggregate when n is small
+            n_pt = pt_cell.get("n", 0)
+            shrink_n = 25
+            if n_pt < shrink_n and has_agg_holes and (xb, yb) in hole_scores_agg:
+                w = n_pt / (n_pt + shrink_n)
+                agg_score = hole_scores_agg[(xb, yb)]
+                secondary_vuln = w * secondary_vuln + (1 - w) * agg_score
+
+            hitter_vuln = secondary_vuln
+            vuln_source = "pt_sec"
+        elif has_pt_holes and (xb, yb) in pt_holes:
+            # Hard pitches: use composite hole score (captures swing path
+            # vulnerability, whiff tendency, barrel avoidance).
             pt_cell = pt_holes[(xb, yb)]
             hitter_vuln = pt_cell["score"]
             vuln_source = "pt"
@@ -470,7 +509,9 @@ def recommend_pitch_location(
 
         # Build reason string
         reasons = []
-        if vuln_source == "pt" and pt_cell is not None:
+        if vuln_source == "pt_sec" and pt_cell is not None:
+            reasons.append(f"{pitch_name} SLG {raw_slg:.3f} whiff {raw_whiff:.0f}% (n={pt_cell['n']})")
+        elif vuln_source == "pt" and pt_cell is not None:
             reasons.append(f"{pitch_name} hole {hitter_vuln:.0f} (n={pt_cell['n']})")
         elif vuln_source == "agg":
             reasons.append(f"hole {hitter_vuln:.0f}")
