@@ -395,6 +395,7 @@ def render_ingame_panel(data):
             arsenal["pitches"].get(pitch_name, {}),
             state,
             hitter_zone_vuln=hitter_zv,
+            hitter_data=matchup.get("hitter_data", {}),
             bats=matchup.get("bats", "R"),
             throws=arsenal.get("throws", "Right"),
         )

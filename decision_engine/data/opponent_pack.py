@@ -179,6 +179,57 @@ def load_opponent_pack(team_id: str, season_year: int) -> Optional[Dict[str, Any
     return out
 
 
+def _compute_and_store_hole_scores(pack: Dict[str, Any], opp_pitches: pd.DataFrame) -> None:
+    """Compute per-hitter hole scores and store in pack["hitting"]["hole_scores"]."""
+    from analytics.zone_vulnerability import compute_hole_scores_3x3
+
+    rate_df = pack.get("hitting", {}).get("rate", pd.DataFrame())
+    if rate_df.empty:
+        return
+
+    name_col = "playerFullName" if "playerFullName" in rate_df.columns else (
+        "fullName" if "fullName" in rate_df.columns else None
+    )
+    if name_col is None:
+        return
+
+    hitter_names = rate_df[name_col].dropna().astype(str).unique().tolist()
+    if not hitter_names:
+        return
+
+    has_batter_col = "Batter" in opp_pitches.columns
+
+    rows = []
+    for hitter in hitter_names:
+        if has_batter_col:
+            hitter_pitches = opp_pitches[
+                opp_pitches["Batter"].astype(str).str.strip() == str(hitter).strip()
+            ]
+        else:
+            continue
+
+        if len(hitter_pitches) < 30:
+            continue
+
+        # Get batter hand
+        bats = "?"
+        hitter_rate = rate_df[rate_df[name_col].astype(str).str.strip() == str(hitter).strip()]
+        if not hitter_rate.empty and "batsHand" in hitter_rate.columns:
+            bats = hitter_rate.iloc[0].get("batsHand", "?")
+
+        scores = compute_hole_scores_3x3(hitter_pitches, bats)
+        for (xb, yb), score in scores.items():
+            rows.append({
+                "playerFullName": hitter,
+                "xb": xb,
+                "yb": yb,
+                "score": score,
+            })
+
+    if rows:
+        pack.setdefault("hitting", {})["hole_scores"] = pd.DataFrame(rows)
+
+
 def load_or_build_opponent_pack(
     *,
     team_id: str,
@@ -239,6 +290,15 @@ def load_or_build_opponent_pack(
         pack["defense"] = team_defense_profile(team_name)
     except Exception:
         pack["defense"] = {k: pd.DataFrame() for k in _DEFENSE_TABLES}
+
+    # Compute per-hitter hole scores from pitch-level data (best-effort).
+    try:
+        from data.truemedia_api import fetch_team_all_pitches_trackman
+        opp_pitches = fetch_team_all_pitches_trackman(team_id, season_year)
+        if opp_pitches is not None and not opp_pitches.empty:
+            _compute_and_store_hole_scores(pack, opp_pitches)
+    except Exception:
+        pass  # hole scores are best-effort enrichment
 
     save_opponent_pack(pack, team_id=team_id, team_name=team_name, season_year=season_year)
     return pack

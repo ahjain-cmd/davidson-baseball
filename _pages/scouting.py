@@ -48,6 +48,7 @@ from analytics.zone_vulnerability import (
     compute_zone_swing_metrics as _zv_compute_zone_swing_metrics,
     analyze_zone_patterns as _zv_analyze_zone_patterns,
     swing_path_vulnerability as _zv_swing_path_vulnerability,
+    compute_hole_scores_3x3 as _zv_compute_hole_scores_3x3,
 )
 
 
@@ -383,6 +384,16 @@ def _get_opp_hitter_profile(tm, hitter, team, pitch_df=None):
         hitter_pitches = pitch_df[pitch_df["Batter"].astype(str).str.strip() == str(hitter).strip()] if "Batter" in pitch_df.columns else pd.DataFrame()
         if len(hitter_pitches) >= 50:
             profile["zone_vuln"] = compute_zone_vulnerability_summary(hitter_pitches, bats)
+
+    # Pre-computed hole scores from opponent pack (3x3 grid, 0-100)
+    hole_df = tm["hitting"].get("hole_scores", pd.DataFrame())
+    if isinstance(hole_df, pd.DataFrame) and not hole_df.empty:
+        hitter_holes = hole_df[hole_df["playerFullName"].astype(str).str.strip() == str(hitter).strip()]
+        if not hitter_holes.empty:
+            profile["hole_scores_3x3"] = {
+                (int(r["xb"]), int(r["yb"])): float(r["score"])
+                for _, r in hitter_holes.iterrows()
+            }
 
     return profile
 
@@ -5998,57 +6009,45 @@ def _swing_hole_finder(b_tm, hitter_name, bats=None, bats_norm=None, sp=None, is
         return f"{y_lbl}-{x_lbl}"
 
     def _definitive_holes(df, bats, sp, min_zone_n=15):
-        """Compute top definitive swing holes using whiff, SLG, and data-driven swing path analysis."""
+        """Compute top definitive swing holes using shared compute_hole_scores_3x3."""
         if df.empty:
             return []
-        d = normalize_pitch_types(df)
-        d = d.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
+
+        scores = _zv_compute_hole_scores_3x3(df, bats, sp=sp, min_zone_n=min_zone_n)
+        if not scores:
+            return []
+
+        # Enrich top zones with display-level detail (whiff, slg, path_vuln, n)
+        d = df.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
         if d.empty:
             return []
         x_edges = np.array([-1.5, -0.5, 0.5, 1.5])
         y_edges = np.array([0.5, 2.0, 3.0, 4.5])
         d["xbin"] = np.clip(np.digitize(d["PlateLocSide"], x_edges) - 1, 0, 2)
         d["ybin"] = np.clip(np.digitize(d["PlateLocHeight"], y_edges) - 1, 0, 2)
-
-        # Compute data-driven zone metrics
         zone_metrics = _compute_zone_swing_metrics(df, bats)
 
         out = []
-        for yb in range(3):
-            for xb in range(3):
-                zdf = d[(d["xbin"] == xb) & (d["ybin"] == yb)]
-                if len(zdf) < min_zone_n:
-                    continue
-                swings = zdf[zdf["PitchCall"].isin(SWING_CALLS)]
-                whiffs = zdf[zdf["PitchCall"] == "StrikeSwinging"]
-                whiff_pct = len(whiffs) / max(len(swings), 1) * 100 if len(swings) >= 5 else np.nan
+        for (xb, yb), hole_score in scores.items():
+            zdf = d[(d["xbin"] == xb) & (d["ybin"] == yb)]
+            swings = zdf[zdf["PitchCall"].isin(SWING_CALLS)] if "PitchCall" in zdf.columns else pd.DataFrame()
+            whiffs = zdf[zdf["PitchCall"] == "StrikeSwinging"] if "PitchCall" in zdf.columns else pd.DataFrame()
+            whiff_pct = len(whiffs) / max(len(swings), 1) * 100 if len(swings) >= 5 else np.nan
+            ab_df = zdf[zdf["PlayResult"].isin(_AB_RESULTS)] if "PlayResult" in zdf.columns else pd.DataFrame()
+            slg = np.nan
+            if len(ab_df) >= 5:
+                tb = ab_df["PlayResult"].apply(_assign_total_bases).sum()
+                slg = tb / len(ab_df) if len(ab_df) > 0 else np.nan
+            path_vuln = _swing_path_vulnerability(zone_metrics, sp, xb, yb, bats=bats)
+            out.append({
+                "zone": _zone_label(xb, yb, bats),
+                "score": hole_score,
+                "whiff": whiff_pct,
+                "slg": slg,
+                "path_vuln": path_vuln,
+                "n": len(zdf),
+            })
 
-                ab_df = zdf[zdf["PlayResult"].isin(_AB_RESULTS)] if "PlayResult" in zdf.columns else pd.DataFrame()
-                slg = np.nan
-                if len(ab_df) >= 5:
-                    tb = ab_df["PlayResult"].apply(_assign_total_bases).sum()
-                    slg = tb / len(ab_df) if len(ab_df) > 0 else np.nan
-                slg_norm = np.clip(slg / 1.2, 0, 1) if not pd.isna(slg) else np.nan
-                slg_score = (1 - slg_norm) * 100 if not pd.isna(slg_norm) else np.nan
-
-                # Data-driven swing path vulnerability
-                path_vuln = _swing_path_vulnerability(zone_metrics, sp, xb, yb, bats=bats)
-
-                hole_score = _weighted_score(
-                    [whiff_pct, slg_score, path_vuln],
-                    [0.45, 0.35, 0.20],
-                )
-
-                out.append({
-                    "zone": _zone_label(xb, yb, bats),
-                    "score": hole_score,
-                    "whiff": whiff_pct,
-                    "slg": slg,
-                    "path_vuln": path_vuln,
-                    "n": len(zdf),
-                })
-
-        out = [r for r in out if pd.notna(r["score"])]
         out.sort(key=lambda x: x["score"], reverse=True)
         return out[:2]
 
@@ -6065,8 +6064,8 @@ def _swing_hole_finder(b_tm, hitter_name, bats=None, bats_norm=None, sp=None, is
         d["xbin"] = np.clip(np.digitize(d["PlateLocSide"], x_edges) - 1, 0, 2)
         d["ybin"] = np.clip(np.digitize(d["PlateLocHeight"], y_edges) - 1, 0, 2)
 
-        # Compute data-driven zone metrics
-        zone_metrics = _compute_zone_swing_metrics(df, bats)
+        # Use shared hole-score computation
+        scores = _zv_compute_hole_scores_3x3(df, bats, sp=sp, min_zone_n=min_zone_n)
 
         hs_grid = np.full((3, 3), np.nan)
         barrel_grid = np.full((3, 3), np.nan)
@@ -6076,34 +6075,17 @@ def _swing_hole_finder(b_tm, hitter_name, bats=None, bats_norm=None, sp=None, is
             for xb in range(3):
                 zdf = d[(d["xbin"] == xb) & (d["ybin"] == yb)]
                 n_grid[yb, xb] = len(zdf)
-                if len(zdf) < min_zone_n:
-                    continue
-                swings = zdf[zdf["PitchCall"].isin(SWING_CALLS)]
-                whiffs = zdf[zdf["PitchCall"] == "StrikeSwinging"]
-                whiff_pct = len(whiffs) / max(len(swings), 1) * 100 if len(swings) >= 5 else np.nan
 
-                ab_df = zdf[zdf["PlayResult"].isin(_AB_RESULTS)] if "PlayResult" in zdf.columns else pd.DataFrame()
-                slg = np.nan
-                if len(ab_df) >= 5:
-                    tb = ab_df["PlayResult"].apply(_assign_total_bases).sum()
-                    slg = tb / len(ab_df) if len(ab_df) > 0 else np.nan
-                slg_norm = np.clip(slg / 1.2, 0, 1) if not pd.isna(slg) else np.nan
-                slg_score = (1 - slg_norm) * 100 if not pd.isna(slg_norm) else np.nan
+                # Populate hole scores from shared computation
+                if (xb, yb) in scores:
+                    hs_grid[yb, xb] = scores[(xb, yb)]
 
-                # Data-driven swing path vulnerability
-                path_vuln = _swing_path_vulnerability(zone_metrics, sp, xb, yb, bats=bats)
-
-                hs = _weighted_score(
-                    [whiff_pct, slg_score, path_vuln],
-                    [0.45, 0.35, 0.20],
-                )
-                hs_grid[yb, xb] = hs
-
-                # Barrel thickness (barrel% on balls in play)
-                ip = zdf[zdf["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed", "Angle"])
-                if len(ip) >= 5:
-                    b_pct = is_barrel_mask(ip).mean() * 100
-                    barrel_grid[yb, xb] = b_pct
+                # Barrel thickness (barrel% on balls in play) — display only
+                if len(zdf) >= min_zone_n:
+                    ip = zdf[zdf["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed", "Angle"])
+                    if len(ip) >= 5:
+                        b_pct = is_barrel_mask(ip).mean() * 100
+                        barrel_grid[yb, xb] = b_pct
 
         x_centers = [(x_edges[i] + x_edges[i + 1]) / 2 for i in range(3)]
         y_centers = [(y_edges[i] + y_edges[i + 1]) / 2 for i in range(3)]

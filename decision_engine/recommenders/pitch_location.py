@@ -275,6 +275,7 @@ def recommend_pitch_location(
     state: GameState,
     *,
     hitter_zone_vuln: Optional[Dict] = None,
+    hitter_data: Optional[Dict] = None,
     bats: str = "R",
     throws: str = "R",
 ) -> Optional[Dict[str, Any]]:
@@ -312,6 +313,10 @@ def recommend_pitch_location(
         and hitter_zone_vuln.get("available", False)
     )
 
+    # Check for hole scores (3x3 grid from Swing Hole Finder)
+    hole_scores = (hitter_data or {}).get("hole_scores_3x3", {})
+    has_holes = bool(hole_scores)
+
     # Score all 3×3 cells
     scored: List[Tuple[Tuple[int, int], float, Dict, str]] = []
     for (xb, yb), zdata in ze3.items():
@@ -327,9 +332,11 @@ def recommend_pitch_location(
         pzm = _get_pzm(pitch_name, xb, yb)
         pitcher_eff_adj = pitcher_eff * pzm
 
-        # Hitter vulnerability score
+        # Hitter vulnerability score — prefer hole scores over directional vuln
         hitter_vuln = 0.0
-        if has_hitter:
+        if has_holes and (xb, yb) in hole_scores:
+            hitter_vuln = hole_scores[(xb, yb)]  # 0-100, higher = attack here
+        elif has_hitter:
             hitter_vuln = _hitter_vuln_score(xb, yb, hitter_zone_vuln, bats)
 
         # Count bonus
@@ -337,7 +344,7 @@ def recommend_pitch_location(
 
         # Combined score — PZM rebalances weights so hitter data doesn't
         # override pitch design (0.30 vuln vs 0.45 pitcher_eff*pzm)
-        if has_hitter:
+        if has_holes or has_hitter:
             combined = 0.30 * hitter_vuln + 0.45 * pitcher_eff_adj + 0.25 * cb
         else:
             combined = 0.70 * pitcher_eff_adj + 0.30 * cb
@@ -352,7 +359,9 @@ def recommend_pitch_location(
 
         # Build reason string
         reasons = []
-        if has_hitter:
+        if has_holes and (xb, yb) in hole_scores:
+            reasons.append(f"hole score {hitter_vuln:.0f}")
+        elif has_hitter:
             reasons.append(f"hitter vuln {hitter_vuln:.0f}")
         wh = zdata.get("whiff_pct", np.nan)
         if pd.notna(wh):
