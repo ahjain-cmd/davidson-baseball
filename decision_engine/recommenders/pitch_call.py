@@ -17,6 +17,14 @@ _SLOW_PITCHES = {"Curveball", "Knuckle Curve"}
 _MEDIUM_PITCHES = {"Changeup", "Splitter", "Slider", "Sweeper"}
 _QUICK_PITCHES = {"Fastball", "Sinker", "Cutter"}
 
+# Count-group mapping (shared by all recommender variants)
+_CG_MAP = {
+    (2, 0): "ahead", (3, 0): "ahead", (3, 1): "ahead", (2, 1): "ahead",
+    (0, 1): "behind", (0, 2): "behind", (1, 2): "behind",
+    (1, 1): "even", (2, 2): "even",
+    (3, 2): "full",
+}
+
 
 # ── Calibrated weights & data (lazy-loaded singletons) ──────────────────────
 _CAL = None
@@ -115,6 +123,29 @@ def _get_metric_ranges():
         return cal.metric_ranges
     from analytics.historical_calibration import fallback_metric_ranges
     return fallback_metric_ranges()
+
+
+_COUNT_CAL_COSTS = None
+
+
+def _get_count_cal_costs():
+    """Cached loader for ball_cost / strike_gain from count calibration."""
+    global _COUNT_CAL_COSTS
+    if _COUNT_CAL_COSTS is None:
+        import json as _json
+        from config import CACHE_DIR
+        try:
+            _cc_path = os.path.join(CACHE_DIR, "count_calibration.json")
+            if os.path.exists(_cc_path):
+                with open(_cc_path) as _ccf:
+                    _cc = _json.load(_ccf)
+                _ccd = _cc.get("calibration", _cc)
+                _COUNT_CAL_COSTS = (_ccd.get("ball_cost"), _ccd.get("strike_gain"))
+            else:
+                _COUNT_CAL_COSTS = (None, None)
+        except Exception:
+            _COUNT_CAL_COSTS = (None, None)
+    return _COUNT_CAL_COSTS
 
 
 def _clamp(x: float, lo: float = 0.0, hi: float = 100.0) -> float:
@@ -311,6 +342,103 @@ def _safe_hd(v) -> float:
         return f if not np.isnan(f) else float("nan")
     except Exception:
         return float("nan")
+
+
+def _hitter_gametheory_delta(
+    pitch_name: str,
+    hd: Dict,
+    b: int,
+    s: int,
+    on1b: bool,
+    on2b: bool,
+    on3b: bool,
+    outs: int,
+) -> Tuple[float, List[str]]:
+    """Hitter-specific game-theory adjustments shared by ΔRE and ΔWPA recommenders.
+
+    Returns (delta, reasons) in old-system points; caller converts to ΔRE/ΔWP units.
+    """
+    delta = 0.0
+    reasons: List[str] = []
+    is_hard = pitch_name in _HARD_PITCHES
+    is_offspeed = pitch_name in _OFFSPEED_PITCHES
+
+    h_bb_pct = _safe_hd(hd.get("bb_pct"))
+    h_chase_pct = _safe_hd(hd.get("chase_pct"))
+    h_whiff_2k_os = _safe_hd(hd.get("whiff_2k_os"))
+    h_whiff_2k_hard = _safe_hd(hd.get("whiff_2k_hard"))
+    h_fp_swing_hard = _safe_hd(hd.get("fp_swing_hard"))
+    h_fp_swing_ch = _safe_hd(hd.get("fp_swing_ch"))
+    h_gb = _safe_hd(hd.get("gb_pct"))
+
+    # Disciplined hitter at 3-ball: offspeed penalty
+    if b == 3 and is_offspeed and not np.isnan(h_bb_pct) and h_bb_pct > 12:
+        penalty = min((h_bb_pct - 12) / 8 * 2.0, 2.0)
+        delta -= penalty
+        reasons.append(f"disciplined ({h_bb_pct:.0f}% BB): risky offspeed at 3-ball")
+
+    # Hitter 2K whiff rates
+    if s == 2:
+        if is_offspeed and not np.isnan(h_whiff_2k_os) and h_whiff_2k_os > 30:
+            boost = min((h_whiff_2k_os - 30) / 10 * 5.0, 5.0)
+            delta += boost
+            reasons.append(f"2K: hitter whiffs {h_whiff_2k_os:.0f}% on OS")
+        if is_hard and not np.isnan(h_whiff_2k_hard) and h_whiff_2k_hard > 35:
+            boost = min((h_whiff_2k_hard - 35) / 10 * 4.0, 4.0)
+            delta += boost
+            reasons.append(f"2K: hitter whiffs {h_whiff_2k_hard:.0f}% on hard")
+
+    # 0-0 FP swing tendencies
+    if b == 0 and s == 0:
+        if is_offspeed and not np.isnan(h_fp_swing_hard) and h_fp_swing_hard > 40:
+            boost = min((h_fp_swing_hard - 40) / 15 * 3.0, 3.0)
+            delta += boost
+            reasons.append(f"FP: hitter attacks hard {h_fp_swing_hard:.0f}%, offspeed boost")
+        if not np.isnan(h_fp_swing_ch) and h_fp_swing_ch > 35 and pitch_name in {"Changeup", "Splitter"}:
+            delta += min((h_fp_swing_ch - 35) / 15 * 2.0, 2.0)
+
+    # Hitter chase at hitter's counts (not 3-ball)
+    if b >= 2 and b > s and b < 3 and is_offspeed:
+        if not np.isnan(h_chase_pct) and h_chase_pct > 28:
+            boost = min((h_chase_pct - 28) / 8 * 3.0, 3.0)
+            delta += boost
+            reasons.append(f"chaser ({h_chase_pct:.0f}%): OS viable behind")
+        elif not np.isnan(h_chase_pct) and h_chase_pct < 22:
+            delta -= 1.5
+            reasons.append(f"disciplined ({h_chase_pct:.0f}%): OS penalised")
+
+    # Count-group hitter performance overlay
+    h_by_count = hd.get("by_count", {})
+    if h_by_count:
+        cg = _CG_MAP.get((b, s))
+        if cg and cg in h_by_count:
+            cg_data = h_by_count[cg]
+            cg_n = cg_data.get("n", 0) or 0
+            if cg_n >= 5:
+                cg_whiff = _safe_hd(cg_data.get("whiff_pct"))
+                cg_ev = _safe_hd(cg_data.get("avg_ev"))
+                if not np.isnan(cg_whiff) and cg_whiff > 30 and is_offspeed:
+                    boost = min((cg_whiff - 30) / 15 * 2.0, 2.0)
+                    delta += boost
+                    reasons.append(f"hitter whiffs {cg_whiff:.0f}% in {cg} counts")
+                if not np.isnan(cg_ev) and cg_ev < 82 and is_hard:
+                    delta += 1.5
+                    reasons.append(f"hitter avg EV {cg_ev:.0f} in {cg} counts")
+                if not np.isnan(cg_ev) and cg_ev > 90:
+                    if is_hard:
+                        delta -= 1.5
+                    if not np.isnan(cg_whiff) and cg_whiff < 15:
+                        delta -= 1.0
+                        reasons.append(f"hitter rakes in {cg} counts (EV {cg_ev:.0f})")
+
+    # GB hitter DP boost
+    if on1b and not on2b and not on3b and outs < 2:
+        if not np.isnan(h_gb) and h_gb > 50 and pitch_name in _GB_PITCHES:
+            boost = min((h_gb - 50) / 15 * 3.0, 3.0)
+            delta += boost
+            reasons.append(f"GB hitter ({h_gb:.0f}%): DP boost with {pitch_name}")
+
+    return float(delta), reasons
 
 
 def _base_adjustments(
@@ -781,21 +909,8 @@ def recommend_pitch_call_re(
     outs = int(state.outs)
     base_out = (on1b, on2b, on3b, outs)
 
-    # Load calibrated ball/strike costs from count_calibration
-    _count_ball_cost = None
-    _count_strike_gain = None
-    try:
-        import json as _json
-        from config import CACHE_DIR
-        _cc_path = os.path.join(CACHE_DIR, "count_calibration.json")
-        if os.path.exists(_cc_path):
-            with open(_cc_path) as _ccf:
-                _cc = _json.load(_ccf)
-            _ccd = _cc.get("calibration", _cc)
-            _count_ball_cost = _ccd.get("ball_cost")
-            _count_strike_gain = _ccd.get("strike_gain")
-    except Exception:
-        pass
+    # Load calibrated ball/strike costs from count_calibration (cached)
+    _count_ball_cost, _count_strike_gain = _get_count_cal_costs()
 
     # Load gb_dp_rates for compute_delta_re (avoids per-call file I/O)
     _gb_dp = _get_gb_dp_rates()
@@ -981,93 +1096,9 @@ def recommend_pitch_call_re(
         delta_re_squeeze = -sq_delta_old * RE_SCALE
 
         # 4b. Hitter-specific game-theory adjustments (not captured by base ΔRE)
-        # The RE computation handles mechanical count/base value, but these
-        # hitter-specific tendencies need explicit modelling.
-        gt_delta_old = 0.0  # accumulate in old-system points
-        gt_reasons: List[str] = []
-        is_hard = pitch_name in _HARD_PITCHES
-        is_offspeed = pitch_name in _OFFSPEED_PITCHES
-
-        h_bb_pct = _safe_hd(hd.get("bb_pct"))
-        h_chase_pct = _safe_hd(hd.get("chase_pct"))
-        h_whiff_2k_os = _safe_hd(hd.get("whiff_2k_os"))
-        h_whiff_2k_hard = _safe_hd(hd.get("whiff_2k_hard"))
-        h_fp_swing_hard = _safe_hd(hd.get("fp_swing_hard"))
-        h_fp_swing_ch = _safe_hd(hd.get("fp_swing_ch"))
-        h_gb = _safe_hd(hd.get("gb_pct"))
-
-        # Disciplined hitter at 3-ball: offspeed penalty
-        if b == 3 and is_offspeed and not np.isnan(h_bb_pct) and h_bb_pct > 12:
-            penalty = min((h_bb_pct - 12) / 8 * 2.0, 2.0)
-            gt_delta_old -= penalty
-            gt_reasons.append(f"disciplined ({h_bb_pct:.0f}% BB): risky offspeed at 3-ball")
-
-        # Hitter 2K whiff rates
-        if s == 2:
-            if is_offspeed and not np.isnan(h_whiff_2k_os) and h_whiff_2k_os > 30:
-                boost = min((h_whiff_2k_os - 30) / 10 * 5.0, 5.0)
-                gt_delta_old += boost
-                gt_reasons.append(f"2K: hitter whiffs {h_whiff_2k_os:.0f}% on OS")
-            if is_hard and not np.isnan(h_whiff_2k_hard) and h_whiff_2k_hard > 35:
-                boost = min((h_whiff_2k_hard - 35) / 10 * 4.0, 4.0)
-                gt_delta_old += boost
-                gt_reasons.append(f"2K: hitter whiffs {h_whiff_2k_hard:.0f}% on hard")
-
-        # 0-0 FP swing tendencies
-        if b == 0 and s == 0:
-            if is_offspeed and not np.isnan(h_fp_swing_hard) and h_fp_swing_hard > 40:
-                boost = min((h_fp_swing_hard - 40) / 15 * 3.0, 3.0)
-                gt_delta_old += boost
-                gt_reasons.append(f"FP: hitter attacks hard {h_fp_swing_hard:.0f}%, offspeed boost")
-            if not np.isnan(h_fp_swing_ch) and h_fp_swing_ch > 35 and pitch_name in {"Changeup", "Splitter"}:
-                gt_delta_old += min((h_fp_swing_ch - 35) / 15 * 2.0, 2.0)
-
-        # Hitter chase at hitter's counts (not 3-ball)
-        if b >= 2 and b > s and b < 3 and is_offspeed:
-            if not np.isnan(h_chase_pct) and h_chase_pct > 28:
-                boost = min((h_chase_pct - 28) / 8 * 3.0, 3.0)
-                gt_delta_old += boost
-                gt_reasons.append(f"chaser ({h_chase_pct:.0f}%): OS viable behind")
-            elif not np.isnan(h_chase_pct) and h_chase_pct < 22:
-                gt_delta_old -= 1.5
-                gt_reasons.append(f"disciplined ({h_chase_pct:.0f}%): OS penalised")
-
-        # Count-group hitter performance overlay (RE path)
-        h_by_count = hd.get("by_count", {})
-        if h_by_count:
-            _cg_map_re = {
-                (2, 0): "ahead", (3, 0): "ahead", (3, 1): "ahead", (2, 1): "ahead",
-                (0, 1): "behind", (0, 2): "behind", (1, 2): "behind",
-                (1, 1): "even", (2, 2): "even",
-                (3, 2): "full",
-            }
-            cg_re = _cg_map_re.get((b, s))
-            if cg_re and cg_re in h_by_count:
-                cg_data_re = h_by_count[cg_re]
-                cg_n_re = cg_data_re.get("n", 0) or 0
-                if cg_n_re >= 5:
-                    cg_whiff_re = _safe_hd(cg_data_re.get("whiff_pct"))
-                    cg_ev_re = _safe_hd(cg_data_re.get("avg_ev"))
-                    if not np.isnan(cg_whiff_re) and cg_whiff_re > 30 and is_offspeed:
-                        boost = min((cg_whiff_re - 30) / 15 * 2.0, 2.0)
-                        gt_delta_old += boost
-                        gt_reasons.append(f"hitter whiffs {cg_whiff_re:.0f}% in {cg_re} counts")
-                    if not np.isnan(cg_ev_re) and cg_ev_re < 82 and is_hard:
-                        gt_delta_old += 1.5
-                    if not np.isnan(cg_ev_re) and cg_ev_re > 90:
-                        if is_hard:
-                            gt_delta_old -= 1.5
-                        if not np.isnan(cg_whiff_re) and cg_whiff_re < 15:
-                            gt_delta_old -= 1.0
-                            gt_reasons.append(f"hitter rakes in {cg_re} counts (EV {cg_ev_re:.0f})")
-
-        # GB hitter DP boost
-        if on1b and not on2b and not on3b and outs < 2:
-            if not np.isnan(h_gb) and h_gb > 50 and pitch_name in _GB_PITCHES:
-                boost = min((h_gb - 50) / 15 * 3.0, 3.0)
-                gt_delta_old += boost
-                gt_reasons.append(f"GB hitter ({h_gb:.0f}%): DP boost with {pitch_name}")
-
+        gt_delta_old, gt_reasons = _hitter_gametheory_delta(
+            pitch_name, hd, b, s, on1b, on2b, on3b, outs,
+        )
         delta_re_gametheory = -gt_delta_old * RE_SCALE
 
         # 4c. Hole-score overlay — pitch-type vulnerability from zone data
@@ -1248,21 +1279,8 @@ def recommend_pitch_call_wpa(
     # WP-based leverage
     wp_lev = compute_wp_leverage(wpt, inning, half, score_diff, on1b, on2b, on3b, outs)
 
-    # Load calibrated ball/strike costs from count_calibration
-    _count_ball_cost = None
-    _count_strike_gain = None
-    try:
-        import json as _json
-        from config import CACHE_DIR
-        _cc_path = os.path.join(CACHE_DIR, "count_calibration.json")
-        if os.path.exists(_cc_path):
-            with open(_cc_path) as _ccf:
-                _cc = _json.load(_ccf)
-            _ccd = _cc.get("calibration", _cc)
-            _count_ball_cost = _ccd.get("ball_cost")
-            _count_strike_gain = _ccd.get("strike_gain")
-    except Exception:
-        pass
+    # Load calibrated ball/strike costs from count_calibration (cached)
+    _count_ball_cost, _count_strike_gain = _get_count_cal_costs()
 
     _gb_dp = _get_gb_dp_rates()
 
@@ -1409,82 +1427,9 @@ def recommend_pitch_call_wpa(
         delta_wp_squeeze = -sq_delta_old * WP_SCALE
 
         # Game-theory hitter adjustments
-        gt_delta_old = 0.0
-        gt_reasons: List[str] = []
-        is_hard = pitch_name in _HARD_PITCHES
-        is_offspeed = pitch_name in _OFFSPEED_PITCHES
-
-        h_bb_pct = _safe_hd(hd.get("bb_pct"))
-        h_chase_pct = _safe_hd(hd.get("chase_pct"))
-        h_whiff_2k_os = _safe_hd(hd.get("whiff_2k_os"))
-        h_whiff_2k_hard = _safe_hd(hd.get("whiff_2k_hard"))
-        h_fp_swing_hard = _safe_hd(hd.get("fp_swing_hard"))
-        h_fp_swing_ch = _safe_hd(hd.get("fp_swing_ch"))
-        h_gb = _safe_hd(hd.get("gb_pct"))
-
-        if b == 3 and is_offspeed and not np.isnan(h_bb_pct) and h_bb_pct > 12:
-            penalty = min((h_bb_pct - 12) / 8 * 2.0, 2.0)
-            gt_delta_old -= penalty
-            gt_reasons.append(f"disciplined ({h_bb_pct:.0f}% BB): risky offspeed at 3-ball")
-
-        if s == 2:
-            if is_offspeed and not np.isnan(h_whiff_2k_os) and h_whiff_2k_os > 30:
-                boost = min((h_whiff_2k_os - 30) / 10 * 5.0, 5.0)
-                gt_delta_old += boost
-                gt_reasons.append(f"2K: hitter whiffs {h_whiff_2k_os:.0f}% on OS")
-            if is_hard and not np.isnan(h_whiff_2k_hard) and h_whiff_2k_hard > 35:
-                boost = min((h_whiff_2k_hard - 35) / 10 * 4.0, 4.0)
-                gt_delta_old += boost
-                gt_reasons.append(f"2K: hitter whiffs {h_whiff_2k_hard:.0f}% on hard")
-
-        if b == 0 and s == 0:
-            if is_offspeed and not np.isnan(h_fp_swing_hard) and h_fp_swing_hard > 40:
-                boost = min((h_fp_swing_hard - 40) / 15 * 3.0, 3.0)
-                gt_delta_old += boost
-                gt_reasons.append(f"FP: hitter attacks hard {h_fp_swing_hard:.0f}%, offspeed boost")
-            if not np.isnan(h_fp_swing_ch) and h_fp_swing_ch > 35 and pitch_name in {"Changeup", "Splitter"}:
-                gt_delta_old += min((h_fp_swing_ch - 35) / 15 * 2.0, 2.0)
-
-        if b >= 2 and b > s and b < 3 and is_offspeed:
-            if not np.isnan(h_chase_pct) and h_chase_pct > 28:
-                boost = min((h_chase_pct - 28) / 8 * 3.0, 3.0)
-                gt_delta_old += boost
-                gt_reasons.append(f"chaser ({h_chase_pct:.0f}%): OS viable behind")
-            elif not np.isnan(h_chase_pct) and h_chase_pct < 22:
-                gt_delta_old -= 1.5
-
-        # Count-group hitter performance overlay
-        h_by_count = hd.get("by_count", {})
-        if h_by_count:
-            _cg_map = {
-                (2, 0): "ahead", (3, 0): "ahead", (3, 1): "ahead", (2, 1): "ahead",
-                (0, 1): "behind", (0, 2): "behind", (1, 2): "behind",
-                (1, 1): "even", (2, 2): "even",
-                (3, 2): "full",
-            }
-            cg = _cg_map.get((b, s))
-            if cg and cg in h_by_count:
-                cg_data = h_by_count[cg]
-                cg_n = cg_data.get("n", 0) or 0
-                if cg_n >= 5:
-                    cg_whiff = _safe_hd(cg_data.get("whiff_pct"))
-                    cg_ev = _safe_hd(cg_data.get("avg_ev"))
-                    if not np.isnan(cg_whiff) and cg_whiff > 30 and is_offspeed:
-                        gt_delta_old += min((cg_whiff - 30) / 15 * 2.0, 2.0)
-                    if not np.isnan(cg_ev) and cg_ev < 82 and is_hard:
-                        gt_delta_old += 1.5
-                    if not np.isnan(cg_ev) and cg_ev > 90:
-                        if is_hard:
-                            gt_delta_old -= 1.5
-                        if not np.isnan(cg_whiff) and cg_whiff < 15:
-                            gt_delta_old -= 1.0
-
-        if on1b and not on2b and not on3b and outs < 2:
-            if not np.isnan(h_gb) and h_gb > 50 and pitch_name in _GB_PITCHES:
-                boost = min((h_gb - 50) / 15 * 3.0, 3.0)
-                gt_delta_old += boost
-                gt_reasons.append(f"GB hitter ({h_gb:.0f}%): DP boost with {pitch_name}")
-
+        gt_delta_old, gt_reasons = _hitter_gametheory_delta(
+            pitch_name, hd, b, s, on1b, on2b, on3b, outs,
+        )
         delta_wp_gametheory = -gt_delta_old * WP_SCALE
 
         # Hole-score overlay

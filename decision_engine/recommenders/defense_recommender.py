@@ -229,12 +229,17 @@ def recommend_defense_from_truemedia(
     pos_xy = _recommend_fielder_positions(batted, batter_side=batter_side)
     shift = classify_shift(pull_pct=pull_pct, center_pct=center_pct, oppo_pct=oppo_pct, gb_pct=gb_pct, gb_pull_pct=None)
     positions = {p: {"x": float(x), "y": float(y)} for p, (x, y) in pos_xy.items()}
-    overlay = apply_situation_overlay(state, positions)
+    overlay, positions = apply_situation_overlay(state, positions)
     return DefenseRecommendation(shift=shift, positions=positions, overlay=overlay)
 
 
-def apply_situation_overlay(state: GameState, positions: Dict[str, Dict[str, float]]) -> Dict[str, Any]:
-    """Apply game-state adjustments to a base defensive positioning dict."""
+def apply_situation_overlay(state: GameState, positions: Dict[str, Dict[str, float]]) -> Tuple[Dict[str, Any], Dict[str, Dict[str, float]]]:
+    """Apply game-state adjustments to a base defensive positioning dict.
+
+    Returns (overlay, adjusted_positions) without mutating the original dict.
+    """
+    import copy
+    pos = copy.deepcopy(positions)
     overlay: Dict[str, Any] = {"type": "Standard", "notes": []}
     outs = int(state.outs)
     bases = state.bases
@@ -243,31 +248,31 @@ def apply_situation_overlay(state: GameState, positions: Dict[str, Dict[str, flo
     if bases.on_1b and outs < 2:
         overlay["type"] = "DP Depth"
         overlay["notes"].append("Middle infielders at DP depth")
-        for pos in ["SS", "2B"]:
-            if pos in positions:
-                positions[pos]["y"] = float(min(positions[pos]["y"], 115.0))
+        for p in ["SS", "2B"]:
+            if p in pos:
+                pos[p]["y"] = float(min(pos[p]["y"], 115.0))
 
     # Infield in: R3, <2 outs
     if bases.on_3b and outs < 2:
         overlay["type"] = "Infield In"
         overlay["notes"].append("Cut off run at plate")
-        for pos in ["1B", "2B", "SS", "3B"]:
-            if pos in positions:
-                positions[pos]["y"] = 85.0
+        for p in ["1B", "2B", "SS", "3B"]:
+            if p in pos:
+                pos[p]["y"] = 85.0
 
     # No doubles: late innings, runner in scoring position
     if bases.risp and int(state.inning) >= 7:
         overlay["notes"].append("No doubles: OF deep, near lines")
-        for pos in ["LF", "RF"]:
-            if pos in positions:
-                positions[pos]["y"] = float(max(positions[pos]["y"], 280.0))
+        for p in ["LF", "RF"]:
+            if p in pos:
+                pos[p]["y"] = float(max(pos[p]["y"], 280.0))
 
     # Hold runner at 1B
-    if bases.on_1b and "1B" in positions:
+    if bases.on_1b and "1B" in pos:
         overlay["notes"].append("1B holds runner")
-        positions["1B"]["y"] = 65.0
+        pos["1B"]["y"] = 65.0
 
-    return overlay
+    return overlay, pos
 
 
 def shift_value_delta_re(
