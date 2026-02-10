@@ -394,7 +394,8 @@ def _get_opp_hitter_profile(tm, hitter, team, pitch_df=None):
         from analytics.zone_vulnerability import compute_zone_vulnerability_summary
         hitter_pitches = pitch_df[pitch_df["Batter"].astype(str).str.strip() == str(hitter).strip()] if "Batter" in pitch_df.columns else pd.DataFrame()
         if len(hitter_pitches) >= 50:
-            profile["zone_vuln"] = compute_zone_vulnerability_summary(hitter_pitches, bats)
+            hitter_pitches_norm = normalize_pitch_types(hitter_pitches)
+            profile["zone_vuln"] = compute_zone_vulnerability_summary(hitter_pitches_norm, bats)
 
     # Pre-computed hole scores from opponent pack (3x3 grid, 0-100)
     hole_df = tm["hitting"].get("hole_scores", pd.DataFrame())
@@ -6408,19 +6409,22 @@ def _swing_hole_finder(b_tm, hitter_name, bats=None, bats_norm=None, sp=None, is
             st.caption(f"{list(b_tm.columns)[:30]}")
         return
 
+    # Normalize pitch types once so all downstream analysis excludes junk/undefined
+    b_tm_norm = normalize_pitch_types(b_tm)
+
     # ── Definitive Swing Holes (Outcome + Attack Angle) ──
-    sp_use = sp or _compute_swing_path(b_tm)
+    sp_use = sp or _compute_swing_path(b_tm_norm)
     bats_norm = bats_norm if bats_norm is not None else bats
     if _fmt_bats(bats_norm) == "S":
         bats_norm = None
-    holes_def = _definitive_holes(b_tm, bats_norm, sp_use)
+    holes_def = _definitive_holes(b_tm_norm, bats_norm, sp_use)
 
     # ── Compute zone metrics and patterns ──
-    zone_metrics = _compute_zone_swing_metrics(b_tm, bats_norm)
-    zone_patterns = _analyze_zone_patterns(zone_metrics, b_tm, bats_norm)
+    zone_metrics = _compute_zone_swing_metrics(b_tm_norm, bats_norm)
+    zone_patterns = _analyze_zone_patterns(zone_metrics, b_tm_norm, bats_norm)
 
     # ── Definitive Hole Score Map (Whiff + SLG + Attack Angle) ──
-    fig_hole, n_grid = _hole_score_heatmap(b_tm, bats_norm, sp_use, is_switch_inner=is_switch)
+    fig_hole, n_grid = _hole_score_heatmap(b_tm_norm, bats_norm, sp_use, is_switch_inner=is_switch)
 
     # Display attack recommendations at top with swing path context
     if holes_def:
