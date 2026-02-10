@@ -5536,23 +5536,68 @@ def _scouting_hitter_report(tm, team, trackman_data, count_splits=None, league_h
                 tab_lhh, tab_rhh = st.tabs([f"🔵 vs RHP (Batting Left) — {n_lhh} pitches",
                                             f"🔴 vs LHP (Batting Right) — {n_rhh} pitches"])
                 with tab_lhh:
-                    _swing_hole_finder(lhh_data, hitter, "L", bats_norm="L", sp=sp, is_switch=True)
+                    _swing_hole_finder(lhh_data, hitter, "L", bats_norm="L", sp=sp, is_switch=True, pitcher_hand="R")
                 with tab_rhh:
-                    _swing_hole_finder(rhh_data, hitter, "R", bats_norm="R", sp=sp, is_switch=True)
+                    _swing_hole_finder(rhh_data, hitter, "R", bats_norm="R", sp=sp, is_switch=True, pitcher_hand="L")
             elif n_lhh >= 20:
                 # Only LHH has enough data
                 st.info(f"Switch hitter — showing LHH side only ({n_lhh} pitches vs RHP, {n_rhh} pitches vs LHP)")
-                _swing_hole_finder(lhh_data, hitter, "L", bats_norm="L", sp=sp, is_switch=True)
+                _swing_hole_finder(lhh_data, hitter, "L", bats_norm="L", sp=sp, is_switch=True, pitcher_hand="R")
             elif n_rhh >= 20:
                 # Only RHH has enough data
                 st.info(f"Switch hitter — showing RHH side only ({n_rhh} pitches vs LHP, {n_lhh} pitches vs RHP)")
-                _swing_hole_finder(rhh_data, hitter, "R", bats_norm="R", sp=sp, is_switch=True)
+                _swing_hole_finder(rhh_data, hitter, "R", bats_norm="R", sp=sp, is_switch=True, pitcher_hand="L")
             else:
                 # Not enough data on either side, show combined
                 st.info(f"Switch hitter with limited split data (LHH: {n_lhh}, RHH: {n_rhh}) — showing combined view")
                 _swing_hole_finder(b_tm, hitter, bats_label, bats_norm=bats_norm, sp=sp)
         else:
-            _swing_hole_finder(b_tm, hitter, bats_label, bats_norm=bats_norm, sp=sp)
+            # ── Non-switch hitter: split by pitcher hand ──
+            _MIN_PH = 40  # minimum pitches to show a per-hand tab
+            if "PitcherThrows" in b_tm.columns:
+                _pt = b_tm["PitcherThrows"].astype(str).str.strip().replace({"Right": "R", "Left": "L"})
+                vs_rhp = b_tm[_pt == "R"]
+                vs_lhp = b_tm[_pt == "L"]
+                n_rhp, n_lhp = len(vs_rhp), len(vs_lhp)
+
+                has_rhp = n_rhp >= _MIN_PH
+                has_lhp = n_lhp >= _MIN_PH
+
+                if has_rhp and has_lhp:
+                    tab_r, tab_l, tab_all = st.tabs([
+                        f"vs RHP — {n_rhp} pitches",
+                        f"vs LHP — {n_lhp} pitches",
+                        f"All Pitches — {len(b_tm)} pitches",
+                    ])
+                    with tab_r:
+                        _swing_hole_finder(vs_rhp, hitter, bats_label, bats_norm=bats_norm, sp=sp, pitcher_hand="R")
+                    with tab_l:
+                        _swing_hole_finder(vs_lhp, hitter, bats_label, bats_norm=bats_norm, sp=sp, pitcher_hand="L")
+                    with tab_all:
+                        _swing_hole_finder(b_tm, hitter, bats_label, bats_norm=bats_norm, sp=sp)
+                elif has_rhp:
+                    tab_r, tab_all = st.tabs([
+                        f"vs RHP — {n_rhp} pitches",
+                        f"All Pitches — {len(b_tm)} pitches",
+                    ])
+                    with tab_r:
+                        _swing_hole_finder(vs_rhp, hitter, bats_label, bats_norm=bats_norm, sp=sp, pitcher_hand="R")
+                    with tab_all:
+                        _swing_hole_finder(b_tm, hitter, bats_label, bats_norm=bats_norm, sp=sp)
+                elif has_lhp:
+                    tab_l, tab_all = st.tabs([
+                        f"vs LHP — {n_lhp} pitches",
+                        f"All Pitches — {len(b_tm)} pitches",
+                    ])
+                    with tab_l:
+                        _swing_hole_finder(vs_lhp, hitter, bats_label, bats_norm=bats_norm, sp=sp, pitcher_hand="L")
+                    with tab_all:
+                        _swing_hole_finder(b_tm, hitter, bats_label, bats_norm=bats_norm, sp=sp)
+                else:
+                    # Neither side has enough data — show combined
+                    _swing_hole_finder(b_tm, hitter, bats_label, bats_norm=bats_norm, sp=sp)
+            else:
+                _swing_hole_finder(b_tm, hitter, bats_label, bats_norm=bats_norm, sp=sp)
 
 
 def _assign_total_bases(play_result):
@@ -6203,7 +6248,7 @@ def _zone_ev_heatmap(pitch_df, title, n_bins=5, bats=None):
     return _zone_heatmap_layout(fig, title, bats=bats)
 
 
-def _swing_hole_finder(b_tm, hitter_name, bats=None, bats_norm=None, sp=None, is_switch=False):
+def _swing_hole_finder(b_tm, hitter_name, bats=None, bats_norm=None, sp=None, is_switch=False, pitcher_hand=None):
     """Swing Hole Finder — comprehensive zone-based analysis of a hitter's vulnerabilities.
 
     Uses pitch-level data (TrueMedia GamePitchesTrackman or local Trackman) to produce:
@@ -6215,13 +6260,15 @@ def _swing_hole_finder(b_tm, hitter_name, bats=None, bats_norm=None, sp=None, is
     """
     # Header with batting side info
     bats_display = _fmt_bats(bats) if bats else "?"
+    _ph_label = f", vs {'LHP' if pitcher_hand == 'L' else 'RHP'}" if pitcher_hand in ("R", "L") else ""
     if bats_display in ["L", "R"]:
         bats_full = "Left" if bats_display == "L" else "Right"
         suffix = ", Switch" if is_switch else ""
-        section_header(f"Swing Hole Finder (Bats {bats_full}{suffix})")
+        section_header(f"Swing Hole Finder (Bats {bats_full}{suffix}{_ph_label})")
     else:
-        section_header("Swing Hole Finder")
-    st.caption(f"Zone-level performance from {len(b_tm)} pitches")
+        section_header(f"Swing Hole Finder{' (' + _ph_label.lstrip(', ') + ')' if _ph_label else ''}")
+    _ph_caption = f" {_ph_label.lstrip(', ')}" if _ph_label else ""
+    st.caption(f"Zone-level performance from {len(b_tm)} pitches{_ph_caption}")
 
     # Delegate to analytics.zone_vulnerability module
     _compute_zone_swing_metrics = _zv_compute_zone_swing_metrics
@@ -6399,7 +6446,8 @@ def _swing_hole_finder(b_tm, hitter_name, bats=None, bats_norm=None, sp=None, is
                 showlegend=False,
             ))
 
-        fig = _zone_heatmap_layout(fig, "Definitive Hole Score (All Pitches)", bats=bats, is_switch=is_switch_inner)
+        _hole_title = "Hole Score vs " + ("LHP" if pitcher_hand == "L" else "RHP") if pitcher_hand in ("R", "L") else "Definitive Hole Score (All Pitches)"
+        fig = _zone_heatmap_layout(fig, _hole_title, bats=bats, is_switch=is_switch_inner)
         fig.update_layout(height=420)
         fig.update_xaxes(range=[-1.5, 1.5])
         fig.update_yaxes(range=[0.5, 4.5], scaleanchor="x", scaleratio=1)
