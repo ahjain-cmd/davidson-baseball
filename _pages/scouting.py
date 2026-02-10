@@ -6238,19 +6238,22 @@ def _swing_hole_finder(b_tm, hitter_name, bats=None, bats_norm=None, sp=None, is
         if df.empty:
             return []
 
-        scores = _zv_compute_hole_scores_3x3(df, bats, sp=sp, min_zone_n=min_zone_n)
+        # Normalize first so junk/undefined pitch types are excluded
+        df_norm = normalize_pitch_types(df)
+
+        scores = _zv_compute_hole_scores_3x3(df_norm, bats, sp=sp, min_zone_n=min_zone_n)
         if not scores:
             return []
 
         # Enrich top zones with display-level detail (whiff, slg, path_vuln, n)
-        d = df.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
+        d = df_norm.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
         if d.empty:
             return []
         x_edges = np.array([-1.5, -0.5, 0.5, 1.5])
         y_edges = np.array([0.5, 2.0, 3.0, 4.5])
         d["xbin"] = np.clip(np.digitize(d["PlateLocSide"], x_edges) - 1, 0, 2)
         d["ybin"] = np.clip(np.digitize(d["PlateLocHeight"], y_edges) - 1, 0, 2)
-        zone_metrics = _compute_zone_swing_metrics(df, bats)
+        zone_metrics = _compute_zone_swing_metrics(df_norm, bats)
 
         out = []
         for (xb, yb), hole_score in scores.items():
@@ -6289,8 +6292,8 @@ def _swing_hole_finder(b_tm, hitter_name, bats=None, bats_norm=None, sp=None, is
         d["xbin"] = np.clip(np.digitize(d["PlateLocSide"], x_edges) - 1, 0, 2)
         d["ybin"] = np.clip(np.digitize(d["PlateLocHeight"], y_edges) - 1, 0, 2)
 
-        # Use shared hole-score computation
-        scores = _zv_compute_hole_scores_3x3(df, bats, sp=sp, min_zone_n=min_zone_n)
+        # Use shared hole-score computation on normalized data (same population as barrel overlay)
+        scores = _zv_compute_hole_scores_3x3(d, bats, sp=sp, min_zone_n=min_zone_n)
 
         hs_grid = np.full((3, 3), np.nan)
         barrel_grid = np.full((3, 3), np.nan)
