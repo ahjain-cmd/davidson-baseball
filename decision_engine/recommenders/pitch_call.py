@@ -19,6 +19,7 @@ _QUICK_PITCHES = {"Fastball", "Sinker", "Cutter"}
 
 # Count-group mapping (shared by all recommender variants)
 _CG_MAP = {
+    (0, 0): "first_pitch",
     (2, 0): "ahead", (3, 0): "ahead", (3, 1): "ahead", (2, 1): "ahead",
     (0, 1): "behind", (0, 2): "behind", (1, 2): "behind",
     (1, 1): "even", (2, 2): "even",
@@ -186,10 +187,7 @@ def _get_count_weights():
         except Exception:
             cal = None
         raw = cal.weights if cal else fallback_weights()
-        try:
-            _CAL = _sanitize_count_weights(raw)
-        except Exception:
-            _CAL = fallback_weights()
+        _CAL = _sanitize_count_weights(raw)
     return _CAL
 
 
@@ -393,14 +391,7 @@ def _count_adjustments(
     # the current count group (ahead, behind, even).
     h_by_count = hd.get("by_count", {})
     if h_by_count:
-        # Map (b, s) to count group
-        _cg_map = {
-            (2, 0): "ahead", (3, 0): "ahead", (3, 1): "ahead", (2, 1): "ahead",
-            (0, 1): "behind", (0, 2): "behind", (1, 2): "behind",
-            (1, 1): "even", (2, 2): "even",
-            (3, 2): "full",
-        }
-        cg = _cg_map.get((b, s))
+        cg = _CG_MAP.get((b, s))
         if cg and cg in h_by_count:
             cg_data = h_by_count[cg]
             cg_n = cg_data.get("n", 0) or 0
@@ -665,31 +656,16 @@ def _leverage_adjustments(
     if abs(li - 0.5) < 0.15:
         return 0.0, []
 
-    cmd = info.get("command_plus", np.nan)
-    stuff = info.get("stuff_plus", np.nan)
     is_hard = pitch_name in _HARD_PITCHES
 
     if li > 0.65:
-        # High leverage: command premium, penalize wild stuff
-        if not np.isnan(cmd) and cmd >= 105:
-            boost = min((cmd - 100) / 20 * 3.0, 3.0) * li
-            delta += boost
-            reasons.append(f"high leverage: command premium (Cmd+ {cmd:.0f})")
-        elif not np.isnan(cmd) and cmd < 90:
-            delta -= 2.0 * li
-            reasons.append(f"high leverage: low command risk (Cmd+ {cmd:.0f})")
-
-        # In high leverage, favor primary pitches (higher usage = more reliable)
+        # High leverage: favor primary pitches (higher usage = more reliable)
         usage = info.get("usage", np.nan)
         if not np.isnan(usage) and usage < 10:
             delta -= 1.5 * li
             reasons.append("high leverage: low-usage risk")
 
     elif li < 0.35:
-        # Low leverage: favor high-stuff pitches for development/aggression
-        if not np.isnan(stuff) and stuff >= 110:
-            boost = min((stuff - 100) / 20 * 2.0, 2.0) * (1.0 - li)
-            delta += boost
         # Less penalty for low-usage pitches in low leverage
         usage = info.get("usage", np.nan)
         if not np.isnan(usage) and usage < 8:
@@ -829,9 +805,9 @@ def _sequence_adjustments(
     # ── Same-pitch repetition penalty (escalating) ──
     if pitch_name == last:
         if pitch_name in _HARD_PITCHES:
-            base_penalty = -8.0
+            base_penalty = -5.0
         else:
-            base_penalty = -15.0
+            base_penalty = -8.0
         # Escalate if we've thrown the same pitch multiple times
         consecutive = 1
         for p in reversed(history):
@@ -902,6 +878,21 @@ def _sequence_adjustments(
     return float(delta), reasons
 
 
+def _situation_adjustment(
+    pitch_name: str, info: Dict[str, Any], state: GameState, *, hd: Dict = None,
+) -> Tuple[float, List[str]]:
+    """Situation group: combines count + base + steal + squeeze adjustments."""
+    hd = hd or {}
+    c_delta, c_reasons = _count_adjustments(pitch_name, info, state, hd=hd)
+    b_delta, b_reasons = _base_adjustments(pitch_name, info, state, hd=hd)
+    sb_delta, sb_reasons = _steal_adjustments(pitch_name, info, state)
+    sq_delta, sq_reasons = _squeeze_adjustments(pitch_name, info, state)
+
+    total = c_delta + b_delta + sb_delta + sq_delta
+    reasons = c_reasons + b_reasons + sb_reasons + sq_reasons
+    return total, reasons
+
+
 def recommend_pitch_call(
     matchup: Dict[str, Any],
     state: GameState,
@@ -910,7 +901,13 @@ def recommend_pitch_call(
     tun_df: Optional[pd.DataFrame] = None,
     seq_df: Optional[pd.DataFrame] = None,
 ) -> List[Dict[str, Any]]:
-    """Return top pitch call recommendations given a matchup + current game state."""
+    """Return top pitch call recommendations given a matchup + current game state.
+
+    Adjustments are organized into three logical groups:
+    - Situation (count + base + steal + squeeze)
+    - Quality (sequence/tunnel + hole_score)
+    - Context (leverage)
+    """
     if not matchup or not matchup.get("pitch_scores"):
         return []
 
@@ -919,23 +916,25 @@ def recommend_pitch_call(
     rows: List[Dict[str, Any]] = []
     for pitch_name, info in matchup["pitch_scores"].items():
         base_score = float(info.get("score", 50.0))
-        c_delta, c_reasons = _count_adjustments(pitch_name, info, state, hd=hd)
-        b_delta, b_reasons = _base_adjustments(pitch_name, info, state, hd=hd)
-        sb_delta, sb_reasons = _steal_adjustments(pitch_name, info, state)
-        sq_delta, sq_reasons = _squeeze_adjustments(pitch_name, info, state)
+
+        # Situation group (count + base + steal + squeeze)
+        sit_delta, sit_reasons = _situation_adjustment(pitch_name, info, state, hd=hd)
+
+        # Quality group (sequence/tunnel + hole_score)
         se_delta, se_reasons = _sequence_adjustments(pitch_name, state, tun_df=tun_df, seq_df=seq_df)
         hs_delta, hs_reasons = _hole_score_overlay(pitch_name, hd)
-        lv_delta, lv_reasons = _leverage_adjustments(pitch_name, info, state)
-        final_score = _clamp(base_score + c_delta + b_delta + sb_delta + sq_delta + se_delta + hs_delta + lv_delta)
+        qual_delta = se_delta + hs_delta
+        qual_reasons = se_reasons + hs_reasons
 
-        reasons = []
+        # Context group (leverage)
+        lv_delta, lv_reasons = _leverage_adjustments(pitch_name, info, state)
+
+        final_score = _clamp(base_score + sit_delta + qual_delta + lv_delta)
+
+        reasons: List[str] = []
         reasons.extend(info.get("reasons") or [])
-        reasons.extend(c_reasons)
-        reasons.extend(b_reasons)
-        reasons.extend(sb_reasons)
-        reasons.extend(sq_reasons)
-        reasons.extend(se_reasons)
-        reasons.extend(hs_reasons)
+        reasons.extend(sit_reasons)
+        reasons.extend(qual_reasons)
         reasons.extend(lv_reasons)
 
         rows.append(
@@ -943,12 +942,8 @@ def recommend_pitch_call(
                 "pitch": pitch_name,
                 "score": float(round(final_score, 1)),
                 "score_base": float(round(base_score, 1)),
-                "adj_count": float(round(c_delta, 1)),
-                "adj_base": float(round(b_delta, 1)),
-                "adj_steal": float(round(sb_delta, 1)),
-                "adj_squeeze": float(round(sq_delta, 1)),
-                "adj_sequence": float(round(se_delta, 1)),
-                "adj_hole_score": float(round(hs_delta, 1)),
+                "adj_situation": float(round(sit_delta, 1)),
+                "adj_quality": float(round(qual_delta, 1)),
                 "adj_leverage": float(round(lv_delta, 1)),
                 "confidence": info.get("confidence", "Low"),
                 "confidence_n": info.get("confidence_n", info.get("count", 0)),
@@ -974,376 +969,50 @@ def _get_re_calibration():
     return _RE_CAL
 
 
-def recommend_pitch_call_re(
+def _recommend_pitch_core(
     matchup: Dict[str, Any],
     state: GameState,
-    top_n: int = 3,
+    top_n: int,
     *,
-    tun_df: Optional[pd.DataFrame] = None,
-    seq_df: Optional[pd.DataFrame] = None,
-    re_cal=None,
+    tun_df: Optional[pd.DataFrame],
+    seq_df: Optional[pd.DataFrame],
+    cal,
+    compute_base_delta,
+    compute_seq_delta,
+    overlay_scale: float,
+    usage_penalty_scale: float,
+    transition_scale: float,
+    wp_leverage: Optional[float],
+    format_row,
 ) -> List[Dict[str, Any]]:
-    """Return top pitch call recommendations scored by ΔRE (run expectancy).
+    """Shared core for ΔRE and ΔWP pitch call recommenders.
 
-    Lower ΔRE = better for pitcher. Displayed as RS/100 = -ΔRE × 100.
+    Parameters
+    ----------
+    compute_base_delta : callable(pitch_name, count_str, base_out, adj_probs,
+                                  cal, adjusted_contact_rv, lw, costs, gb_dp,
+                                  pitcher_gb, pitcher_fb) -> float
+        Computes the base delta (ΔRE or ΔWP) for a pitch.
+    compute_seq_delta : callable(se_delta_old, adjusted, pitch_name, count_str,
+                                 base_out, cal, adjusted_contact_rv, lw, costs,
+                                 gb_dp, pitcher_gb, pitcher_fb, delta_base) -> float
+        Computes the sequence delta component.
+    overlay_scale : float
+        Scale factor for converting old-system points to delta units.
+    usage_penalty_scale : float
+        Multiplier on the usage penalty (1.0 for RE, 0.1 for WP).
+    transition_scale : float
+        Multiplier on transition bonus (1.0 for RE, 0.1 for WP).
+    wp_leverage : float or None
+        WP-derived leverage for leverage adjustments (None for RE path).
+    format_row : callable(pitch_name, delta_total, delta_components, metric_source,
+                          conf, n_p, reasons, info) -> dict
+        Formats the output row for this scoring mode.
     """
-    if not matchup or not matchup.get("pitch_scores"):
-        return []
-
-    from analytics.run_expectancy import (
-        PitchOutcomeProbs,
-        compute_delta_re,
-        re24_lookup,
-    )
-    from decision_engine.core.matchup import compute_matchup_adjusted_probs
-
-    cal = re_cal or _get_re_calibration()
-    if cal is None:
-        # Fallback to old scoring if no RE calibration available
-        return recommend_pitch_call(matchup, state, top_n=top_n,
-                                    tun_df=tun_df, seq_df=seq_df)
-
-    hd = matchup.get("hitter_data") or {}
-    b, s = state.count()
-    count_str = f"{b}-{s}"
-    on1b = int(bool(state.bases.on_1b))
-    on2b = int(bool(state.bases.on_2b))
-    on3b = int(bool(state.bases.on_3b))
-    outs = int(state.outs)
-    base_out = (on1b, on2b, on3b, outs)
-
-    # Load calibrated ball/strike costs from count_calibration (cached)
-    _count_ball_cost, _count_strike_gain = _get_count_cal_costs()
-
-    # Load gb_dp_rates for compute_delta_re (avoids per-call file I/O)
-    _gb_dp = _get_gb_dp_rates()
-
-    # Linear weights for contact RV computation
-    lw = {
-        "Out": 0.0, "FieldersChoice": 0.0, "Sacrifice": 0.0,
-        "Single": 0.47, "Double": 0.78, "Triple": 1.05, "HomeRun": 1.40,
-        "Error": 0.47,
-    }
-    # Try to load from historical calibration
-    hist_cal = _get_historical_cal()
-    if hist_cal and hist_cal.linear_weights:
-        lw["Single"] = hist_cal.linear_weights.get("single_w", 0.47)
-        lw["Double"] = hist_cal.linear_weights.get("double_w", 0.78)
-        lw["Triple"] = hist_cal.linear_weights.get("triple_w", 1.05)
-        lw["HomeRun"] = hist_cal.linear_weights.get("hr_w", 1.40)
-        lw["Error"] = hist_cal.linear_weights.get("single_w", 0.47)
-
-    # Extract pitcher-specific batted ball profile for ΔRE computation.
-    # These override the league-average hardcoded values (GB%=43%, tag_up=40%).
-    _pitcher_gb_pct = None
-    _pitcher_fb_pct = None
-    _pitcher_scores = matchup.get("pitch_scores", {})
-    _usage_weighted_gb = 0.0
-    _usage_weighted_fb = 0.0
-    _usage_total = 0.0
-    for _pn, _pi in _pitcher_scores.items():
-        _raw = _pi.get("raw", _pi) if isinstance(_pi, dict) else {}
-        _u = float(_raw.get("usage", 0) or 0)
-        _gb = _raw.get("gb_pct", np.nan)
-        _fb = _raw.get("fb_pct", np.nan)
-        if not np.isnan(_u) and _u > 0:
-            if not np.isnan(_gb if isinstance(_gb, float) else float("nan")):
-                _usage_weighted_gb += float(_gb) * _u
-                _usage_total += _u
-            if not np.isnan(_fb if isinstance(_fb, float) else float("nan")):
-                _usage_weighted_fb += float(_fb) * _u
-    if _usage_total > 0:
-        _pitcher_gb_pct = _usage_weighted_gb / _usage_total
-        _pitcher_fb_pct = _usage_weighted_fb / _usage_total if _usage_weighted_fb > 0 else None
-
-    rows: List[Dict[str, Any]] = []
-    for pitch_name, info in matchup["pitch_scores"].items():
-        reasons: List[str] = []
-
-        # 1. Get league-average outcome probs for this pitch at this count
-        league_probs_obj = None
-        if pitch_name in cal.outcome_probs and count_str in cal.outcome_probs[pitch_name]:
-            league_probs_obj = cal.outcome_probs[pitch_name][count_str]
-        else:
-            # Fallback: find nearest available count by Manhattan distance
-            if pitch_name in cal.outcome_probs:
-                avail = cal.outcome_probs[pitch_name]
-                if avail:
-                    def _count_dist(c_str):
-                        try:
-                            cb, cs = int(c_str.split("-")[0]), int(c_str.split("-")[1])
-                            return abs(cb - b) + abs(cs - s)
-                        except (ValueError, IndexError):
-                            return 99
-                    nearest = min(avail.keys(), key=_count_dist)
-                    league_probs_obj = avail[nearest]
-
-        if league_probs_obj is None:
-            # Ultimate fallback
-            league_probs_obj = PitchOutcomeProbs(
-                p_ball=0.38, p_called_strike=0.17, p_swinging_strike=0.10,
-                p_foul=0.18, p_in_play=0.16, p_hbp=0.01,
-            )
-
-        league_probs_dict = league_probs_obj.as_dict() if hasattr(league_probs_obj, 'as_dict') else {
-            "p_ball": league_probs_obj.p_ball,
-            "p_called_strike": league_probs_obj.p_called_strike,
-            "p_swinging_strike": league_probs_obj.p_swinging_strike,
-            "p_foul": league_probs_obj.p_foul,
-            "p_in_play": league_probs_obj.p_in_play,
-            "p_hbp": league_probs_obj.p_hbp,
-        }
-
-        # 2. Apply matchup adjustments
-        pitcher_metrics = {
-            "whiff_pct": info.get("shrunk_whiff", info.get("our_whiff")),
-            "csw_pct": info.get("shrunk_csw", info.get("our_csw")),
-            "chase_pct": info.get("shrunk_chase", info.get("our_chase")),
-            "ev_against": info.get("shrunk_ev", info.get("our_ev_against")),
-            "count": info.get("count", 0),
-        }
-        hitter_metrics = {
-            "k_pct": hd.get("k_pct"),
-            "chase_pct": hd.get("chase_pct"),
-            "contact_pct": hd.get("contact_pct"),
-            "pa": hd.get("pa"),
-        }
-
-        adjusted = compute_matchup_adjusted_probs(
-            league_probs_dict, pitcher_metrics, hitter_metrics,
-        )
-
-        adj_probs = PitchOutcomeProbs(
-            p_ball=adjusted["p_ball"],
-            p_called_strike=adjusted["p_called_strike"],
-            p_swinging_strike=adjusted["p_swinging_strike"],
-            p_foul=adjusted["p_foul"],
-            p_in_play=adjusted["p_in_play"],
-            p_hbp=adjusted["p_hbp"],
-        )
-
-        # Adjust contact RV for matchup
-        base_crv = cal.contact_rv.get(pitch_name, 0.12)
-        crv_adj = adjusted.get("contact_rv_adj", 1.0)
-        adjusted_crv = base_crv * crv_adj
-        adjusted_contact_rv = dict(cal.contact_rv)
-        adjusted_contact_rv[pitch_name] = adjusted_crv
-
-        # 3. Compute ΔRE
-        delta_re_base = compute_delta_re(
-            pitch_type=pitch_name,
-            count=count_str,
-            base_out_state=base_out,
-            outcome_probs=adj_probs,
-            re24=cal.re24,
-            contact_rv=adjusted_contact_rv,
-            linear_weights=lw,
-            count_ball_cost=_count_ball_cost,
-            count_strike_gain=_count_strike_gain,
-            bip_profile=cal.bip_profiles,
-            gb_dp_rates=_gb_dp,
-            pitcher_gb_pct=_pitcher_gb_pct,
-            pitcher_fb_pct=_pitcher_fb_pct,
-        )
-
-        # 4. Sequence adjustments — native RE: modify probs then recompute ΔRE
-        se_delta_old, se_reasons = _sequence_adjustments(pitch_name, state, tun_df=tun_df, seq_df=seq_df)
-
-        # Apply sequence effects to outcome probabilities and recompute ΔRE
-        if abs(se_delta_old) > 0.5 and state.last_pitch:
-            # Convert old-system delta to probability multiplier:
-            # +8 old delta (max tunnel) → +15% P(ss) boost
-            # -15 repetition penalty → -25% P(ss), +10% P(ball)
-            ss_mult = 1.0 + se_delta_old * 0.02  # ~2% per old point
-            ss_mult = max(0.6, min(1.5, ss_mult))
-            ball_mult = 1.0 - se_delta_old * 0.008  # inverse, smaller
-            ball_mult = max(0.85, min(1.2, ball_mult))
-
-            seq_probs = {
-                "p_ball": adjusted["p_ball"] * ball_mult,
-                "p_called_strike": adjusted["p_called_strike"],
-                "p_swinging_strike": adjusted["p_swinging_strike"] * ss_mult,
-                "p_foul": adjusted["p_foul"],
-                "p_in_play": adjusted["p_in_play"],
-                "p_hbp": adjusted["p_hbp"],
-            }
-            # Renormalize
-            seq_total = sum(seq_probs.values())
-            if seq_total > 0:
-                seq_probs = {k: v / seq_total for k, v in seq_probs.items()}
-
-            seq_adj_probs = PitchOutcomeProbs(**seq_probs)
-            delta_re_with_seq = compute_delta_re(
-                pitch_type=pitch_name, count=count_str,
-                base_out_state=base_out, outcome_probs=seq_adj_probs,
-                re24=cal.re24, contact_rv=adjusted_contact_rv,
-                linear_weights=lw, count_ball_cost=_count_ball_cost,
-                count_strike_gain=_count_strike_gain, bip_profile=cal.bip_profiles,
-                gb_dp_rates=_gb_dp,
-                pitcher_gb_pct=_pitcher_gb_pct,
-                pitcher_fb_pct=_pitcher_fb_pct,
-            )
-            delta_re_seq = delta_re_with_seq - delta_re_base
-        else:
-            delta_re_seq = 0.0
-
-        # Steal/squeeze: convert old-system points to ΔRE units.
-        # Principled scaling: a typical base ΔRE pitch spread is ~0.05 runs,
-        # while old-system overlays span ~±10 points.  Scale factor maps
-        # 10 old points ≈ 0.005 ΔRE (a meaningful but bounded adjustment).
-        RE_SCALE = 0.0005
-        sb_delta_old, sb_reasons = _steal_adjustments(pitch_name, info, state)
-        delta_re_steal = -sb_delta_old * RE_SCALE
-
-        sq_delta_old, sq_reasons = _squeeze_adjustments(pitch_name, info, state)
-        delta_re_squeeze = -sq_delta_old * RE_SCALE
-
-        # 4b. Hitter-specific game-theory adjustments (not captured by base ΔRE)
-        gt_delta_old, gt_reasons = _hitter_gametheory_delta(
-            pitch_name, hd, b, s, on1b, on2b, on3b, outs,
-        )
-        delta_re_gametheory = -gt_delta_old * RE_SCALE
-
-        # 4c. Hole-score overlay — pitch-type vulnerability from zone data
-        hs_delta_old, hs_reasons = _hole_score_overlay(pitch_name, hd)
-        delta_re_holes = -hs_delta_old * RE_SCALE
-
-        # 4d. Leverage adjustments (use WP leverage from state when available)
-        lv_delta_old, lv_reasons = _leverage_adjustments(
-            pitch_name, info, state, wp_leverage=getattr(state, "wp_leverage", None),
-        )
-        delta_re_leverage = -lv_delta_old * RE_SCALE
-
-        # 5. Contextual usage adjustment
-        # Resolve the most context-specific usage for this count/platoon/sequence,
-        # then apply reliability dampening and transition bonus.
-        bats_str = str(matchup.get("bats", "R")).strip().upper()[:1]
-        last_p = state.last_pitch if hasattr(state, 'last_pitch') else None
-
-        ctx_usage, usage_src = _resolve_contextual_usage(
-            info, b, s, bats_str, last_p,
-        )
-        delta_re_usage = 0.0
-        usage_reasons: List[str] = []
-
-        if not np.isnan(ctx_usage):
-            usage_f = float(ctx_usage)
-
-            # Reliability curve (unchanged — piecewise, pitch-class-aware)
-            if pitch_name in _HARD_PITCHES:
-                reliability_usage = float(np.interp(
-                    usage_f, [0, 5, 15, 30, 45], [0.10, 0.25, 0.55, 0.90, 1.0],
-                ))
-            else:
-                reliability_usage = float(np.interp(
-                    usage_f, [0, 5, 10, 20, 30], [0.30, 0.50, 0.65, 0.85, 1.0],
-                ))
-
-            n_pitches = int(info.get("count", 0) or 0)
-            reliability_sample = n_pitches / (n_pitches + 150) if n_pitches > 0 else 0.0
-            reliability = max(reliability_usage, reliability_sample)
-
-            if delta_re_base < 0:
-                dampened = delta_re_base * reliability
-                delta_re_usage = dampened - delta_re_base
-
-            # Transition bonus (sequence-aware)
-            trans_bonus = _resolve_transition_bonus(info, last_p)
-            delta_re_usage += trans_bonus
-
-            if usage_f < 8.0:
-                usage_reasons.append(f"low usage ({usage_f:.0f}%, {usage_src}): reliability {reliability:.0%}")
-            elif usage_f < 20.0:
-                usage_reasons.append(f"secondary ({usage_f:.0f}%, {usage_src}): reliability {reliability:.0%}")
-            elif usage_src != "overall":
-                usage_reasons.append(f"ctx usage {usage_f:.0f}% ({usage_src})")
-
-            if abs(trans_bonus) > 0.0005:
-                usage_reasons.append(f"transition {'bonus' if trans_bonus < 0 else 'penalty'}: {abs(trans_bonus)*100:.2f} RS/100")
-
-        delta_re_total = (delta_re_base + delta_re_seq + delta_re_steal
-                         + delta_re_squeeze + delta_re_gametheory + delta_re_holes
-                         + delta_re_leverage + delta_re_usage)
-        rs100 = -delta_re_total * 100.0  # runs saved per 100 pitches
-
-        # Build reasons
-        reasons.extend(info.get("reasons") or [])
-        reasons.extend(se_reasons)
-        reasons.extend(sb_reasons)
-        reasons.extend(sq_reasons)
-        reasons.extend(gt_reasons)
-        reasons.extend(hs_reasons)
-        reasons.extend(lv_reasons)
-        reasons.extend(usage_reasons)
-
-        # Confidence
-        n_p = int(info.get("count", 0) or 0)
-        from decision_engine.core.shrinkage import confidence_tier
-        conf = confidence_tier(n_p)
-
-        rows.append({
-            "pitch": pitch_name,
-            "delta_re": float(round(delta_re_total, 5)),
-            "rs100": float(round(rs100, 2)),
-            "delta_re_base": float(round(delta_re_base, 5)),
-            "delta_re_seq": float(round(delta_re_seq, 5)),
-            "delta_re_steal": float(round(delta_re_steal, 5)),
-            "delta_re_squeeze": float(round(delta_re_squeeze, 5)),
-            "delta_re_gametheory": float(round(delta_re_gametheory, 5)),
-            "delta_re_holes": float(round(delta_re_holes, 5)),
-            "delta_re_leverage": float(round(delta_re_leverage, 5)),
-            "delta_re_usage": float(round(delta_re_usage, 5)),
-            "confidence": conf,
-            "confidence_n": n_p,
-            "reasons": reasons,
-            "raw": info,
-        })
-
-    # Sort by ΔRE ascending (most negative = best for pitcher)
-    rows.sort(key=lambda r: r["delta_re"])
-    return rows[: max(1, int(top_n))]
-
-
-# ── WPA-based recommender ───────────────────────────────────────────────────
-
-_WP_TABLE = None
-
-
-def _get_wp_table():
-    global _WP_TABLE
-    if _WP_TABLE is None:
-        from analytics.win_probability import load_wp_table
-        _WP_TABLE = load_wp_table()
-    return _WP_TABLE
-
-
-def recommend_pitch_call_wpa(
-    matchup: Dict[str, Any],
-    state: GameState,
-    top_n: int = 3,
-    *,
-    tun_df: Optional[pd.DataFrame] = None,
-    seq_df: Optional[pd.DataFrame] = None,
-    re_cal=None,
-    wp_table=None,
-) -> List[Dict[str, Any]]:
-    """Return top pitch call recommendations scored by ΔWP (win probability).
-
-    Parallels recommend_pitch_call_re() but uses Win Probability Added instead
-    of Run Expectancy.  Lower ΔWP = better for pitcher.
-    Displayed as WP±/100 = -ΔWP × 10000 (WP basis points per 100 pitches).
-    """
-    if not matchup or not matchup.get("pitch_scores"):
-        return []
-
     from analytics.run_expectancy import PitchOutcomeProbs
-    from analytics.win_probability import compute_delta_wp, compute_wp_leverage
+    from analytics.zone_vulnerability import _count_group_for
     from decision_engine.core.matchup import compute_matchup_adjusted_probs
-
-    cal = re_cal or _get_re_calibration()
-    wpt = wp_table or _get_wp_table()
-    if wpt is None or not wpt.wp:
-        return []  # no WP table available; caller should fall back to ΔRE
+    from decision_engine.core.shrinkage import confidence_tier
 
     hd = matchup.get("hitter_data") or {}
     b, s = state.count()
@@ -1354,29 +1023,7 @@ def recommend_pitch_call_wpa(
     outs = int(state.outs)
     base_out = (on1b, on2b, on3b, outs)
 
-    # Determine score diff (home - away) and half
-    score_diff = 0
-    half = "top" if state.top_bottom.lower().startswith("t") else "bot"
-    if state.score_our is not None and state.score_opp is not None:
-        our = int(state.score_our)
-        opp = int(state.score_opp)
-        # "our" team is the pitching team, "opp" is the batting team.
-        # Convention: if we're pitching top of inning, away team bats, we're home.
-        # If we're pitching bottom, home team bats, we're away.
-        if half == "top":
-            # Away team is batting; we are home team pitcher
-            score_diff = our - opp  # home - away
-        else:
-            # Home team is batting; we are away team pitcher
-            score_diff = opp - our  # home - away (opp is home)
-    inning = max(1, int(state.inning))
-
-    # WP-based leverage
-    wp_lev = compute_wp_leverage(wpt, inning, half, score_diff, on1b, on2b, on3b, outs)
-
-    # Load calibrated ball/strike costs from count_calibration (cached)
     _count_ball_cost, _count_strike_gain = _get_count_cal_costs()
-
     _gb_dp = _get_gb_dp_rates()
 
     lw = {
@@ -1414,13 +1061,14 @@ def recommend_pitch_call_wpa(
         _pitcher_gb_pct = _usage_weighted_gb / _usage_total
         _pitcher_fb_pct = _usage_weighted_fb / _usage_total if _usage_weighted_fb > 0 else None
 
-    RE_SCALE = 0.0005
-    rows: List[Dict[str, Any]] = []
+    # Shared context passed to scoring callbacks
+    costs = (_count_ball_cost, _count_strike_gain)
 
+    rows: List[Dict[str, Any]] = []
     for pitch_name, info in matchup["pitch_scores"].items():
         reasons: List[str] = []
 
-        # 1. Get league-average outcome probs
+        # 1. Get league-average outcome probs for this pitch at this count
         league_probs_obj = None
         if cal and pitch_name in cal.outcome_probs and count_str in cal.outcome_probs[pitch_name]:
             league_probs_obj = cal.outcome_probs[pitch_name][count_str]
@@ -1451,18 +1099,23 @@ def recommend_pitch_call_wpa(
             "p_hbp": league_probs_obj.p_hbp,
         }
 
-        # 2. Apply matchup adjustments
+        # 2. Apply matchup adjustments (count-specific metrics when available)
+        _cg = _count_group_for(b, s)
+        _count_perf = info.get("count_perf", {}).get(_cg, {})
+        _metric_source = _cg if _count_perf else "overall"
+
         pitcher_metrics = {
-            "whiff_pct": info.get("shrunk_whiff", info.get("our_whiff")),
-            "csw_pct": info.get("shrunk_csw", info.get("our_csw")),
-            "chase_pct": info.get("shrunk_chase", info.get("our_chase")),
-            "ev_against": info.get("shrunk_ev", info.get("our_ev_against")),
-            "count": info.get("count", 0),
+            "whiff_pct": _count_perf.get("whiff_pct") or info.get("shrunk_whiff", info.get("our_whiff")),
+            "csw_pct": _count_perf.get("csw_pct") or info.get("shrunk_csw", info.get("our_csw")),
+            "chase_pct": _count_perf.get("chase_pct") or info.get("shrunk_chase", info.get("our_chase")),
+            "ev_against": _count_perf.get("ev_against") or info.get("shrunk_ev", info.get("our_ev_against")),
+            "count": _count_perf.get("n") or info.get("count", 0),
         }
         hitter_metrics = {
             "k_pct": hd.get("k_pct"),
             "chase_pct": hd.get("chase_pct"),
             "contact_pct": hd.get("contact_pct"),
+            "ev": hd.get("ev"),
             "pa": hd.get("pa"),
         }
 
@@ -1479,95 +1132,95 @@ def recommend_pitch_call_wpa(
             p_hbp=adjusted["p_hbp"],
         )
 
-        # Adjust contact RV
+        # Adjust contact RV for matchup
         base_crv = cal.contact_rv.get(pitch_name, 0.12) if cal else 0.12
         crv_adj = adjusted.get("contact_rv_adj", 1.0)
         adjusted_crv = base_crv * crv_adj
         adjusted_contact_rv = dict(cal.contact_rv) if cal else {}
         adjusted_contact_rv[pitch_name] = adjusted_crv
 
-        # 3. Compute ΔWP
-        delta_wp_base = compute_delta_wp(
-            pitch_type=pitch_name,
-            count=count_str,
-            base_out_state=base_out,
-            outcome_probs=adj_probs,
-            wp_table=wpt,
-            score_diff=score_diff,
-            inning=inning,
-            half=half,
-            contact_rv=adjusted_contact_rv,
-            linear_weights=lw,
-            bip_profile=cal.bip_profiles if cal else None,
-            gb_dp_rates=_gb_dp,
-            pitcher_gb_pct=_pitcher_gb_pct,
-            pitcher_fb_pct=_pitcher_fb_pct,
-            tag_up_score_pct=None,
-            count_ball_cost=_count_ball_cost,
-            count_strike_gain=_count_strike_gain,
+        # 3. Compute base delta (ΔRE or ΔWP)
+        delta_base = compute_base_delta(
+            pitch_name, count_str, base_out, adj_probs, cal,
+            adjusted_contact_rv, lw, costs, _gb_dp,
+            _pitcher_gb_pct, _pitcher_fb_pct,
         )
 
-        # 4. Sequence adjustments (convert to ΔWP scale via ratio)
-        se_delta_old, se_reasons = _sequence_adjustments(pitch_name, state, tun_df=tun_df, seq_df=seq_df)
-        # Convert old-system sequence delta to ΔWP: use WP scale factor
-        # ΔWP is typically ~10x smaller than ΔRE, so WP_SCALE = RE_SCALE * 0.1
-        WP_SCALE = RE_SCALE * 0.1  # 0.00005
-        delta_wp_seq = -se_delta_old * WP_SCALE if abs(se_delta_old) > 0.5 else 0.0
+        # 4. Sequence adjustments
+        se_delta_old, se_reasons = _sequence_adjustments(
+            pitch_name, state, tun_df=tun_df, seq_df=seq_df,
+        )
+        delta_seq = compute_seq_delta(
+            se_delta_old, adjusted, pitch_name, count_str, base_out,
+            cal, adjusted_contact_rv, lw, costs, _gb_dp,
+            _pitcher_gb_pct, _pitcher_fb_pct, delta_base,
+        )
 
         # Steal/squeeze
         sb_delta_old, sb_reasons = _steal_adjustments(pitch_name, info, state)
-        delta_wp_steal = -sb_delta_old * WP_SCALE
+        delta_steal = -sb_delta_old * overlay_scale
 
         sq_delta_old, sq_reasons = _squeeze_adjustments(pitch_name, info, state)
-        delta_wp_squeeze = -sq_delta_old * WP_SCALE
+        delta_squeeze = -sq_delta_old * overlay_scale
 
-        # Game-theory hitter adjustments
-        gt_delta_old, gt_reasons = _hitter_gametheory_delta(
-            pitch_name, hd, b, s, on1b, on2b, on3b, outs,
+        # DP boost
+        delta_gametheory = 0.0
+        gt_reasons: List[str] = []
+        if on1b and not on2b and not on3b and outs < 2:
+            h_gb = _safe_hd(hd.get("gb_pct"))
+            if not np.isnan(h_gb) and h_gb > 50 and pitch_name in _GB_PITCHES:
+                dp_boost = min((h_gb - 50) / 15 * 3.0, 3.0)
+                delta_gametheory = -dp_boost * overlay_scale
+                gt_reasons.append(f"GB hitter ({h_gb:.0f}%): DP boost")
+
+        # Leverage adjustments
+        lv_delta_old, lv_reasons = _leverage_adjustments(
+            pitch_name, info, state,
+            wp_leverage=wp_leverage if wp_leverage is not None else getattr(state, "wp_leverage", None),
         )
-        delta_wp_gametheory = -gt_delta_old * WP_SCALE
+        delta_leverage = -lv_delta_old * overlay_scale
 
-        # Hole-score overlay
-        hs_delta_old, hs_reasons = _hole_score_overlay(pitch_name, hd)
-        delta_wp_holes = -hs_delta_old * WP_SCALE
-
-        # Leverage adjustments (using WP-derived leverage)
-        lv_delta_old, lv_reasons = _leverage_adjustments(pitch_name, info, state, wp_leverage=wp_lev)
-        delta_wp_leverage = -lv_delta_old * WP_SCALE
-
-        # Contextual usage adjustment (WP scale)
+        # Contextual usage adjustment
         bats_str = str(matchup.get("bats", "R")).strip().upper()[:1]
         last_p = state.last_pitch if hasattr(state, 'last_pitch') else None
 
         ctx_usage, usage_src = _resolve_contextual_usage(
             info, b, s, bats_str, last_p,
         )
-        delta_wp_usage = 0.0
+        delta_usage = 0.0
         usage_reasons: List[str] = []
 
         if not np.isnan(ctx_usage):
             usage_f = float(ctx_usage)
 
+            # Reliability curve (tightened — low-usage pitches get near-zero reliability)
             if pitch_name in _HARD_PITCHES:
                 reliability_usage = float(np.interp(
-                    usage_f, [0, 5, 15, 30, 45], [0.10, 0.25, 0.55, 0.90, 1.0],
+                    usage_f, [0, 5, 15, 30, 45], [0.05, 0.15, 0.45, 0.85, 1.0],
                 ))
             else:
                 reliability_usage = float(np.interp(
-                    usage_f, [0, 5, 10, 20, 30], [0.30, 0.50, 0.65, 0.85, 1.0],
+                    usage_f, [0, 5, 10, 20, 30], [0.05, 0.15, 0.50, 0.80, 1.0],
                 ))
 
             n_pitches = int(info.get("count", 0) or 0)
             reliability_sample = n_pitches / (n_pitches + 150) if n_pitches > 0 else 0.0
             reliability = max(reliability_usage, reliability_sample)
 
-            if delta_wp_base < 0:
-                dampened = delta_wp_base * reliability
-                delta_wp_usage = dampened - delta_wp_base
+            if delta_base < 0:
+                dampened = delta_base * reliability
+                delta_usage = dampened - delta_base
 
-            # Transition bonus (WP scale)
-            trans_bonus = _resolve_transition_bonus(info, last_p) * 0.1
-            delta_wp_usage += trans_bonus
+            # Explicit usage penalty: pitches below ~10% usage get a positive
+            # penalty (makes them look worse), not just dampened good signal.
+            if usage_f < 10:
+                usage_penalty = 0.015 * (10 - usage_f) * usage_penalty_scale
+                delta_usage += usage_penalty
+                usage_reasons.append(f"usage penalty +{usage_penalty:.4f} ({usage_f:.0f}%)")
+
+            # Transition bonus
+            trans_bonus = _resolve_transition_bonus(info, last_p) * transition_scale
+            delta_usage += trans_bonus
 
             if usage_f < 8.0:
                 usage_reasons.append(f"low usage ({usage_f:.0f}%, {usage_src}): reliability {reliability:.0%}")
@@ -1576,13 +1229,11 @@ def recommend_pitch_call_wpa(
             elif usage_src != "overall":
                 usage_reasons.append(f"ctx usage {usage_f:.0f}% ({usage_src})")
 
-            if abs(trans_bonus) > 0.00005:
-                usage_reasons.append(f"transition {'bonus' if trans_bonus < 0 else 'penalty'}: {abs(trans_bonus)*10000:.2f} WP bp/100")
+            if abs(trans_bonus) > 0.0005 * transition_scale:
+                usage_reasons.append(f"transition {'bonus' if trans_bonus < 0 else 'penalty'}")
 
-        delta_wp_total = (delta_wp_base + delta_wp_seq + delta_wp_steal
-                         + delta_wp_squeeze + delta_wp_gametheory + delta_wp_holes
-                         + delta_wp_leverage + delta_wp_usage)
-        wpa_per_100 = -delta_wp_total * 10000  # WP basis points per 100 pitches
+        delta_total = (delta_base + delta_seq + delta_steal + delta_squeeze
+                      + delta_gametheory + delta_leverage + delta_usage)
 
         # Build reasons
         reasons.extend(info.get("reasons") or [])
@@ -1590,36 +1241,245 @@ def recommend_pitch_call_wpa(
         reasons.extend(sb_reasons)
         reasons.extend(sq_reasons)
         reasons.extend(gt_reasons)
-        reasons.extend(hs_reasons)
         reasons.extend(lv_reasons)
         reasons.extend(usage_reasons)
 
+        # Confidence
         n_p = int(info.get("count", 0) or 0)
-        from decision_engine.core.shrinkage import confidence_tier
         conf = confidence_tier(n_p)
 
-        rows.append({
+        delta_components = {
+            "base": delta_base, "seq": delta_seq, "steal": delta_steal,
+            "squeeze": delta_squeeze, "gametheory": delta_gametheory,
+            "leverage": delta_leverage, "usage": delta_usage,
+        }
+        rows.append(format_row(
+            pitch_name, delta_total, delta_components, _metric_source,
+            conf, n_p, reasons, info,
+        ))
+
+    # Sort by delta ascending (most negative = best for pitcher)
+    sort_key = "delta_re" if "delta_re" in rows[0] else "delta_wp"
+    rows.sort(key=lambda r: r[sort_key])
+    return rows[: max(1, int(top_n))]
+
+
+def recommend_pitch_call_re(
+    matchup: Dict[str, Any],
+    state: GameState,
+    top_n: int = 3,
+    *,
+    tun_df: Optional[pd.DataFrame] = None,
+    seq_df: Optional[pd.DataFrame] = None,
+    re_cal=None,
+) -> List[Dict[str, Any]]:
+    """Return top pitch call recommendations scored by ΔRE (run expectancy).
+
+    Lower ΔRE = better for pitcher. Displayed as RS/100 = -ΔRE × 100.
+    """
+    if not matchup or not matchup.get("pitch_scores"):
+        return []
+
+    from analytics.run_expectancy import (
+        PitchOutcomeProbs,
+        compute_delta_re,
+    )
+
+    cal = re_cal or _get_re_calibration()
+    if cal is None:
+        return recommend_pitch_call(matchup, state, top_n=top_n,
+                                    tun_df=tun_df, seq_df=seq_df)
+
+    RE_SCALE = 0.0005
+
+    def _compute_base(pitch_name, count_str, base_out, adj_probs, cal,
+                      adjusted_contact_rv, lw, costs, gb_dp, pitcher_gb, pitcher_fb):
+        return compute_delta_re(
+            pitch_type=pitch_name, count=count_str,
+            base_out_state=base_out, outcome_probs=adj_probs,
+            re24=cal.re24, contact_rv=adjusted_contact_rv,
+            linear_weights=lw,
+            count_ball_cost=costs[0], count_strike_gain=costs[1],
+            bip_profile=cal.bip_profiles, gb_dp_rates=gb_dp,
+            pitcher_gb_pct=pitcher_gb, pitcher_fb_pct=pitcher_fb,
+        )
+
+    def _compute_seq(se_delta_old, adjusted, pitch_name, count_str, base_out,
+                     cal, adjusted_contact_rv, lw, costs, gb_dp,
+                     pitcher_gb, pitcher_fb, delta_base):
+        if abs(se_delta_old) > 0.5 and state.last_pitch:
+            ss_mult = max(0.6, min(1.5, 1.0 + se_delta_old * 0.02))
+            ball_mult = max(0.85, min(1.2, 1.0 - se_delta_old * 0.008))
+            seq_probs = {
+                "p_ball": adjusted["p_ball"] * ball_mult,
+                "p_called_strike": adjusted["p_called_strike"],
+                "p_swinging_strike": adjusted["p_swinging_strike"] * ss_mult,
+                "p_foul": adjusted["p_foul"],
+                "p_in_play": adjusted["p_in_play"],
+                "p_hbp": adjusted["p_hbp"],
+            }
+            seq_total = sum(seq_probs.values())
+            if seq_total > 0:
+                seq_probs = {k: v / seq_total for k, v in seq_probs.items()}
+            seq_adj_probs = PitchOutcomeProbs(**seq_probs)
+            delta_with_seq = compute_delta_re(
+                pitch_type=pitch_name, count=count_str,
+                base_out_state=base_out, outcome_probs=seq_adj_probs,
+                re24=cal.re24, contact_rv=adjusted_contact_rv,
+                linear_weights=lw,
+                count_ball_cost=costs[0], count_strike_gain=costs[1],
+                bip_profile=cal.bip_profiles, gb_dp_rates=gb_dp,
+                pitcher_gb_pct=pitcher_gb, pitcher_fb_pct=pitcher_fb,
+            )
+            return delta_with_seq - delta_base
+        return 0.0
+
+    def _format_re(pitch_name, delta_total, dc, metric_source, conf, n_p, reasons, info):
+        rs100 = -delta_total * 100.0
+        return {
             "pitch": pitch_name,
-            "delta_wp": float(round(delta_wp_total, 7)),
-            "wpa_per_100": float(round(wpa_per_100, 2)),
-            # Also include ΔRE-equivalent fields for backward compat
-            "delta_re": float(round(delta_wp_total, 7)),
-            "rs100": float(round(wpa_per_100, 2)),
-            "delta_wp_base": float(round(delta_wp_base, 7)),
-            "delta_wp_seq": float(round(delta_wp_seq, 7)),
-            "delta_wp_steal": float(round(delta_wp_steal, 7)),
-            "delta_wp_squeeze": float(round(delta_wp_squeeze, 7)),
-            "delta_wp_gametheory": float(round(delta_wp_gametheory, 7)),
-            "delta_wp_holes": float(round(delta_wp_holes, 7)),
-            "delta_wp_leverage": float(round(delta_wp_leverage, 7)),
-            "delta_wp_usage": float(round(delta_wp_usage, 7)),
-            "wp_leverage": float(round(wp_lev, 3)),
+            "delta_re": float(round(delta_total, 5)),
+            "rs100": float(round(rs100, 2)),
+            "delta_re_base": float(round(dc["base"], 5)),
+            "delta_re_seq": float(round(dc["seq"], 5)),
+            "delta_re_steal": float(round(dc["steal"], 5)),
+            "delta_re_squeeze": float(round(dc["squeeze"], 5)),
+            "delta_re_gametheory": float(round(dc["gametheory"], 5)),
+            "delta_re_holes": 0.0,
+            "delta_re_leverage": float(round(dc["leverage"], 5)),
+            "delta_re_usage": float(round(dc["usage"], 5)),
+            "metric_source": metric_source,
             "confidence": conf,
             "confidence_n": n_p,
             "reasons": reasons,
             "raw": info,
-        })
+        }
 
-    # Sort by ΔWP ascending (most negative = best for pitcher)
-    rows.sort(key=lambda r: r["delta_wp"])
-    return rows[: max(1, int(top_n))]
+    return _recommend_pitch_core(
+        matchup, state, top_n,
+        tun_df=tun_df, seq_df=seq_df, cal=cal,
+        compute_base_delta=_compute_base,
+        compute_seq_delta=_compute_seq,
+        overlay_scale=RE_SCALE,
+        usage_penalty_scale=1.0,
+        transition_scale=1.0,
+        wp_leverage=None,
+        format_row=_format_re,
+    )
+
+
+# ── WPA-based recommender ───────────────────────────────────────────────────
+
+_WP_TABLE = None
+
+
+def _get_wp_table():
+    global _WP_TABLE
+    if _WP_TABLE is None:
+        from analytics.win_probability import load_wp_table
+        _WP_TABLE = load_wp_table()
+    return _WP_TABLE
+
+
+def recommend_pitch_call_wpa(
+    matchup: Dict[str, Any],
+    state: GameState,
+    top_n: int = 3,
+    *,
+    tun_df: Optional[pd.DataFrame] = None,
+    seq_df: Optional[pd.DataFrame] = None,
+    re_cal=None,
+    wp_table=None,
+) -> List[Dict[str, Any]]:
+    """Return top pitch call recommendations scored by ΔWP (win probability).
+
+    Parallels recommend_pitch_call_re() but uses Win Probability Added instead
+    of Run Expectancy.  Lower ΔWP = better for pitcher.
+    Displayed as WP±/100 = -ΔWP × 10000 (WP basis points per 100 pitches).
+    """
+    if not matchup or not matchup.get("pitch_scores"):
+        return []
+
+    from analytics.run_expectancy import PitchOutcomeProbs
+    from analytics.win_probability import compute_delta_wp, compute_wp_leverage
+
+    cal = re_cal or _get_re_calibration()
+    wpt = wp_table or _get_wp_table()
+    if wpt is None or not wpt.wp:
+        return []
+
+    # Determine score diff (home - away) and half
+    score_diff = 0
+    half = "top" if state.top_bottom.lower().startswith("t") else "bot"
+    if state.score_our is not None and state.score_opp is not None:
+        our = int(state.score_our)
+        opp = int(state.score_opp)
+        if half == "top":
+            score_diff = our - opp
+        else:
+            score_diff = opp - our
+    inning = max(1, int(state.inning))
+
+    on1b = int(bool(state.bases.on_1b))
+    on2b = int(bool(state.bases.on_2b))
+    on3b = int(bool(state.bases.on_3b))
+    outs = int(state.outs)
+    wp_lev = compute_wp_leverage(wpt, inning, half, score_diff, on1b, on2b, on3b, outs)
+
+    RE_SCALE = 0.0005
+    WP_SCALE = RE_SCALE * 0.1
+
+    def _compute_base(pitch_name, count_str, base_out, adj_probs, cal,
+                      adjusted_contact_rv, lw, costs, gb_dp, pitcher_gb, pitcher_fb):
+        return compute_delta_wp(
+            pitch_type=pitch_name, count=count_str,
+            base_out_state=base_out, outcome_probs=adj_probs,
+            wp_table=wpt, score_diff=score_diff, inning=inning, half=half,
+            contact_rv=adjusted_contact_rv, linear_weights=lw,
+            bip_profile=cal.bip_profiles if cal else None,
+            gb_dp_rates=gb_dp,
+            pitcher_gb_pct=pitcher_gb, pitcher_fb_pct=pitcher_fb,
+            tag_up_score_pct=None,
+            count_ball_cost=costs[0], count_strike_gain=costs[1],
+        )
+
+    def _compute_seq(se_delta_old, adjusted, pitch_name, count_str, base_out,
+                     cal, adjusted_contact_rv, lw, costs, gb_dp,
+                     pitcher_gb, pitcher_fb, delta_base):
+        return -se_delta_old * WP_SCALE if abs(se_delta_old) > 0.5 else 0.0
+
+    def _format_wp(pitch_name, delta_total, dc, metric_source, conf, n_p, reasons, info):
+        wpa_per_100 = -delta_total * 10000
+        return {
+            "pitch": pitch_name,
+            "delta_wp": float(round(delta_total, 7)),
+            "wpa_per_100": float(round(wpa_per_100, 2)),
+            "delta_re": float(round(delta_total, 7)),
+            "rs100": float(round(wpa_per_100, 2)),
+            "delta_wp_base": float(round(dc["base"], 7)),
+            "delta_wp_seq": float(round(dc["seq"], 7)),
+            "delta_wp_steal": float(round(dc["steal"], 7)),
+            "delta_wp_squeeze": float(round(dc["squeeze"], 7)),
+            "delta_wp_gametheory": float(round(dc["gametheory"], 7)),
+            "delta_wp_holes": 0.0,
+            "delta_wp_leverage": float(round(dc["leverage"], 7)),
+            "delta_wp_usage": float(round(dc["usage"], 7)),
+            "wp_leverage": float(round(wp_lev, 3)),
+            "metric_source": metric_source,
+            "confidence": conf,
+            "confidence_n": n_p,
+            "reasons": reasons,
+            "raw": info,
+        }
+
+    return _recommend_pitch_core(
+        matchup, state, top_n,
+        tun_df=tun_df, seq_df=seq_df, cal=cal,
+        compute_base_delta=_compute_base,
+        compute_seq_delta=_compute_seq,
+        overlay_scale=WP_SCALE,
+        usage_penalty_scale=0.1,
+        transition_scale=0.1,
+        wp_leverage=wp_lev,
+        format_row=_format_wp,
+    )

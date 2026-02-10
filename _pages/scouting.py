@@ -626,6 +626,44 @@ def _get_our_pitcher_arsenal(data, pitcher_name, season_filter=None, tunnel_pop=
             "zone_eff": zone_eff,
             "zone_eff_3x3": zone_eff_3x3,
         }
+
+        # ── Count-group performance metrics (whiff, CSW, chase, EV by count group) ──
+        # Uses same _COUNT_GROUPS as contextual usage below.
+        from analytics.zone_vulnerability import _COUNT_GROUPS as _CG_PERF, _count_group_for as _cg_for_perf
+        _cg_grp = grp.dropna(subset=["Balls", "Strikes"]).copy()
+        if len(_cg_grp) >= 5:
+            _cg_grp["_balls"] = pd.to_numeric(_cg_grp["Balls"], errors="coerce").astype("Int64")
+            _cg_grp["_strikes"] = pd.to_numeric(_cg_grp["Strikes"], errors="coerce").astype("Int64")
+            _cg_grp["_cg"] = _cg_grp.apply(lambda r: _cg_for_perf(int(r["_balls"]), int(r["_strikes"])), axis=1)
+            _count_perf: dict = {}
+            for _cg_name in _CG_PERF:
+                _cg_rows = _cg_grp[_cg_grp["_cg"] == _cg_name]
+                _n_cg = len(_cg_rows)
+                if _n_cg < 5:
+                    continue
+                _cg_sw = _cg_rows[_cg_rows["PitchCall"].isin(SWING_CALLS)]
+                _cg_wh = _cg_rows[_cg_rows["PitchCall"] == "StrikeSwinging"]
+                _cg_csw = _cg_rows[_cg_rows["PitchCall"].isin(["StrikeCalled", "StrikeSwinging"])]
+                _cg_oz = _cg_rows[_oz.reindex(_cg_rows.index, fill_value=False)]
+                _cg_oz_sw = _cg_oz[_cg_oz["PitchCall"].isin(SWING_CALLS)]
+                _cg_ip = _cg_rows[_cg_rows["PitchCall"] == "InPlay"].dropna(subset=["ExitSpeed"])
+                _n_sw = len(_cg_sw)
+                _n_oz = len(_cg_oz)
+                _n_ip = len(_cg_ip)
+                _count_perf[_cg_name] = {
+                    "whiff_pct": len(_cg_wh) / max(_n_sw, 1) * 100 if _n_sw >= 3 else np.nan,
+                    "csw_pct": len(_cg_csw) / _n_cg * 100,
+                    "chase_pct": len(_cg_oz_sw) / max(_n_oz, 1) * 100 if _n_oz >= 3 else np.nan,
+                    "ev_against": _cg_ip["ExitSpeed"].mean() if _n_ip >= 3 else np.nan,
+                    "n": _n_cg,
+                    "n_swings": _n_sw,
+                    "n_oz_pitches": _n_oz,
+                    "n_inplay_ev": _n_ip,
+                }
+            arsenal["pitches"][pt_name]["count_perf"] = _count_perf
+        else:
+            arsenal["pitches"][pt_name]["count_perf"] = {}
+
     # ── Contextual usage: count-group, platoon, count×platoon, transition ──
     from analytics.zone_vulnerability import _COUNT_GROUPS, _count_group_for
 
@@ -1687,16 +1725,19 @@ def _pitch_score_composite(pt_name, pt_data, hd, tun_df, platoon_label="Neutral"
         # 82 → 0, 88 → 50, 94+ → 100
         components.append(min(max((eff_velo - 82) / 12 * 100, 0), 100)); weights.append(3)
 
-    # 16. Our Usage (7%) — pitches we actually throw should rank higher; low-usage pitches
-    #     have small samples. But cap the penalty so quality secondaries can still surface.
+    # 16. Our Usage (18%) — pitches we actually throw should rank higher; low-usage pitches
+    #     have small samples and unreliable metrics. Steeper scaling separates mid-usage better.
     usage_pct = ars_pt.get("usage_pct", pt_data.get("usage", np.nan))
     if not pd.isna(usage_pct):
-        # 0% → 0, 10% → 30, 20% → 50, 35%+ → 80, 55%+ → 100
-        # Floor of 30 for any pitch >= 10% usage so secondaries aren't crushed
-        raw_usage = min(max(usage_pct / 55 * 100, 0), 100)
-        if usage_pct >= 10:
+        # Steeper scaling: 0% → 0, 10% → 25, 20% → 50, 40%+ → 100
+        # Floor of 30 for any pitch >= 15% usage so true secondaries aren't crushed
+        # Ceiling of 15 for pitches < 5% usage (rarely thrown = unreliable)
+        raw_usage = min(max(usage_pct / 40 * 100, 0), 100)
+        if usage_pct < 5:
+            raw_usage = min(raw_usage, 15)
+        elif usage_pct >= 15:
             raw_usage = max(raw_usage, 30)
-        components.append(raw_usage); weights.append(7)
+        components.append(raw_usage); weights.append(18)
 
     # 18. Raw Velo (3%) — 93 mph FB should score higher than 86 mph; harder to react to
     raw_velo = ars_pt.get("avg_velo", pt_data.get("velo", np.nan))

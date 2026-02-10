@@ -232,6 +232,35 @@ def score_pitcher_vs_hitter_shrunk(
             "shrunk_barrel": shrunk.get("barrel_pct_against", np.nan),
         }
 
+        # ── Shrink count-group performance metrics toward overall shrunk metrics ──
+        raw_cp = pt_data.get("count_perf", {})
+        shrunk_cp: dict = {}
+        for cg_name, cg_vals in raw_cp.items():
+            cg_n = cg_vals.get("n", 0) or 0
+            if cg_n < 5:
+                continue
+            shrunk_cp[cg_name] = {
+                "whiff_pct": shrink_value(
+                    cg_vals.get("whiff_pct"), cg_vals.get("n_swings", 0),
+                    shrunk.get("whiff_pct"), n_prior_equiv=30.0,
+                ),
+                "csw_pct": shrink_value(
+                    cg_vals.get("csw_pct"), cg_n,
+                    shrunk.get("csw_pct"), n_prior_equiv=50.0,
+                ),
+                "chase_pct": shrink_value(
+                    cg_vals.get("chase_pct"), cg_vals.get("n_oz_pitches", 0),
+                    shrunk.get("chase_pct"), n_prior_equiv=50.0,
+                ),
+                "ev_against": shrink_value(
+                    cg_vals.get("ev_against"), cg_vals.get("n_inplay_ev", 0),
+                    shrunk.get("ev_against"), n_prior_equiv=25.0,
+                ),
+                "n": cg_n,
+            }
+        pitch_scores[pt_name]["count_perf"] = shrunk_cp
+        pitch_scores[pt_name]["count_perf_raw"] = raw_cp
+
     sorted_pitches = sorted(pitch_scores.items(), key=lambda x: x[1]["score"], reverse=True)
     recommendations = []
     if sorted_pitches:
@@ -405,12 +434,18 @@ def compute_matchup_adjusted_probs(
         min_ss = p_ss_original * 0.3
         p_ss = max(min_ss, min(max_ss, p_ss))
 
-    # ── Contact RV adjustment (EV-based) ──
+    # ── Contact RV adjustment (EV-based, blends pitcher + hitter) ──
     contact_rv_adj = 1.0
     _ev_baseline = 85.0  # D1 average EV against
     p_ev = pitcher_metrics.get("ev_against")
+    h_ev = hitter_metrics.get("ev")
     if p_ev is not None and not np.isnan(float(p_ev or 0)):
-        ev_ratio = float(p_ev) / _ev_baseline
+        p_ev_f = float(p_ev)
+        if h_ev is not None and not np.isnan(float(h_ev or 0)):
+            blended_ev = 0.6 * p_ev_f + 0.4 * float(h_ev)
+        else:
+            blended_ev = p_ev_f
+        ev_ratio = blended_ev / _ev_baseline
         contact_rv_adj = max(0.7, min(1.5, ev_ratio))
 
     # ── Renormalize ──

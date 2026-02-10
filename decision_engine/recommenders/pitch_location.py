@@ -42,6 +42,16 @@ _PITCH_DESIGN_ZONE_MULT = {
         (0, 1): 0.9, (1, 1): 0.9, (2, 1): 1.1,   # mid-away = fade
         (0, 0): 1.2, (1, 0): 1.3, (2, 0): 1.3,   # low = natural fade
     },
+    "Sweeper": {
+        (0, 2): 0.7, (1, 2): 0.7, (2, 2): 0.8,   # up = risky (similar to Slider)
+        (0, 1): 1.1, (1, 1): 0.9, (2, 1): 0.9,   # mid-in = backdoor
+        (0, 0): 1.3, (1, 0): 1.1, (2, 0): 1.0,   # low-in = sweep / bury
+    },
+    "Splitter": {
+        (0, 2): 0.6, (1, 2): 0.6, (2, 2): 0.6,   # up = mistake (similar to Changeup)
+        (0, 1): 0.9, (1, 1): 0.9, (2, 1): 1.1,   # mid-away = fade
+        (0, 0): 1.2, (1, 0): 1.3, (2, 0): 1.3,   # low = natural drop
+    },
 }
 # Hard / offspeed defaults for pitch types not in the table above
 _PZM_HARD_DEFAULT = {

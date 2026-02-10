@@ -451,9 +451,9 @@ def render_ingame_panel(data):
             parts += f" = {r.get('delta_re', 0.0):+.4f}"
             st.caption(parts)
         else:
-            adj_seq = r.get("adj_sequence", 0.0)
-            seq_tag = f"  |  Seq: `{adj_seq:+.1f}`" if adj_seq != 0.0 else ""
-            st.markdown(f"**#{i} {pitch_name}**  |  Score: `{r['score']:.1f}`  |  Confidence: `{conf}` (n={conf_n}){seq_tag}")
+            adj_qual = r.get("adj_quality", r.get("adj_sequence", 0.0))
+            qual_tag = f"  |  Qual: `{adj_qual:+.1f}`" if adj_qual != 0.0 else ""
+            st.markdown(f"**#{i} {pitch_name}**  |  Score: `{r['score']:.1f}`  |  Confidence: `{conf}` (n={conf_n}){qual_tag}")
 
         if r.get("reasons"):
             st.caption(" | ".join(r["reasons"][:5]))
