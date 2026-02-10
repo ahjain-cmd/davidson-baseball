@@ -213,6 +213,11 @@ def score_pitcher_vs_hitter_shrunk(
             "stuff_plus": stuff,
             "command_plus": pt_data.get("command_plus", np.nan),
             "usage": pt_data.get("stabilised_usage", pt_data.get("usage_pct", np.nan)),
+            # Contextual usage tiers (computed in scouting arsenal builder)
+            "count_usage": pt_data.get("count_usage", {}),
+            "platoon_usage": pt_data.get("platoon_usage", {}),
+            "count_platoon_usage": pt_data.get("count_platoon_usage", {}),
+            "transition_usage": pt_data.get("transition_usage", {}),
             "velo": pt_data.get("avg_velo", np.nan),
             "eff_velo": pt_data.get("eff_velo", np.nan),
             "spin": pt_data.get("avg_spin", np.nan),

@@ -26,6 +26,109 @@ _CG_MAP = {
 }
 
 
+def _resolve_contextual_usage(
+    info: Dict[str, Any],
+    balls: int,
+    strikes: int,
+    bats: str,
+    last_pitch: Optional[str] = None,
+) -> Tuple[float, str]:
+    """Resolve the most specific usage % for a pitch given game context.
+
+    Returns (usage_pct, source_label) where source_label indicates which
+    tier was used (for reason strings).
+
+    Hierarchy:
+      1. count_platoon_usage (most specific) — shrink toward marginals
+      2. count_usage or platoon_usage (marginals)
+      3. overall stabilised_usage (fallback)
+    """
+    from analytics.zone_vulnerability import _count_group_for
+    from decision_engine.core.shrinkage import shrink_value
+
+    overall = info.get("usage", np.nan)
+    if np.isnan(overall):
+        return (np.nan, "none")
+
+    cg = _count_group_for(balls, strikes)
+    side_key = f"vs_{bats}" if bats in ("L", "R") else None
+
+    # Marginals
+    cu = info.get("count_usage", {}).get(cg)
+    pu = info.get("platoon_usage", {}).get(side_key) if side_key else None
+
+    cu_pct = cu["pct"] if cu and cu.get("n", 0) >= 20 else None
+    cu_n = cu["n"] if cu else 0
+    pu_pct = pu["pct"] if pu and pu.get("n", 0) >= 30 else None
+    pu_n = pu["n"] if pu else 0
+
+    # Tier 3: Count × Platoon
+    cp_key = f"{cg}_vs_{bats}" if bats in ("L", "R") else None
+    cp = info.get("count_platoon_usage", {}).get(cp_key) if cp_key else None
+    cp_pct = cp["pct"] if cp and cp.get("n", 0) >= 15 else None
+    cp_n = cp["n"] if cp else 0
+
+    # Resolve: most specific available, with shrinkage
+    if cp_pct is not None:
+        # Shrink toward average of marginals (or overall if marginals missing)
+        if cu_pct is not None and pu_pct is not None:
+            marginal_avg = (cu_pct + pu_pct) / 2.0
+        elif cu_pct is not None:
+            marginal_avg = cu_pct
+        elif pu_pct is not None:
+            marginal_avg = pu_pct
+        else:
+            marginal_avg = overall
+        resolved = shrink_value(cp_pct, cp_n, marginal_avg, n_prior_equiv=25.0)
+        return (resolved, f"count\u00d7platoon ({cg} vs {bats}, n={cp_n})")
+
+    if cu_pct is not None and pu_pct is not None:
+        # Average of marginals, each shrunk toward overall
+        cu_shrunk = shrink_value(cu_pct, cu_n, overall, n_prior_equiv=40.0)
+        pu_shrunk = shrink_value(pu_pct, pu_n, overall, n_prior_equiv=40.0)
+        resolved = (cu_shrunk + pu_shrunk) / 2.0
+        return (resolved, f"count+platoon avg ({cg} + vs {bats})")
+
+    if cu_pct is not None:
+        resolved = shrink_value(cu_pct, cu_n, overall, n_prior_equiv=40.0)
+        return (resolved, f"count-group ({cg}, n={cu_n})")
+
+    if pu_pct is not None:
+        resolved = shrink_value(pu_pct, pu_n, overall, n_prior_equiv=40.0)
+        return (resolved, f"platoon (vs {bats}, n={pu_n})")
+
+    return (overall, "overall")
+
+
+def _resolve_transition_bonus(
+    info: Dict[str, Any],
+    last_pitch: Optional[str],
+) -> float:
+    """Return a small \u0394RE bonus/penalty based on transition probability.
+
+    If the pitcher frequently follows last_pitch with this pitch, give a
+    small bonus (the pitcher has practiced this sequence). If they rarely
+    do, apply a small penalty.
+
+    Returns a \u0394RE offset (negative = good for pitcher).
+    """
+    if not last_pitch:
+        return 0.0
+    trans = info.get("transition_usage", {})
+    entry = trans.get(f"after_{last_pitch}")
+    if not entry or entry.get("n", 0) < 10:
+        return 0.0
+    trans_pct = entry["pct"]
+    overall = info.get("usage", np.nan)
+    if np.isnan(overall):
+        return 0.0
+    # Bonus if transition rate > overall (pitcher likes this sequence)
+    # Penalty if transition rate < overall (unusual sequence)
+    # Scale: ±0.003 ΔRE at ±20pp gap
+    gap = trans_pct - overall
+    return float(np.clip(gap * 0.00015, -0.003, 0.003))
+
+
 # ── Calibrated weights & data (lazy-loaded singletons) ──────────────────────
 _CAL = None
 _HIST_CAL = None
@@ -1111,60 +1214,52 @@ def recommend_pitch_call_re(
         )
         delta_re_leverage = -lv_delta_old * RE_SCALE
 
-        # 5. Usage adjustment — dampen base ΔRE by reliability factor.
-        # League-average outcome probs don't reflect THIS pitcher's execution
-        # of a rarely-thrown pitch.  A 5% usage sinker doesn't perform like
-        # the average sinker — the pitcher lacks feel, command, and deception
-        # on it.  We dampen the *benefit* portion of base ΔRE proportionally.
-        usage = info.get("usage", np.nan)
+        # 5. Contextual usage adjustment
+        # Resolve the most context-specific usage for this count/platoon/sequence,
+        # then apply reliability dampening and transition bonus.
+        bats_str = str(matchup.get("bats", "R")).strip().upper()[:1]
+        last_p = state.last_pitch if hasattr(state, 'last_pitch') else None
+
+        ctx_usage, usage_src = _resolve_contextual_usage(
+            info, b, s, bats_str, last_p,
+        )
         delta_re_usage = 0.0
         usage_reasons: List[str] = []
-        if not np.isnan(usage):
-            usage_f = float(usage)
 
-            # Reliability multiplier: sigmoid ramp with pitch-class-aware centre.
-            # Fastball/Sinker: centre=15% (unusual to throw few hard pitches)
-            # Slider/Curveball/Changeup: centre=10% (standard secondaries)
-            # Other (Splitter, Sweeper, Cutter, Knuckle Curve): centre=8%
+        if not np.isnan(ctx_usage):
+            usage_f = float(ctx_usage)
+
+            # Reliability curve (unchanged — piecewise, pitch-class-aware)
             if pitch_name in _HARD_PITCHES:
-                sigmoid_centre = 15.0
-            elif pitch_name in {"Slider", "Curveball", "Changeup"}:
-                sigmoid_centre = 10.0
+                reliability_usage = float(np.interp(
+                    usage_f, [0, 5, 15, 30, 45], [0.10, 0.25, 0.55, 0.90, 1.0],
+                ))
             else:
-                sigmoid_centre = 8.0
-            reliability_usage = min(1.0, max(0.0, 1.0 / (1.0 + math.exp(-0.35 * (usage_f - sigmoid_centre)))))
+                reliability_usage = float(np.interp(
+                    usage_f, [0, 5, 10, 20, 30], [0.30, 0.50, 0.65, 0.85, 1.0],
+                ))
 
-            # Sample-size reliability: if the pitcher has enough raw
-            # observations, trust the metrics even at low usage%.
-            # n_prior=150 → a 195-pitch changeup gets ~0.565 reliability.
             n_pitches = int(info.get("count", 0) or 0)
             reliability_sample = n_pitches / (n_pitches + 150) if n_pitches > 0 else 0.0
-
             reliability = max(reliability_usage, reliability_sample)
 
             if delta_re_base < 0:
-                # Pitch has run-saving value; dampen by reliability
                 dampened = delta_re_base * reliability
-                delta_re_usage = dampened - delta_re_base  # positive = penalty
-            # else: pitch is run-costing; don't help it — keep full penalty
+                delta_re_usage = dampened - delta_re_base
 
-            # Small bonus for primary pitches (hitter must respect them)
-            if usage_f >= 30.0:
-                delta_re_usage -= 0.002
-                usage_reasons.append(f"primary pitch ({usage_f:.0f}%)")
-            elif usage_f >= 20.0:
-                delta_re_usage -= 0.001
+            # Transition bonus (sequence-aware)
+            trans_bonus = _resolve_transition_bonus(info, last_p)
+            delta_re_usage += trans_bonus
 
             if usage_f < 8.0:
-                usage_reasons.append(f"low usage ({usage_f:.0f}%): reliability {reliability:.0%}")
-            elif usage_f < 15.0:
-                usage_reasons.append(f"secondary ({usage_f:.0f}%)")
+                usage_reasons.append(f"low usage ({usage_f:.0f}%, {usage_src}): reliability {reliability:.0%}")
+            elif usage_f < 20.0:
+                usage_reasons.append(f"secondary ({usage_f:.0f}%, {usage_src}): reliability {reliability:.0%}")
+            elif usage_src != "overall":
+                usage_reasons.append(f"ctx usage {usage_f:.0f}% ({usage_src})")
 
-            # Extra penalty at 3-ball counts — walk cost makes unreliable pitches riskier
-            if b == 3 and usage_f < 10.0:
-                extra = 0.004 if usage_f < 5.0 else 0.002
-                delta_re_usage += extra
-                usage_reasons.append("3-ball: low-usage risk amplified")
+            if abs(trans_bonus) > 0.0005:
+                usage_reasons.append(f"transition {'bonus' if trans_bonus < 0 else 'penalty'}: {abs(trans_bonus)*100:.2f} RS/100")
 
         delta_re_total = (delta_re_base + delta_re_seq + delta_re_steal
                          + delta_re_squeeze + delta_re_gametheory + delta_re_holes
@@ -1440,19 +1535,28 @@ def recommend_pitch_call_wpa(
         lv_delta_old, lv_reasons = _leverage_adjustments(pitch_name, info, state, wp_leverage=wp_lev)
         delta_wp_leverage = -lv_delta_old * WP_SCALE
 
-        # Usage dampening (same logic, WP scale)
-        usage = info.get("usage", np.nan)
+        # Contextual usage adjustment (WP scale)
+        bats_str = str(matchup.get("bats", "R")).strip().upper()[:1]
+        last_p = state.last_pitch if hasattr(state, 'last_pitch') else None
+
+        ctx_usage, usage_src = _resolve_contextual_usage(
+            info, b, s, bats_str, last_p,
+        )
         delta_wp_usage = 0.0
         usage_reasons: List[str] = []
-        if not np.isnan(usage):
-            usage_f = float(usage)
+
+        if not np.isnan(ctx_usage):
+            usage_f = float(ctx_usage)
+
             if pitch_name in _HARD_PITCHES:
-                sigmoid_centre = 15.0
-            elif pitch_name in {"Slider", "Curveball", "Changeup"}:
-                sigmoid_centre = 10.0
+                reliability_usage = float(np.interp(
+                    usage_f, [0, 5, 15, 30, 45], [0.10, 0.25, 0.55, 0.90, 1.0],
+                ))
             else:
-                sigmoid_centre = 8.0
-            reliability_usage = min(1.0, max(0.0, 1.0 / (1.0 + math.exp(-0.35 * (usage_f - sigmoid_centre)))))
+                reliability_usage = float(np.interp(
+                    usage_f, [0, 5, 10, 20, 30], [0.30, 0.50, 0.65, 0.85, 1.0],
+                ))
+
             n_pitches = int(info.get("count", 0) or 0)
             reliability_sample = n_pitches / (n_pitches + 150) if n_pitches > 0 else 0.0
             reliability = max(reliability_usage, reliability_sample)
@@ -1460,15 +1564,20 @@ def recommend_pitch_call_wpa(
             if delta_wp_base < 0:
                 dampened = delta_wp_base * reliability
                 delta_wp_usage = dampened - delta_wp_base
-            if usage_f >= 30.0:
-                delta_wp_usage -= 0.0002
-            elif usage_f >= 20.0:
-                delta_wp_usage -= 0.0001
+
+            # Transition bonus (WP scale)
+            trans_bonus = _resolve_transition_bonus(info, last_p) * 0.1
+            delta_wp_usage += trans_bonus
+
             if usage_f < 8.0:
-                usage_reasons.append(f"low usage ({usage_f:.0f}%): reliability {reliability:.0%}")
-            if b == 3 and usage_f < 10.0:
-                extra = 0.0004 if usage_f < 5.0 else 0.0002
-                delta_wp_usage += extra
+                usage_reasons.append(f"low usage ({usage_f:.0f}%, {usage_src}): reliability {reliability:.0%}")
+            elif usage_f < 20.0:
+                usage_reasons.append(f"secondary ({usage_f:.0f}%, {usage_src}): reliability {reliability:.0%}")
+            elif usage_src != "overall":
+                usage_reasons.append(f"ctx usage {usage_f:.0f}% ({usage_src})")
+
+            if abs(trans_bonus) > 0.00005:
+                usage_reasons.append(f"transition {'bonus' if trans_bonus < 0 else 'penalty'}: {abs(trans_bonus)*10000:.2f} WP bp/100")
 
         delta_wp_total = (delta_wp_base + delta_wp_seq + delta_wp_steal
                          + delta_wp_squeeze + delta_wp_gametheory + delta_wp_holes

@@ -626,6 +626,83 @@ def _get_our_pitcher_arsenal(data, pitcher_name, season_filter=None, tunnel_pop=
             "zone_eff": zone_eff,
             "zone_eff_3x3": zone_eff_3x3,
         }
+    # ── Contextual usage: count-group, platoon, count×platoon, transition ──
+    from analytics.zone_vulnerability import _COUNT_GROUPS, _count_group_for
+
+    # Precompute: need Balls/Strikes/BatterSide columns as numeric/normalized
+    _ctx_pdf = pdf.dropna(subset=["Balls", "Strikes", "BatterSide", "TaggedPitchType"]).copy()
+    _ctx_pdf["_balls"] = pd.to_numeric(_ctx_pdf["Balls"], errors="coerce").astype("Int64")
+    _ctx_pdf["_strikes"] = pd.to_numeric(_ctx_pdf["Strikes"], errors="coerce").astype("Int64")
+    _ctx_pdf["_side"] = _ctx_pdf["BatterSide"].astype(str).str.strip().str.upper().str[0]  # "L" or "R"
+    _ctx_pdf["_cg"] = _ctx_pdf.apply(lambda r: _count_group_for(int(r["_balls"]), int(r["_strikes"])), axis=1)
+    _ctx_total = len(_ctx_pdf)
+
+    for pt_name_ctx, pt_data_ctx in arsenal["pitches"].items():
+        pt_rows = _ctx_pdf[_ctx_pdf["TaggedPitchType"] == pt_name_ctx]
+
+        # Tier 1: Count-group usage
+        count_usage = {}
+        for cg_name in _COUNT_GROUPS:
+            cg_rows = _ctx_pdf[_ctx_pdf["_cg"] == cg_name]
+            n_cg = len(cg_rows)
+            if n_cg >= 10:
+                count_usage[cg_name] = {
+                    "pct": len(pt_rows[pt_rows["_cg"] == cg_name]) / n_cg * 100,
+                    "n": n_cg,
+                }
+        pt_data_ctx["count_usage"] = count_usage
+
+        # Tier 2: Platoon usage
+        platoon_usage = {}
+        for side in ["L", "R"]:
+            side_rows = _ctx_pdf[_ctx_pdf["_side"] == side]
+            n_side = len(side_rows)
+            if n_side >= 15:
+                platoon_usage[f"vs_{side}"] = {
+                    "pct": len(pt_rows[pt_rows["_side"] == side]) / n_side * 100,
+                    "n": n_side,
+                }
+        pt_data_ctx["platoon_usage"] = platoon_usage
+
+        # Tier 3: Count × Platoon
+        count_platoon_usage = {}
+        for cg_name in _COUNT_GROUPS:
+            for side in ["L", "R"]:
+                cp_rows = _ctx_pdf[(_ctx_pdf["_cg"] == cg_name) & (_ctx_pdf["_side"] == side)]
+                n_cp = len(cp_rows)
+                if n_cp >= 8:
+                    key = f"{cg_name}_vs_{side}"
+                    count_platoon_usage[key] = {
+                        "pct": len(pt_rows[(pt_rows["_cg"] == cg_name) & (pt_rows["_side"] == side)]) / n_cp * 100,
+                        "n": n_cp,
+                    }
+        pt_data_ctx["count_platoon_usage"] = count_platoon_usage
+
+    # Tier 4: Transition usage (computed once for all pitches, stored per pitch)
+    # Sort by game/PA/pitch number to get sequential ordering
+    _sort_cols = [c for c in ["GameID", "Batter", "PAofInning", "PitchNo"] if c in _ctx_pdf.columns]
+    if len(_sort_cols) >= 2:
+        _ctx_sorted = _ctx_pdf.sort_values(_sort_cols).copy()
+        _ctx_sorted["_prev_pitch"] = _ctx_sorted.groupby(
+            [c for c in ["GameID", "Batter", "PAofInning"] if c in _ctx_sorted.columns]
+        )["TaggedPitchType"].shift(1)
+        _trans = _ctx_sorted.dropna(subset=["_prev_pitch"])
+
+        for pt_name_ctx, pt_data_ctx in arsenal["pitches"].items():
+            transition_usage = {}
+            for prev_pt in arsenal["pitches"]:
+                after_rows = _trans[_trans["_prev_pitch"] == prev_pt]
+                n_after = len(after_rows)
+                if n_after >= 5:
+                    transition_usage[f"after_{prev_pt}"] = {
+                        "pct": len(after_rows[after_rows["TaggedPitchType"] == pt_name_ctx]) / n_after * 100,
+                        "n": n_after,
+                    }
+            pt_data_ctx["transition_usage"] = transition_usage
+    else:
+        for pt_data_ctx in arsenal["pitches"].values():
+            pt_data_ctx["transition_usage"] = {}
+
     # ── Usage stabilisation: blend current + prior season for reliability ──
     # Pitchers develop over time, so raw usage_pct is kept for display.
     # For the RE engine's reliability dampening we compute a *stabilised*
