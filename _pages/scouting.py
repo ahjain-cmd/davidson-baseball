@@ -4008,6 +4008,10 @@ def page_scouting(data):
         except Exception:
             opp_pitches = pd.DataFrame()
 
+    # Normalize pitch types once at the source so all downstream analysis uses clean data
+    if not opp_pitches.empty:
+        opp_pitches = normalize_pitch_types(opp_pitches)
+
     # ── Load count-filtered aggregate stats ──
     count_splits = {}
     try:
