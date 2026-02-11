@@ -439,6 +439,19 @@ def build_bryant_combined_pack(
     _log("Merging data from all sources...")
     combined = _merge_packs(all_packs)
 
+    # Stamp newestTeamName on all DataFrames so _tm_team() filtering works
+    # when the scouting page passes team="Bryant (2024-25 Combined)"
+    _COMBINED_LABEL = "Bryant (2024-25 Combined)"
+    for group_name in ("hitting", "pitching", "catching", "defense"):
+        group = combined.get(group_name, {})
+        for table_name, df in group.items():
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                if "newestTeamName" in df.columns:
+                    df["newestTeamName"] = _COMBINED_LABEL
+                elif "mostRecentTeamName" in df.columns:
+                    df["mostRecentTeamName"] = _COMBINED_LABEL
+                    df["newestTeamName"] = _COMBINED_LABEL
+
     # ── Enrich with pitch-level data (hole scores, bats, count-zone metrics) ──
     # Fetch GamePitchesTrackman from TrueMedia for each season.
     # 1. Bryant team pitches (covers all returning players)
@@ -536,10 +549,34 @@ def build_bryant_combined_pack(
         season_year=2026,
     )
 
+    # Also cache pitch-level data so the scouting page can build zone heatmaps
+    if all_pitch_dfs and len(roster_pitches) > 0:
+        _pitches_path = _bryant_pitches_path()
+        os.makedirs(os.path.dirname(_pitches_path), exist_ok=True)
+        roster_pitches.to_parquet(_pitches_path, index=False)
+        _log(f"  Saved {len(roster_pitches)} pitches to cache")
+
     _log("Done!")
     return combined
+
+
+def _bryant_pitches_path() -> str:
+    """Path for cached Bryant combined pitch-level data."""
+    from decision_engine.data.opponent_pack import _pack_dir
+    return os.path.join(_pack_dir(BRYANT_COMBINED_TEAM_ID, 2026), "pitches.parquet")
 
 
 def load_bryant_combined_pack() -> Optional[Dict[str, Any]]:
     """Load the cached Bryant combined pack, or None if not built yet."""
     return load_opponent_pack(BRYANT_COMBINED_TEAM_ID, season_year=2026)
+
+
+def load_bryant_pitches() -> pd.DataFrame:
+    """Load cached pitch-level data for the Bryant combined pack."""
+    fp = _bryant_pitches_path()
+    if os.path.exists(fp):
+        try:
+            return pd.read_parquet(fp)
+        except Exception:
+            pass
+    return pd.DataFrame()

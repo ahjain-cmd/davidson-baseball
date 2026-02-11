@@ -3892,14 +3892,18 @@ def page_scouting(data):
 
     team = st.selectbox("Opponent", all_team_names_with_bryant, key="sc_team_api")
 
-    if team == _BRYANT_LABEL:
+    _is_bryant_combined = (team == _BRYANT_LABEL)
+    if _is_bryant_combined:
         from config import BRYANT_COMBINED_TEAM_ID
-        from data.bryant_combined import load_bryant_combined_pack
+        from data.bryant_combined import load_bryant_combined_pack, load_bryant_pitches, build_bryant_combined_pack
         team_id = BRYANT_COMBINED_TEAM_ID
         tm = load_bryant_combined_pack()
         if tm is None:
-            st.warning("Bryant combined pack not built yet. Go to **Bryant Scouting** page first to build it.")
-            return
+            with st.spinner("Building Bryant 2024-25 combined pack (first time — fetching from TrueMedia API)..."):
+                tm = build_bryant_combined_pack(progress_callback=lambda msg: st.caption(msg))
+            if tm is None:
+                st.error("Failed to build Bryant combined pack.")
+                return
     else:
         team_id = team_lookup[team]
         # ── Fetch team data via API ──
@@ -3979,10 +3983,14 @@ def page_scouting(data):
 
     # ── Load pitch-level data from TrueMedia GamePitchesTrackman ──
     opp_pitches = pd.DataFrame()
-    try:
-        opp_pitches = fetch_team_all_pitches_trackman(team_id, season_year)
-    except Exception:
-        opp_pitches = pd.DataFrame()
+    if _is_bryant_combined:
+        # Bryant combined uses pre-cached pitch data (synthetic team ID won't work with API)
+        opp_pitches = load_bryant_pitches()
+    else:
+        try:
+            opp_pitches = fetch_team_all_pitches_trackman(team_id, season_year)
+        except Exception:
+            opp_pitches = pd.DataFrame()
 
     # Show column diagnostics for debugging (collapsed)
     if not opp_pitches.empty:
@@ -4014,10 +4022,11 @@ def page_scouting(data):
 
     # ── Load count-filtered aggregate stats ──
     count_splits = {}
-    try:
-        count_splits = fetch_hitter_count_splits(team_id, season_year)
-    except Exception:
-        count_splits = {}
+    if not _is_bryant_combined:
+        try:
+            count_splits = fetch_hitter_count_splits(team_id, season_year)
+        except Exception:
+            count_splits = {}
 
     tab_overview, tab_hitters, tab_pitchers, tab_catchers = st.tabs([
         "Team Overview", "Their Hitters", "Their Pitchers", "Their Catchers"
