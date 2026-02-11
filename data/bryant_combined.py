@@ -568,7 +568,16 @@ def _bryant_pitches_path() -> str:
 
 def load_bryant_combined_pack() -> Optional[Dict[str, Any]]:
     """Load the cached Bryant combined pack, or None if not built yet."""
-    return load_opponent_pack(BRYANT_COMBINED_TEAM_ID, season_year=2026)
+    pack = load_opponent_pack(BRYANT_COMBINED_TEAM_ID, season_year=2026)
+    if pack is None:
+        return None
+    # Ensure newestTeamName is stamped correctly (older caches may have original school names)
+    _COMBINED_LABEL = "Bryant (2024-25 Combined)"
+    for group_name in ("hitting", "pitching", "catching", "defense"):
+        for df in pack.get(group_name, {}).values():
+            if isinstance(df, pd.DataFrame) and not df.empty and "newestTeamName" in df.columns:
+                df["newestTeamName"] = _COMBINED_LABEL
+    return pack
 
 
 def load_bryant_pitches() -> pd.DataFrame:
