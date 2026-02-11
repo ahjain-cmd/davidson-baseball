@@ -6258,6 +6258,10 @@ def _swing_hole_finder(b_tm, hitter_name, bats=None, bats_norm=None, sp=None, is
     4. Per-pitch vulnerability summary table
     5. Identified 'holes' with actionable coaching notes
     """
+    # Unique key prefix for Streamlit elements (avoids duplicate element IDs when
+    # this function is called multiple times for the same hitter with different pitcher hand splits)
+    _kp = f"shf_{hitter_name}_{pitcher_hand or 'all'}"
+
     # Header with batting side info
     bats_display = _fmt_bats(bats) if bats else "?"
     _ph_label = f", vs {'LHP' if pitcher_hand == 'L' else 'RHP'}" if pitcher_hand in ("R", "L") else ""
@@ -6541,7 +6545,7 @@ def _swing_hole_finder(b_tm, hitter_name, bats=None, bats_norm=None, sp=None, is
         st.markdown("**Zone Attack Map**")
         st.caption("Based on actual zone performance: whiff rate, SLG, barrel rate, LA consistency")
         st.caption("🟢 Green = hitter strength (avoid) · 🔴 Red = hitter weakness (attack)")
-        st.plotly_chart(fig_hole, use_container_width=True)
+        st.plotly_chart(fig_hole, use_container_width=True, key=f"{_kp}_hole")
 
         # Horizontal path context (pull/center/oppo)
         if "Direction" in b_tm.columns:
@@ -6592,7 +6596,7 @@ def _swing_hole_finder(b_tm, hitter_name, bats=None, bats_norm=None, sp=None, is
                     if fig is None:
                         continue
                     with cols[j]:
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, use_container_width=True, key=f"{_kp}_slg_{pt_name}")
 
     # ── SLG by Pitch Type vs LHP/RHP ──
     if {"TaggedPitchType", "PitcherThrows"}.issubset(p_use.columns):
@@ -6615,7 +6619,7 @@ def _swing_hole_finder(b_tm, hitter_name, bats=None, bats_norm=None, sp=None, is
                     if fig is None:
                         continue
                     with cols[j]:
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, use_container_width=True, key=f"{_kp}_slg_{hand_label}_{pt_name}")
 
     # ── Zone Summary Row (Whiff%, Swing%, Avg EV) ──
     st.markdown("**Zone Summary (All Pitches)**")
@@ -6623,19 +6627,19 @@ def _swing_hole_finder(b_tm, hitter_name, bats=None, bats_norm=None, sp=None, is
     with cols[0]:
         fig = _zone_whiff_density_heatmap(p_use, "Whiff Density by Zone", bats=bats_norm)
         if fig is not None:
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key=f"{_kp}_whiff")
         else:
             st.caption("Not enough whiff data for zone heatmap.")
     with cols[1]:
         fig = _zone_swing_pct_heatmap(p_use, "Swing% by Zone", bats=bats_norm)
         if fig is not None:
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key=f"{_kp}_swpct")
         else:
             st.caption("Not enough swing data for zone heatmap.")
     with cols[2]:
         fig = _zone_ev_heatmap(p_use, "Avg EV by Zone", bats=bats_norm)
         if fig is not None:
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key=f"{_kp}_ev")
         else:
             st.caption("Not enough exit velo data for zone heatmap.")
 
@@ -7091,7 +7095,7 @@ def _scouting_pitcher_report(tm, team, trackman_data, league_pitchers=None):
                                 )
                                 if fig is not None:
                                     fig.update_layout(height=340)
-                                    st.plotly_chart(fig, use_container_width=True)
+                                    st.plotly_chart(fig, use_container_width=True, key=f"p_{pitcher}_{count_str}_{side}_loc")
                                     if len(plot_pitches) < len(count_pitches):
                                         st.caption(f"{pitch} locations (n={len(plot_pitches)})")
                                     else:
@@ -7165,7 +7169,7 @@ def _scouting_pitcher_report(tm, team, trackman_data, league_pitchers=None):
                         margin=dict(l=60, r=10, t=10, b=40),
                     )
                     st.markdown(f"**{label}**")
-                    st.plotly_chart(fig_hm, use_container_width=True)
+                    st.plotly_chart(fig_hm, use_container_width=True, key=f"p_{pitcher}_cmd_{bats_side}")
                     st.caption(f"n={total}")
                     return True
 
