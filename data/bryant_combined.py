@@ -283,8 +283,8 @@ def _merge_packs(packs: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Merge multiple filtered packs by concatenating their DataFrames.
 
     When a player appears in multiple packs (e.g., 2024 + 2025), keeps
-    the row from the last pack in the list (most recent season) for rate stats,
-    while summing counting stats.
+    the row with more playing time — PA for hitting tables, IP/BF for pitching.
+    This ensures injured players (e.g., hurt in 2025) use their fuller 2024 data.
     """
     # Initialize structure
     all_tables = {
@@ -295,8 +295,19 @@ def _merge_packs(packs: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
     merged: Dict[str, Any] = {}
 
+    # Determine the "volume" column for dedup preference
+    _VOLUME_COLS = {
+        "hitting": "PA",
+        "pitching": "IP",
+        "catching": "PA",
+        "defense": "Inn",
+    }
+    _VOLUME_FALLBACKS = ["BF", "PA", "G", "IP", "Inn"]
+
     for group_name, table_names in all_tables.items():
         merged[group_name] = {}
+        vol_col = _VOLUME_COLS.get(group_name, "PA")
+
         for table_name in table_names:
             frames = []
             for p in packs:
@@ -309,14 +320,27 @@ def _merge_packs(packs: List[Dict[str, Any]]) -> Dict[str, Any]:
 
             combined = pd.concat(frames, ignore_index=True)
 
-            # Deduplicate: keep last occurrence (most recent season) per player
+            # Deduplicate: keep the row with more playing time per player
             name_col = None
             for c in _NAME_COL_CANDIDATES:
                 if c in combined.columns:
                     name_col = c
                     break
             if name_col:
-                combined = combined.drop_duplicates(subset=[name_col], keep="last")
+                # Find best volume column available in this table
+                best_vol = None
+                for vc in [vol_col] + _VOLUME_FALLBACKS:
+                    if vc in combined.columns:
+                        best_vol = vc
+                        break
+
+                if best_vol:
+                    combined[best_vol] = pd.to_numeric(combined[best_vol], errors="coerce").fillna(0)
+                    combined = combined.sort_values(best_vol, ascending=True)
+                    combined = combined.drop_duplicates(subset=[name_col], keep="last")
+                else:
+                    # No volume column — keep last (most recent season)
+                    combined = combined.drop_duplicates(subset=[name_col], keep="last")
 
             merged[group_name][table_name] = combined
 
@@ -438,6 +462,23 @@ def build_bryant_combined_pack(
     # Merge all filtered packs
     _log("Merging data from all sources...")
     combined = _merge_packs(all_packs)
+
+    # Report which roster players were found / missing
+    found_hitters = set()
+    found_pitchers = set()
+    for tbl_name, tbl in [("rate", combined.get("hitting", {}).get("rate", pd.DataFrame())),
+                          ("counting", combined.get("hitting", {}).get("counting", pd.DataFrame()))]:
+        if isinstance(tbl, pd.DataFrame) and not tbl.empty and "playerFullName" in tbl.columns:
+            found_hitters.update(tbl["playerFullName"].dropna().astype(str).str.strip())
+    for tbl in [combined.get("pitching", {}).get("traditional", pd.DataFrame()),
+                combined.get("pitching", {}).get("rate", pd.DataFrame())]:
+        if isinstance(tbl, pd.DataFrame) and not tbl.empty and "playerFullName" in tbl.columns:
+            found_pitchers.update(tbl["playerFullName"].dropna().astype(str).str.strip())
+    found_all = found_hitters | found_pitchers
+    missing = roster_display - found_all
+    _log(f"  Found {len(found_hitters)} hitters, {len(found_pitchers)} pitchers")
+    if missing:
+        _log(f"  NOT FOUND in either year: {sorted(missing)}")
 
     # Stamp newestTeamName on all DataFrames so _tm_team() filtering works
     # when the scouting page passes team="Bryant (2024-25 Combined)"
