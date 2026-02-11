@@ -3985,7 +3985,16 @@ def page_scouting(data):
     opp_pitches = pd.DataFrame()
     if _is_bryant_combined:
         # Bryant combined uses pre-cached pitch data (synthetic team ID won't work with API)
-        opp_pitches = load_bryant_pitches()
+        # Load both hitter-side and pitcher-side pitches for full coverage
+        from data.bryant_combined import load_bryant_pitcher_pitches
+        _h_pitches = load_bryant_pitches()
+        _p_pitches = load_bryant_pitcher_pitches()
+        _parts = [df for df in [_h_pitches, _p_pitches] if not df.empty]
+        if _parts:
+            opp_pitches = pd.concat(_parts, ignore_index=True)
+            # Dedup by trackmanPitchUID (a pitch may appear in both hitter and pitcher caches)
+            if "trackmanPitchUID" in opp_pitches.columns:
+                opp_pitches = opp_pitches.drop_duplicates(subset=["trackmanPitchUID"], keep="first")
     else:
         try:
             opp_pitches = fetch_team_all_pitches_trackman(team_id, season_year)
@@ -7566,6 +7575,67 @@ def _pitcher_steal_window_counts(pitch_df):
     return agg.reset_index(drop=True)
 
 
+def _compute_pitcher_baserunning_from_pitches(pitch_df):
+    """Compute SB/CS/pickoff stats for a pitcher from pitch-level data.
+
+    Returns dict with sb, cs, sba, sb_pct, pk_att, pk_success, men_on, wp, pb.
+    """
+    out = {}
+    if pitch_df.empty:
+        return out
+
+    # Stolen base attempts and successes
+    sba_cols = ["stolenBaseAttempt2B", "stolenBaseAttempt3B", "stolenBaseAttemptHome"]
+    sb_cols = ["stolenBase2B", "stolenBase3B", "stolenBaseHome"]
+
+    def _count_true(df, cols):
+        total = 0
+        for c in cols:
+            if c in df.columns:
+                vals = df[c].astype(str).str.strip().str.lower()
+                total += vals.isin(["true", "1", "yes"]).sum()
+        return total
+
+    sba = _count_true(pitch_df, sba_cols)
+    sb = _count_true(pitch_df, sb_cols)
+    cs = sba - sb
+    if cs < 0:
+        cs = 0
+
+    out["sba"] = sba
+    out["sb"] = sb
+    out["cs"] = cs
+    out["sb_pct"] = (sb / sba * 100) if sba > 0 else np.nan
+
+    # Pickoff attempts: any row where pickoffResult is not None/null
+    if "pickoffResult" in pitch_df.columns:
+        pk_results = pitch_df["pickoffResult"].astype(str).str.strip().str.upper()
+        pk_attempts = pk_results[~pk_results.isin(["NONE", "NAN", ""])]
+        out["pk_att"] = len(pk_attempts)
+        out["pk_success"] = (pk_attempts.isin(["OUT", "CS"])).sum()
+    else:
+        out["pk_att"] = 0
+        out["pk_success"] = 0
+
+    # Men on base (for pickoff rate calculation)
+    men_on = 0
+    for c in ["manOnFirst", "manOnSecond", "manOnThird"]:
+        if c in pitch_df.columns:
+            vals = pitch_df[c].astype(str).str.strip().str.lower()
+            men_on += vals.isin(["true", "1", "yes"]).sum()
+    out["men_on_pitches"] = men_on
+
+    # WP/PB
+    for c, key in [("wildPitch", "wp"), ("passedBall", "pb")]:
+        if c in pitch_df.columns:
+            vals = pitch_df[c].astype(str).str.strip().str.lower()
+            out[key] = vals.isin(["true", "1", "yes"]).sum()
+        else:
+            out[key] = 0
+
+    return out
+
+
 def _scouting_pitcher_baserunning_panel(tm, team, pitcher, trackman_data):
     """Pitcher-specific baserunning scouting: steal risk, pickoff risk, and count windows."""
     section_header("Baserunning vs This Pitcher")
@@ -7576,6 +7646,10 @@ def _scouting_pitcher_baserunning_panel(tm, team, pitcher, trackman_data):
     c_sb = _filter_local_team_rows(_load_local_catcher_throws(), team)
     p_sb = _match_local_player_rows(p_sb, pitcher)
     p_pk = _match_local_player_rows(p_pk, pitcher)
+
+    # Compute pitch-level baserunning stats as fallback
+    p_pitch_br = _match_pitcher_trackman(_prefer_truemedia_pitch_data(trackman_data), pitcher) if isinstance(trackman_data, pd.DataFrame) else pd.DataFrame()
+    pitch_br = _compute_pitcher_baserunning_from_pitches(p_pitch_br)
 
     # Top row: 3 compact cards (keep tables out of columns so nothing gets squished).
     col1, col2, col3 = st.columns([1, 1, 1])
@@ -7605,8 +7679,24 @@ def _scouting_pitcher_baserunning_panel(tm, team, pitcher, trackman_data):
                     st.caption("Signal: Moderate steal vulnerability.")
                 else:
                     st.caption("Signal: Lower steal vulnerability.")
+        elif pitch_br.get("sba", 0) > 0:
+            # Fallback: computed from pitch-level data
+            sb = pitch_br["sb"]
+            cs = pitch_br["cs"]
+            sba = pitch_br["sba"]
+            sb_pct = pitch_br["sb_pct"]
+            st.metric("Runner Success%", f"{sb_pct:.1f}%")
+            st.caption(f"SB/CS: {sb} / {cs}")
+            st.caption(f"SBA: {sba}")
+            if sb_pct >= 85:
+                st.caption("Signal: High steal vulnerability.")
+            elif sb_pct >= 72:
+                st.caption("Signal: Moderate steal vulnerability.")
+            else:
+                st.caption("Signal: Lower steal vulnerability.")
+            st.caption("*(from pitch-level data)*")
         else:
-            st.caption("No pitcher SB/CS row found.")
+            st.caption("No pitcher SB/CS data found.")
 
     with col2:
         st.markdown("**Pickoff Profile**")
@@ -7633,8 +7723,30 @@ def _scouting_pitcher_baserunning_panel(tm, team, pitcher, trackman_data):
                     st.caption("Signal: Moderate pickoff threat.")
                 else:
                     st.caption("Signal: Lower pickoff threat.")
+        elif pitch_br.get("pk_att", 0) > 0 or pitch_br.get("men_on_pitches", 0) > 0:
+            # Fallback: computed from pitch-level data
+            pk_att = pitch_br["pk_att"]
+            pk_success = pitch_br["pk_success"]
+            men_on_p = pitch_br["men_on_pitches"]
+            st.metric("Pickoff Attempts", f"{pk_att}")
+            st.caption(f"Pickoffs: {pk_success}")
+            if pk_att > 0 and men_on_p > 0:
+                men_per_att = men_on_p / pk_att
+                st.caption(f"Men-on per attempt: {men_per_att:.1f}")
+                if men_per_att <= 7:
+                    st.caption("Signal: Aggressive pickoff threat.")
+                elif men_per_att <= 14:
+                    st.caption("Signal: Moderate pickoff threat.")
+                else:
+                    st.caption("Signal: Lower pickoff threat.")
+            # WP/PB
+            wp = pitch_br.get("wp", 0)
+            pb = pitch_br.get("pb", 0)
+            if wp > 0 or pb > 0:
+                st.caption(f"WP: {wp} | PB: {pb}")
+            st.caption("*(from pitch-level data)*")
         else:
-            st.caption("No pickoff row found.")
+            st.caption("No pickoff data found.")
 
     with col3:
         st.markdown("**Best Counts to Run**")

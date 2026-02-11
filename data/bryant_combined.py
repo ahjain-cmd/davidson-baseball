@@ -460,7 +460,8 @@ def build_bryant_combined_pack(
     from data.truemedia_api import fetch_team_all_pitches_trackman
     from decision_engine.data.opponent_pack import _compute_and_store_hole_scores
 
-    all_pitch_dfs = []
+    all_pitch_dfs = []      # hitter-side pitches (roster player is Batter)
+    all_pitcher_dfs = []    # pitcher-side pitches (roster player is Pitcher)
     # Track which (school, season) combos we've already fetched to avoid duplicates
     _fetched: Set[Tuple[str, int]] = set()
 
@@ -494,7 +495,7 @@ def build_bryant_combined_pack(
             try:
                 pitches = fetch_team_all_pitches_trackman(team_id_season, season)
                 if pitches is not None and not pitches.empty:
-                    # Filter to just the target players from this school
+                    # Filter HITTER-side: pitches where a roster player is batting
                     if "Batter" in pitches.columns:
                         exact_f, norm_f, fl_f, il_f = _build_name_matcher(player_filter)
                         mask = pitches["Batter"].apply(
@@ -505,8 +506,18 @@ def build_bryant_combined_pack(
                         filtered_pitches = pitches
 
                     if len(filtered_pitches) > 0:
-                        _log(f"  {team_full} {season}: {len(filtered_pitches)} pitches (of {len(pitches)} total)")
+                        _log(f"  {team_full} {season}: {len(filtered_pitches)} hitter pitches (of {len(pitches)} total)")
                         all_pitch_dfs.append(filtered_pitches)
+
+                    # Filter PITCHER-side: pitches where a roster player is pitching
+                    if "Pitcher" in pitches.columns:
+                        p_mask = pitches["Pitcher"].apply(
+                            lambda x, e=exact_f, n=norm_f, f=fl_f, i=il_f: _name_matches(x, e, n, f, i)
+                        )
+                        pitcher_pitches = pitches[p_mask]
+                        if len(pitcher_pitches) > 0:
+                            _log(f"  {team_full} {season}: {len(pitcher_pitches)} pitcher pitches")
+                            all_pitcher_dfs.append(pitcher_pitches)
             except Exception as e:
                 _log(f"  {school_search} {season}: pitch fetch failed: {e}")
 
@@ -554,16 +565,33 @@ def build_bryant_combined_pack(
         _pitches_path = _bryant_pitches_path()
         os.makedirs(os.path.dirname(_pitches_path), exist_ok=True)
         roster_pitches.to_parquet(_pitches_path, index=False)
-        _log(f"  Saved {len(roster_pitches)} pitches to cache")
+        _log(f"  Saved {len(roster_pitches)} hitter pitches to cache")
+
+    # Cache pitcher-side pitches (for pitcher analysis, baserunning, pickoffs)
+    if all_pitcher_dfs:
+        pitcher_pitches_all = pd.concat(all_pitcher_dfs, ignore_index=True)
+        uid_col = "trackmanPitchUID"
+        if uid_col in pitcher_pitches_all.columns:
+            pitcher_pitches_all = pitcher_pitches_all.drop_duplicates(subset=[uid_col], keep="first")
+        _pp_path = _bryant_pitcher_pitches_path()
+        os.makedirs(os.path.dirname(_pp_path), exist_ok=True)
+        pitcher_pitches_all.to_parquet(_pp_path, index=False)
+        _log(f"  Saved {len(pitcher_pitches_all)} pitcher pitches to cache")
 
     _log("Done!")
     return combined
 
 
 def _bryant_pitches_path() -> str:
-    """Path for cached Bryant combined pitch-level data."""
+    """Path for cached Bryant combined hitter-side pitch-level data."""
     from decision_engine.data.opponent_pack import _pack_dir
     return os.path.join(_pack_dir(BRYANT_COMBINED_TEAM_ID, 2026), "pitches.parquet")
+
+
+def _bryant_pitcher_pitches_path() -> str:
+    """Path for cached Bryant combined pitcher-side pitch-level data."""
+    from decision_engine.data.opponent_pack import _pack_dir
+    return os.path.join(_pack_dir(BRYANT_COMBINED_TEAM_ID, 2026), "pitcher_pitches.parquet")
 
 
 def load_bryant_combined_pack() -> Optional[Dict[str, Any]]:
@@ -581,8 +609,19 @@ def load_bryant_combined_pack() -> Optional[Dict[str, Any]]:
 
 
 def load_bryant_pitches() -> pd.DataFrame:
-    """Load cached pitch-level data for the Bryant combined pack."""
+    """Load cached hitter-side pitch-level data for the Bryant combined pack."""
     fp = _bryant_pitches_path()
+    if os.path.exists(fp):
+        try:
+            return pd.read_parquet(fp)
+        except Exception:
+            pass
+    return pd.DataFrame()
+
+
+def load_bryant_pitcher_pitches() -> pd.DataFrame:
+    """Load cached pitcher-side pitch-level data for the Bryant combined pack."""
+    fp = _bryant_pitcher_pitches_path()
     if os.path.exists(fp):
         try:
             return pd.read_parquet(fp)
