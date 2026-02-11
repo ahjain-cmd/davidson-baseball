@@ -16,7 +16,11 @@ from _pages.defense import page_defensive_positioning
 from _pages.scouting import page_scouting
 from _pages.postgame import page_postgame
 from _pages.data_quality import page_data_quality
-from _pages.decision_engine import page_decision_engine
+try:
+    from _pages.decision_engine import page_decision_engine
+    _HAS_DECISION_ENGINE = True
+except ImportError:
+    _HAS_DECISION_ENGINE = False
 from _pages.bryant import page_bryant
 
 
@@ -49,23 +53,21 @@ def _sidebar_brand():
 def main():
     _sidebar_brand()
 
-    page = st.sidebar.radio(
-        "Navigation",
-        [
-            "Team Overview",
-            "Hitting",
-            "Pitching",
-            "Catcher Analytics",
-            "Player Development",
-            "Defensive Positioning",
-            "Opponent Scouting",
-            "Bryant Scouting",
-            "In-Game Decision Engine",
-            "Postgame Report",
-            "Data Quality",
-        ],
-        label_visibility="collapsed",
-    )
+    _nav = [
+        "Team Overview",
+        "Hitting",
+        "Pitching",
+        "Catcher Analytics",
+        "Player Development",
+        "Defensive Positioning",
+        "Opponent Scouting",
+        "Bryant Scouting",
+    ]
+    if _HAS_DECISION_ENGINE:
+        _nav.append("In-Game Decision Engine")
+    _nav += ["Postgame Report", "Data Quality"]
+
+    page = st.sidebar.radio("Navigation", _nav, label_visibility="collapsed")
 
     data = load_davidson_data()
     if data is None or data.empty:
@@ -103,7 +105,7 @@ def main():
         page_scouting(data)
     elif page == "Bryant Scouting":
         page_bryant(data)
-    elif page == "In-Game Decision Engine":
+    elif page == "In-Game Decision Engine" and _HAS_DECISION_ENGINE:
         page_decision_engine(data)
     elif page == "Postgame Report":
         page_postgame(data)
