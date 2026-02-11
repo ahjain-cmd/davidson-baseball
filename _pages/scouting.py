@@ -7085,9 +7085,10 @@ def _scouting_pitcher_report(tm, team, trackman_data, league_pitchers=None):
                         pitch = row["Top Pitch"]
                         n = int(row["N"])
 
+                        n_top = int(round(pct / 100 * n))
                         st.markdown(f"**{count_str} vs {side_label}**")
                         st.metric(pitch, f"{pct:.0f}%")
-                        st.caption(f"n={n}")
+                        st.caption(f"{n_top} of {n} pitches")
 
                         # Filter pitches for this count/side and show location
                         if {"Balls", "Strikes", "BatterSide", "PlateLocSide", "PlateLocHeight"}.issubset(p_tm_predict.columns):
@@ -7124,6 +7125,51 @@ def _scouting_pitcher_report(tm, team, trackman_data, league_pitchers=None):
                                         st.caption(f"{pitch} locations (n={len(plot_pitches)})")
                                     else:
                                         st.caption(f"All pitch locations in this count (n={len(plot_pitches)})")
+
+            # ── 2-Strike Pitch Tendencies ──
+            if {"TaggedPitchType", "Balls", "Strikes", "BatterSide", "PlateLocSide", "PlateLocHeight"}.issubset(p_tm_predict.columns):
+                strikes_num_2k = pd.to_numeric(p_tm_predict["Strikes"], errors="coerce")
+                two_strike = p_tm_predict[strikes_num_2k == 2].copy()
+                if len(two_strike) >= 15:
+                    section_header(f"2-Strike Tendencies ({src_label})")
+                    st.caption("Pitch mix and locations with 2 strikes (0-2, 1-2, 2-2, 3-2).")
+
+                    side_2k = two_strike["BatterSide"].astype(str).str.strip().str.upper().str[0]
+                    two_strike_l = two_strike[side_2k == "L"]
+                    two_strike_r = two_strike[side_2k == "R"]
+
+                    def _render_2k_panel(df_2k, bats_label, bats_side, col_key):
+                        if len(df_2k) < 10:
+                            st.caption(f"Not enough 2-strike pitches vs {bats_label} (n={len(df_2k)}).")
+                            return
+                        vc = df_2k["TaggedPitchType"].value_counts()
+                        total = len(df_2k)
+                        mix_parts = []
+                        for pt_name, pt_count in vc.items():
+                            mix_parts.append(f"{pt_name} {pt_count / total * 100:.0f}%")
+                        st.markdown(f"**vs {bats_label}** (n={total})")
+                        st.caption(" | ".join(mix_parts))
+
+                        # Putaway pitch location (top pitch type)
+                        putaway = vc.index[0]
+                        putaway_df = df_2k[df_2k["TaggedPitchType"] == putaway]
+                        if len(putaway_df) >= 8:
+                            fig = _attack_zone_heatmap(
+                                putaway_df,
+                                f"2-Strike {putaway}",
+                                bats=bats_side,
+                                min_pitches=8,
+                            )
+                            if fig is not None:
+                                fig.update_layout(height=320)
+                                st.plotly_chart(fig, use_container_width=True, key=f"p_{pitcher}_2k_{col_key}")
+                                st.caption(f"{putaway} locations (n={len(putaway_df)})")
+
+                    c2k1, c2k2 = st.columns(2)
+                    with c2k1:
+                        _render_2k_panel(two_strike_l, "LHH", "L", "l")
+                    with c2k2:
+                        _render_2k_panel(two_strike_r, "RHH", "R", "r")
 
         elif p_tm_raw.empty:
             st.info(f"No {src_label} pitch-level data available for this pitcher.")
