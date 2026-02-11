@@ -5749,7 +5749,7 @@ def _attack_zone_heatmap(pitch_df, title, bats=None, min_pitches=25):
     return _zone_heatmap_layout(fig, title, bats=bats, hitter_relative=False)
 
 
-def _zone_miss_heatmap(pitch_df, title, n_bins=5):
+def _zone_miss_heatmap(pitch_df, title):
     """Heatmap of miss% (out-of-zone) by plate location."""
     loc = pitch_df.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
     if len(loc) < 20:
@@ -5760,27 +5760,27 @@ def _zone_miss_heatmap(pitch_df, title, n_bins=5):
         (loc["PlateLocHeight"] > ZONE_HEIGHT_TOP)
     ).astype(int)
 
-    x_edges = np.linspace(-1.5, 1.5, n_bins + 1)
-    y_edges = np.linspace(0.5, 4.5, n_bins + 1)
-    loc["xbin"] = np.clip(np.digitize(loc["PlateLocSide"], x_edges) - 1, 0, n_bins - 1)
-    loc["ybin"] = np.clip(np.digitize(loc["PlateLocHeight"], y_edges) - 1, 0, n_bins - 1)
+    x_edges = np.array([-1.5, -0.5, 0.5, 1.5])
+    y_edges = np.array([0.5, 2.0, 3.0, 4.5])
+    loc["xbin"] = np.clip(np.digitize(loc["PlateLocSide"], x_edges) - 1, 0, 2)
+    loc["ybin"] = np.clip(np.digitize(loc["PlateLocHeight"], y_edges) - 1, 0, 2)
 
-    miss_grid = np.full((n_bins, n_bins), np.nan)
-    count_grid = np.zeros((n_bins, n_bins), dtype=int)
-    for yi in range(n_bins):
-        for xi in range(n_bins):
+    miss_grid = np.full((3, 3), np.nan)
+    count_grid = np.zeros((3, 3), dtype=int)
+    for yi in range(3):
+        for xi in range(3):
             cell = loc[(loc["xbin"] == xi) & (loc["ybin"] == yi)]
             count_grid[yi, xi] = len(cell)
             if len(cell) >= 3:
                 miss_grid[yi, xi] = cell["is_miss"].mean() * 100
 
-    x_centers = [(x_edges[i] + x_edges[i + 1]) / 2 for i in range(n_bins)]
-    y_centers = [(y_edges[i] + y_edges[i + 1]) / 2 for i in range(n_bins)]
+    x_centers = [(x_edges[i] + x_edges[i + 1]) / 2 for i in range(3)]
+    y_centers = [(y_edges[i] + y_edges[i + 1]) / 2 for i in range(3)]
 
     text_grid = []
-    for yi in range(n_bins):
+    for yi in range(3):
         row = []
-        for xi in range(n_bins):
+        for xi in range(3):
             v = miss_grid[yi, xi]
             row.append("" if pd.isna(v) else f"<b>{v:.0f}%</b>")
         text_grid.append(row)
@@ -5816,7 +5816,7 @@ def _zone_miss_heatmap(pitch_df, title, n_bins=5):
     return _zone_heatmap_layout(fig, title)
 
 
-def _zone_freq_heatmap(pitch_df, title, n_bins=5, hitter_relative=True, bats=None):
+def _zone_freq_heatmap(pitch_df, title, hitter_relative=True, bats=None):
     """Heatmap of pitch frequency by plate location (optionally hitter-relative)."""
     loc = pitch_df.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
     if len(loc) < 20:
@@ -5832,26 +5832,26 @@ def _zone_freq_heatmap(pitch_df, title, n_bins=5, hitter_relative=True, bats=Non
             loc["side_adj"] = side
             x_col = "side_adj"
 
-    x_edges = np.linspace(-1.5, 1.5, n_bins + 1)
-    y_edges = np.linspace(0.5, 4.5, n_bins + 1)
-    loc["xbin"] = np.clip(np.digitize(loc[x_col], x_edges) - 1, 0, n_bins - 1)
-    loc["ybin"] = np.clip(np.digitize(loc["PlateLocHeight"], y_edges) - 1, 0, n_bins - 1)
+    x_edges = np.array([-1.5, -0.5, 0.5, 1.5])
+    y_edges = np.array([0.5, 2.0, 3.0, 4.5])
+    loc["xbin"] = np.clip(np.digitize(loc[x_col], x_edges) - 1, 0, 2)
+    loc["ybin"] = np.clip(np.digitize(loc["PlateLocHeight"], y_edges) - 1, 0, 2)
 
-    freq_grid = np.full((n_bins, n_bins), np.nan)
+    freq_grid = np.full((3, 3), np.nan)
     total = len(loc)
-    for yi in range(n_bins):
-        for xi in range(n_bins):
+    for yi in range(3):
+        for xi in range(3):
             cell = loc[(loc["xbin"] == xi) & (loc["ybin"] == yi)]
             if len(cell) >= 3:
                 freq_grid[yi, xi] = len(cell) / max(total, 1) * 100
 
-    x_centers = [(x_edges[i] + x_edges[i + 1]) / 2 for i in range(n_bins)]
-    y_centers = [(y_edges[i] + y_edges[i + 1]) / 2 for i in range(n_bins)]
+    x_centers = [(x_edges[i] + x_edges[i + 1]) / 2 for i in range(3)]
+    y_centers = [(y_edges[i] + y_edges[i + 1]) / 2 for i in range(3)]
 
     text_grid = []
-    for yi in range(n_bins):
+    for yi in range(3):
         row = []
-        for xi in range(n_bins):
+        for xi in range(3):
             v = freq_grid[yi, xi]
             row.append("" if pd.isna(v) else f"<b>{v:.0f}%</b>")
         text_grid.append(row)
@@ -5913,12 +5913,12 @@ def _top_zone_summary(pitch_df, bats=None):
     return f"{y_lbl} {x_lbl}", pct, int(total)
 
 
-def _zone_slg_heatmap(pitch_df, title, n_bins=5, bats=None):
+def _zone_slg_heatmap(pitch_df, title, bats=None):
     """Build a zone SLG heatmap from pitch-level Trackman data.
 
-    Bins pitches into an NxN grid over the plate, computes SLG in each bin
+    Bins pitches into a 3x3 grid over the plate, computes SLG in each bin
     (total bases / at-bats), and renders a blue-white-red heatmap matching
-    the TrueMedia reference style.
+    the swing hole finder grid.
     """
     loc = pitch_df.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
     if len(loc) < 8:
@@ -5934,23 +5934,23 @@ def _zone_slg_heatmap(pitch_df, title, n_bins=5, bats=None):
     ab_df = ab_df.copy()
     ab_df["TB"] = ab_df["PlayResult"].apply(_assign_total_bases)
 
-    x_edges = np.linspace(-1.5, 1.5, n_bins + 1)
-    y_edges = np.linspace(0.5, 4.5, n_bins + 1)
+    x_edges = np.array([-1.5, -0.5, 0.5, 1.5])
+    y_edges = np.array([0.5, 2.0, 3.0, 4.5])
     x_col = "PlateLocSide"
-    ab_df["xbin"] = np.clip(np.digitize(ab_df[x_col], x_edges) - 1, 0, n_bins - 1)
-    ab_df["ybin"] = np.clip(np.digitize(ab_df["PlateLocHeight"], y_edges) - 1, 0, n_bins - 1)
+    ab_df["xbin"] = np.clip(np.digitize(ab_df[x_col], x_edges) - 1, 0, 2)
+    ab_df["ybin"] = np.clip(np.digitize(ab_df["PlateLocHeight"], y_edges) - 1, 0, 2)
 
-    slg_grid = np.full((n_bins, n_bins), np.nan)
-    count_grid = np.zeros((n_bins, n_bins), dtype=int)
-    for yi in range(n_bins):
-        for xi in range(n_bins):
+    slg_grid = np.full((3, 3), np.nan)
+    count_grid = np.zeros((3, 3), dtype=int)
+    for yi in range(3):
+        for xi in range(3):
             cell = ab_df[(ab_df["xbin"] == xi) & (ab_df["ybin"] == yi)]
             count_grid[yi, xi] = len(cell)
             if len(cell) >= 2:
                 slg_grid[yi, xi] = cell["TB"].sum() / len(cell)
 
-    x_centers = [(x_edges[i] + x_edges[i + 1]) / 2 for i in range(n_bins)]
-    y_centers = [(y_edges[i] + y_edges[i + 1]) / 2 for i in range(n_bins)]
+    x_centers = [(x_edges[i] + x_edges[i + 1]) / 2 for i in range(3)]
+    y_centers = [(y_edges[i] + y_edges[i + 1]) / 2 for i in range(3)]
 
     slg_grid_clip = np.clip(slg_grid, 0, 1.0)
 
@@ -5986,7 +5986,7 @@ def _zone_slg_heatmap(pitch_df, title, n_bins=5, bats=None):
     return _zone_heatmap_layout(fig, title, bats=bats)
 
 
-def _zone_whiff_heatmap(pitch_df, title, n_bins=5, bats=None):
+def _zone_whiff_heatmap(pitch_df, title, bats=None):
     """Build a whiff-rate zone heatmap (swings that miss / total swings per zone)."""
     loc = pitch_df.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
     if "PitchCall" not in loc.columns:
@@ -5998,26 +5998,26 @@ def _zone_whiff_heatmap(pitch_df, title, n_bins=5, bats=None):
     swings = swings.copy()
     swings["is_whiff"] = (swings["PitchCall"] == "StrikeSwinging").astype(int)
 
-    x_edges = np.linspace(-1.5, 1.5, n_bins + 1)
-    y_edges = np.linspace(0.5, 4.5, n_bins + 1)
+    x_edges = np.array([-1.5, -0.5, 0.5, 1.5])
+    y_edges = np.array([0.5, 2.0, 3.0, 4.5])
     x_col = "PlateLocSide"
-    swings["xbin"] = np.clip(np.digitize(swings[x_col], x_edges) - 1, 0, n_bins - 1)
-    swings["ybin"] = np.clip(np.digitize(swings["PlateLocHeight"], y_edges) - 1, 0, n_bins - 1)
+    swings["xbin"] = np.clip(np.digitize(swings[x_col], x_edges) - 1, 0, 2)
+    swings["ybin"] = np.clip(np.digitize(swings["PlateLocHeight"], y_edges) - 1, 0, 2)
 
-    whiff_grid = np.full((n_bins, n_bins), np.nan)
-    for yi in range(n_bins):
-        for xi in range(n_bins):
+    whiff_grid = np.full((3, 3), np.nan)
+    for yi in range(3):
+        for xi in range(3):
             cell = swings[(swings["xbin"] == xi) & (swings["ybin"] == yi)]
             if len(cell) >= 3:
                 whiff_grid[yi, xi] = cell["is_whiff"].mean() * 100
 
-    x_centers = [(x_edges[i] + x_edges[i + 1]) / 2 for i in range(n_bins)]
-    y_centers = [(y_edges[i] + y_edges[i + 1]) / 2 for i in range(n_bins)]
+    x_centers = [(x_edges[i] + x_edges[i + 1]) / 2 for i in range(3)]
+    y_centers = [(y_edges[i] + y_edges[i + 1]) / 2 for i in range(3)]
 
     text_grid = []
-    for yi in range(n_bins):
+    for yi in range(3):
         row = []
-        for xi in range(n_bins):
+        for xi in range(3):
             v = whiff_grid[yi, xi]
             if pd.isna(v):
                 row.append("")
@@ -6055,7 +6055,7 @@ def _zone_whiff_heatmap(pitch_df, title, n_bins=5, bats=None):
     return _zone_heatmap_layout(fig, title, bats=bats)
 
 
-def _zone_whiff_density_heatmap(pitch_df, title, n_bins=5, bats=None):
+def _zone_whiff_density_heatmap(pitch_df, title, bats=None):
     """Heatmap of whiff counts by zone (swinging strikes)."""
     loc = pitch_df.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
     if "PitchCall" not in loc.columns or len(loc) < 15:
@@ -6064,25 +6064,25 @@ def _zone_whiff_density_heatmap(pitch_df, title, n_bins=5, bats=None):
     if len(whiffs) < 5:
         return None
 
-    x_edges = np.linspace(-1.5, 1.5, n_bins + 1)
-    y_edges = np.linspace(0.5, 4.5, n_bins + 1)
+    x_edges = np.array([-1.5, -0.5, 0.5, 1.5])
+    y_edges = np.array([0.5, 2.0, 3.0, 4.5])
     x_col = "PlateLocSide"
 
-    whiffs["xbin"] = np.clip(np.digitize(whiffs[x_col], x_edges) - 1, 0, n_bins - 1)
-    whiffs["ybin"] = np.clip(np.digitize(whiffs["PlateLocHeight"], y_edges) - 1, 0, n_bins - 1)
+    whiffs["xbin"] = np.clip(np.digitize(whiffs[x_col], x_edges) - 1, 0, 2)
+    whiffs["ybin"] = np.clip(np.digitize(whiffs["PlateLocHeight"], y_edges) - 1, 0, 2)
 
-    count_grid = np.zeros((n_bins, n_bins), dtype=int)
-    for yi in range(n_bins):
-        for xi in range(n_bins):
+    count_grid = np.zeros((3, 3), dtype=int)
+    for yi in range(3):
+        for xi in range(3):
             count_grid[yi, xi] = len(whiffs[(whiffs["xbin"] == xi) & (whiffs["ybin"] == yi)])
 
-    x_centers = [(x_edges[i] + x_edges[i + 1]) / 2 for i in range(n_bins)]
-    y_centers = [(y_edges[i] + y_edges[i + 1]) / 2 for i in range(n_bins)]
+    x_centers = [(x_edges[i] + x_edges[i + 1]) / 2 for i in range(3)]
+    y_centers = [(y_edges[i] + y_edges[i + 1]) / 2 for i in range(3)]
 
     text_grid = []
-    for yi in range(n_bins):
+    for yi in range(3):
         row = []
-        for xi in range(n_bins):
+        for xi in range(3):
             v = count_grid[yi, xi]
             row.append("" if v <= 0 else f"<b>{v}</b>")
         text_grid.append(row)
@@ -6116,7 +6116,7 @@ def _zone_whiff_density_heatmap(pitch_df, title, n_bins=5, bats=None):
     return _zone_heatmap_layout(fig, title, bats=bats)
 
 
-def _zone_swing_pct_heatmap(pitch_df, title, n_bins=5, bats=None):
+def _zone_swing_pct_heatmap(pitch_df, title, bats=None):
     """Heatmap of swing% by zone (swings / total pitches in zone)."""
     loc = pitch_df.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
     if "PitchCall" not in loc.columns or len(loc) < 20:
@@ -6125,28 +6125,28 @@ def _zone_swing_pct_heatmap(pitch_df, title, n_bins=5, bats=None):
     if swings.empty:
         return None
 
-    x_edges = np.linspace(-1.5, 1.5, n_bins + 1)
-    y_edges = np.linspace(0.5, 4.5, n_bins + 1)
+    x_edges = np.array([-1.5, -0.5, 0.5, 1.5])
+    y_edges = np.array([0.5, 2.0, 3.0, 4.5])
     x_col = "PlateLocSide"
 
-    loc["xbin"] = np.clip(np.digitize(loc[x_col], x_edges) - 1, 0, n_bins - 1)
-    loc["ybin"] = np.clip(np.digitize(loc["PlateLocHeight"], y_edges) - 1, 0, n_bins - 1)
+    loc["xbin"] = np.clip(np.digitize(loc[x_col], x_edges) - 1, 0, 2)
+    loc["ybin"] = np.clip(np.digitize(loc["PlateLocHeight"], y_edges) - 1, 0, 2)
 
-    swing_grid = np.full((n_bins, n_bins), np.nan)
-    for yi in range(n_bins):
-        for xi in range(n_bins):
+    swing_grid = np.full((3, 3), np.nan)
+    for yi in range(3):
+        for xi in range(3):
             cell = loc[(loc["xbin"] == xi) & (loc["ybin"] == yi)]
             if len(cell) >= 5:
                 cell_swings = cell[cell["PitchCall"].isin(SWING_CALLS)]
                 swing_grid[yi, xi] = len(cell_swings) / len(cell) * 100
 
-    x_centers = [(x_edges[i] + x_edges[i + 1]) / 2 for i in range(n_bins)]
-    y_centers = [(y_edges[i] + y_edges[i + 1]) / 2 for i in range(n_bins)]
+    x_centers = [(x_edges[i] + x_edges[i + 1]) / 2 for i in range(3)]
+    y_centers = [(y_edges[i] + y_edges[i + 1]) / 2 for i in range(3)]
 
     text_grid = []
-    for yi in range(n_bins):
+    for yi in range(3):
         row = []
-        for xi in range(n_bins):
+        for xi in range(3):
             v = swing_grid[yi, xi]
             row.append("" if pd.isna(v) else f"<b>{v:.0f}%</b>")
         text_grid.append(row)
@@ -6181,7 +6181,7 @@ def _zone_swing_pct_heatmap(pitch_df, title, n_bins=5, bats=None):
     return _zone_heatmap_layout(fig, title, bats=bats)
 
 
-def _zone_ev_heatmap(pitch_df, title, n_bins=5, bats=None):
+def _zone_ev_heatmap(pitch_df, title, bats=None):
     """Heatmap of 90th percentile exit velocity by zone (balls in play)."""
     loc = pitch_df.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
     if "ExitSpeed" not in loc.columns or len(loc) < 20:
@@ -6191,29 +6191,29 @@ def _zone_ev_heatmap(pitch_df, title, n_bins=5, bats=None):
     if loc.empty:
         return None
 
-    x_edges = np.linspace(-1.5, 1.5, n_bins + 1)
-    y_edges = np.linspace(0.5, 4.5, n_bins + 1)
+    x_edges = np.array([-1.5, -0.5, 0.5, 1.5])
+    y_edges = np.array([0.5, 2.0, 3.0, 4.5])
     x_col = "PlateLocSide"
 
-    loc["xbin"] = np.clip(np.digitize(loc[x_col], x_edges) - 1, 0, n_bins - 1)
-    loc["ybin"] = np.clip(np.digitize(loc["PlateLocHeight"], y_edges) - 1, 0, n_bins - 1)
+    loc["xbin"] = np.clip(np.digitize(loc[x_col], x_edges) - 1, 0, 2)
+    loc["ybin"] = np.clip(np.digitize(loc["PlateLocHeight"], y_edges) - 1, 0, 2)
 
-    ev_grid = np.full((n_bins, n_bins), np.nan)
-    for yi in range(n_bins):
-        for xi in range(n_bins):
+    ev_grid = np.full((3, 3), np.nan)
+    for yi in range(3):
+        for xi in range(3):
             cell = loc[(loc["xbin"] == xi) & (loc["ybin"] == yi)]
             ev_vals = pd.to_numeric(cell["ExitSpeed"], errors="coerce").dropna()
             if len(ev_vals) >= 4:
                 ev_grid[yi, xi] = np.percentile(ev_vals, 90)
 
-    x_centers = [(x_edges[i] + x_edges[i + 1]) / 2 for i in range(n_bins)]
-    y_centers = [(y_edges[i] + y_edges[i + 1]) / 2 for i in range(n_bins)]
+    x_centers = [(x_edges[i] + x_edges[i + 1]) / 2 for i in range(3)]
+    y_centers = [(y_edges[i] + y_edges[i + 1]) / 2 for i in range(3)]
 
     ev_grid_clip = np.clip(ev_grid, 70, 105)
     text_grid = []
-    for yi in range(n_bins):
+    for yi in range(3):
         row = []
-        for xi in range(n_bins):
+        for xi in range(3):
             v = ev_grid[yi, xi]
             row.append("" if pd.isna(v) else f"<b>{v:.0f}</b>")
         text_grid.append(row)
