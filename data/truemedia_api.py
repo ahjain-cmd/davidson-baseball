@@ -857,11 +857,12 @@ def fetch_team_all_pitches_trackman(team_id, season_year=2026):
                      inplace=True)
 
     # ── Convert normalized pitch location to feet ──
-    # pxNorm: 0 = center of plate, ±1 = plate edge (0.83 ft)
-    # pzNorm: 0 = center of zone (~2.5 ft), ±1 = zone edge (1.0 ft)
+    # pxNorm: catcher-view, 0 = center of plate, positive = 1B side (catcher's right)
+    #         ±1 = plate edge (~0.83 ft from center)
+    # pzNorm: 0 = center of zone (~2.5 ft from ground), ±1 = zone edge (~1.0 ft)
     if "pxNorm" in combined.columns and "PlateLocSide" not in combined.columns:
-        # TrueMedia pxNorm is pitcher-view; flip to catcher-view to match Trackman
-        combined["PlateLocSide"] = -pd.to_numeric(combined["pxNorm"], errors="coerce") * 0.83
+        # pxNorm is already catcher-view (positive = 1B side), same as Trackman convention
+        combined["PlateLocSide"] = pd.to_numeric(combined["pxNorm"], errors="coerce") * 0.83
     if "pzNorm" in combined.columns and "PlateLocHeight" not in combined.columns:
         combined["PlateLocHeight"] = pd.to_numeric(combined["pzNorm"], errors="coerce") * 1.0 + 2.5
 
