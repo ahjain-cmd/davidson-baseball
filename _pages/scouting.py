@@ -4978,11 +4978,11 @@ def _scouting_hitter_report(tm, team, trackman_data, count_splits=None, league_h
         ("Exit Velo", _safe_num(exit_d, "ExitVel"), _tm_pctile(exit_d, "ExitVel", all_h_exit), ".1f", True),
         ("Barrel %", _safe_num(exit_d, "Barrel%"), _tm_pctile(exit_d, "Barrel%", all_h_exit), ".1f", True),
         ("Hard Hit %", _safe_num(exit_d, "Hit95+%"), _tm_pctile(exit_d, "Hit95+%", all_h_exit), ".1f", True),
-        ("K %", _safe_num(rate, "K%"), _tm_pctile(rate, "K%", all_h_rate_qualified), ".1f", False),
+        ("K %", _safe_num(rate, "K%"), _tm_pctile(rate, "K%", all_h_rate_qualified), ".1f", True),
         ("BB %", _safe_num(rate, "BB%"), _tm_pctile(rate, "BB%", all_h_rate_qualified), ".1f", True),
-        ("Chase %", _safe_num(pr, "Chase%"), _tm_pctile(pr, "Chase%", all_h_pr_qualified), ".1f", False),
-        ("Whiff %", _safe_num(pr, "SwStrk%"), _tm_pctile(pr, "SwStrk%", all_h_pr_qualified), ".1f", False),
-        ("Contact %", _safe_num(pr, "Contact%"), _tm_pctile(pr, "Contact%", all_h_pr_qualified), ".1f", True),
+        ("Chase %", _safe_num(pr, "Chase%"), _tm_pctile(pr, "Chase%", all_h_pr_qualified), ".1f", True),
+        ("Whiff %", _safe_num(pr, "SwStrk%"), _tm_pctile(pr, "SwStrk%", all_h_pr_qualified), ".1f", True),
+        ("Contact %", _safe_num(pr, "Contact%"), _tm_pctile(pr, "Contact%", all_h_pr_qualified), ".1f", False),
         ("Speed Score", _safe_num(spd, "SpeedScore"), _tm_pctile(spd, "SpeedScore", all_h_spd), ".1f", True),
     ]
     # Filter out metrics with nan values
