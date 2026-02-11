@@ -353,13 +353,20 @@ def _normalize_hitters_raw(hit_raw, team_name="NCAA D1"):
         hit_raw = hit_raw[hit_raw["PA"] > 0].reset_index(drop=True)
 
     # Scale percentage columns from 0-1 decimals to 0-100
+    # Use 95th percentile of non-zero values for detection. This is robust to:
+    # - Outliers (K%=10.0 for a 1-PA hitter would block max-based detection)
+    # - Rare-stat columns with many zeros (Sweeper%: median=0 but already percentage)
     _NO_SCALE = {"HR/FB", "HR/9", "K/9", "BB/9", "P/PA"}
     for col in hit_raw.columns:
         if "%" not in col or col in _NO_SCALE:
             continue
         if hit_raw[col].dtype.kind in ("f", "i"):
-            col_max = hit_raw[col].dropna().max() if hit_raw[col].notna().any() else 0
-            if col_max <= 1.5:
+            nonzero = hit_raw[col].dropna()
+            nonzero = nonzero[nonzero > 0]
+            if nonzero.empty:
+                continue
+            p95 = nonzero.quantile(0.95)
+            if p95 <= 1.0:
                 hit_raw[col] = hit_raw[col] * 100
 
     # Normalize column names to match downstream expectations
@@ -399,13 +406,18 @@ def _normalize_pitchers_raw(pit_raw, team_name="NCAA D1"):
     pit_raw = _rename_pit_cols(pit_raw)
 
     # Scale percentage columns from 0-1 decimals to 0-100
+    # Use 95th percentile of non-zero values for robust detection.
     _NO_SCALE = {"HR/FB", "HR/9", "K/9", "BB/9", "P/PA"}
     for col in pit_raw.columns:
         if "%" not in col or col in _NO_SCALE:
             continue
         if pit_raw[col].dtype.kind in ("f", "i"):
-            col_max = pit_raw[col].dropna().max() if pit_raw[col].notna().any() else 0
-            if col_max <= 1.5:
+            nonzero = pit_raw[col].dropna()
+            nonzero = nonzero[nonzero > 0]
+            if nonzero.empty:
+                continue
+            p95 = nonzero.quantile(0.95)
+            if p95 <= 1.0:
                 pit_raw[col] = pit_raw[col] * 100
 
     # Normalize column names to match downstream expectations
@@ -452,6 +464,7 @@ def build_tm_dict_for_team(team_id, team_name, season_year=2026):
     # Scale percentage columns from 0-1 decimals to 0-100
     # The RAW format API returns percentages as fractions (e.g. 0.25 = 25%)
     # Columns with "%" in the name need ×100; rate stats (AVG/OBP/SLG/OPS/WOBA/ISO/etc.) do not.
+    # Use 95th percentile of non-zero values for robust detection.
     _NO_SCALE = {"HR/FB", "HR/9", "K/9", "BB/9", "P/PA"}  # ratio columns with % in name quirks
     for df in [hit_raw, pit_raw]:
         if df.empty:
@@ -460,9 +473,12 @@ def build_tm_dict_for_team(team_id, team_name, season_year=2026):
             if "%" not in col or col in _NO_SCALE:
                 continue
             if df[col].dtype.kind in ("f", "i"):
-                # Only scale if values look like 0-1 (guard against already-scaled data)
-                col_max = df[col].dropna().max() if df[col].notna().any() else 0
-                if col_max <= 1.5:
+                nonzero = df[col].dropna()
+                nonzero = nonzero[nonzero > 0]
+                if nonzero.empty:
+                    continue
+                p95 = nonzero.quantile(0.95)
+                if p95 <= 1.0:
                     df[col] = df[col] * 100
 
     # Normalize column names to match what downstream code expects

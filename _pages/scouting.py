@@ -4914,6 +4914,15 @@ def _scouting_hitter_report(tm, team, trackman_data, count_splits=None, league_h
             all_h_pr_qualified = all_h_pr[all_h_pr["playerFullName"].isin(qualified_names)].copy()
         else:
             all_h_pr_qualified = all_h_pr
+        # Additionally filter pitch_rates to hitters with meaningful Trackman data.
+        # Many D1 hitters have incomplete pitch tracking (SwStrk%=0, Contact%=100)
+        # which pollutes the distribution — median SwStrk% drops to ~3% vs realistic ~9%.
+        # Require P/PA >= 3.0 (indicates real pitch-level tracking) and SwStrk% > 0.
+        if "P/PA" in all_h_pr_qualified.columns and "SwStrk%" in all_h_pr_qualified.columns:
+            _tracking_mask = (all_h_pr_qualified["P/PA"] >= 3.0) & (all_h_pr_qualified["SwStrk%"] > 0)
+            _tracked = all_h_pr_qualified[_tracking_mask]
+            if len(_tracked) >= 500:
+                all_h_pr_qualified = _tracked
     else:
         all_h_pr_qualified = all_h_pr
     all_h_re = _pick_league("run_expectancy")
@@ -6854,6 +6863,12 @@ def _scouting_pitcher_report(tm, team, trackman_data, league_pitchers=None):
     all_p_rate_qualified = _filter_to_qualified(all_p_rate, qualified_pitcher_names)
     all_p_mov_qualified = _filter_to_qualified(all_p_mov, qualified_pitcher_names)
     all_p_pr_qualified = _filter_to_qualified(all_p_pr, qualified_pitcher_names)
+    # Filter pitch_rates to pitchers with real Trackman data (same issue as hitter side)
+    if "P/PA" in all_p_pr_qualified.columns and "SwStrk%" in all_p_pr_qualified.columns:
+        _p_tracking_mask = (all_p_pr_qualified["P/PA"] >= 3.0) & (all_p_pr_qualified["SwStrk%"] > 0)
+        _p_tracked = all_p_pr_qualified[_p_tracking_mask]
+        if len(_p_tracked) >= 500:
+            all_p_pr_qualified = _p_tracked
     all_p_exit_qualified = _filter_to_qualified(all_p_exit, qualified_pitcher_names)
     all_p_ht_qualified = _filter_to_qualified(all_p_ht, qualified_pitcher_names)
 
