@@ -64,6 +64,14 @@ def _create_trackman_view(con, parquet_path):
         CREATE OR REPLACE VIEW trackman AS
         SELECT
             * EXCLUDE (Pitcher, Batter, TaggedPitchType, BatterSide, PitcherThrows),
+            CASE
+                WHEN "Date" IS NOT NULL THEN
+                    CASE WHEN EXTRACT(MONTH FROM "Date") >= 8
+                         THEN EXTRACT(YEAR FROM "Date")::INT + 1
+                         ELSE EXTRACT(YEAR FROM "Date")::INT
+                    END
+                ELSE NULL
+            END AS Season,
             {_pname} AS Pitcher,
             {_bname} AS Batter,
             CASE
@@ -428,6 +436,14 @@ def _create_davidson_data(con, parquet_path):
         CREATE OR REPLACE TABLE davidson_data AS
         SELECT
             * EXCLUDE (Pitcher, Batter, TaggedPitchType, BatterSide, PitcherThrows),
+            CASE
+                WHEN "Date" IS NOT NULL THEN
+                    CASE WHEN EXTRACT(MONTH FROM "Date") >= 8
+                         THEN EXTRACT(YEAR FROM "Date")::INT + 1
+                         ELSE EXTRACT(YEAR FROM "Date")::INT
+                    END
+                ELSE NULL
+            END AS Season,
             {_pname} AS Pitcher,
             {_bname} AS Batter,
             CASE
@@ -485,7 +501,8 @@ def _attach_stuff_plus(con, baselines_dict):
     con.register("dav_df", df)
     con.execute("CREATE OR REPLACE TABLE davidson_data AS SELECT * FROM dav_df")
 
-    stuff_df = df[["PitchUID", "Pitcher", "Season", "Date", "TaggedPitchType", "StuffPlus"]].copy()
+    _stuff_cols = [c for c in ["PitchUID", "Pitcher", "Season", "Date", "TaggedPitchType", "StuffPlus"] if c in df.columns]
+    stuff_df = df[_stuff_cols].copy()
     con.register("stuff_df", stuff_df)
     con.execute("CREATE OR REPLACE TABLE stuff_plus AS SELECT * FROM stuff_df")
 

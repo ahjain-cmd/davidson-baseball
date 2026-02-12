@@ -61,11 +61,9 @@ def main():
         "Player Development",
         "Defensive Positioning",
         "Opponent Scouting",
-        "Bryant Scouting",
+        "Postgame Report",
+        "Data Quality",
     ]
-    if _HAS_DECISION_ENGINE:
-        _nav.append("In-Game Decision Engine")
-    _nav += ["Postgame Report", "Data Quality"]
 
     page = st.sidebar.radio("Navigation", _nav, label_visibility="collapsed")
 
