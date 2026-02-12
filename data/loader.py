@@ -123,7 +123,10 @@ def _read_precompute_table(table_name, where=None, columns=None):
 
 def query_population(sql):
     """Run an ad-hoc SQL query against the full D1 parquet via DuckDB."""
-    return get_duckdb_con().execute(sql).fetchdf()
+    try:
+        return get_duckdb_con().execute(sql).fetchdf()
+    except Exception:
+        return pd.DataFrame()
 
 
 def query_precompute(sql):
