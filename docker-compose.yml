@@ -6,6 +6,7 @@ services:
     volumes:
       # Mount your data files into the container
       - ${DATA_DIR:-.}/all_trackman.parquet:/app/all_trackman.parquet:ro
+      - ${DATA_DIR:-.}/all_trackman_fixed.parquet:/app/all_trackman_fixed.parquet:ro
       - ${DATA_DIR:-.}/davidson.duckdb:/app/davidson.duckdb:ro
       # Mount cache directory for fast league percentile loading
       - ${DATA_DIR:-.}/.cache:/app/.cache
