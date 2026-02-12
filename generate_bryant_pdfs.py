@@ -82,6 +82,7 @@ _DAV_RELIEVERS = [
     "Hall, Edward", "Yochum, Simon", "Hoyt, Ivan", "Champey, Brycen",
     "Furr, Keely", "Jones, Parker", "Marenghi, Will", "Papciak, Will",
     "Taggart, Carson", "Smith, Daniel", "Wille, Tyler",
+    "Pyne, Garrett", "Howard, Jed",
 ]
 
 _DAV_INJURED = ["Banks, Will", "Whelan, Thomas", "Hamilton, Matthew"]
@@ -2312,12 +2313,13 @@ def _compute_offensive_edge(hitter_prof, pitcher_prof):
     if bats and throws:
         b = bats[0] if len(bats) > 1 else bats
         t = throws[0] if len(throws) > 1 else throws
-        if (b == "L" and t == "R") or (b == "R" and t == "L"):
+        if b in ("S", "B"):
+            # Switch hitter always bats opposite — full platoon advantage
+            raw *= 1.07
+        elif (b == "L" and t == "R") or (b == "R" and t == "L"):
             raw *= 1.07
         elif b == t:
             raw *= 0.93
-        elif b in ("S", "B"):
-            raw *= 1.03
 
     # ── 3. Pitcher vulnerability adjustments ──────────────────────────
     # High walk rate — hitters benefit from free bases / hitter's counts
@@ -3227,10 +3229,19 @@ def _render_pitching_matrix_page(pack, pitching_matrix, ordered_pitchers,
                        transform=ax_footer.transAxes, va="top")
     y -= 0.18
 
-    # HIGH LEV (top 2) — exclude injured/DNP
+    # HIGH LEV (top 2) — exclude injured/DNP/starters (bullpen only)
+    _starter_names = set()
+    for n in _DAV_STARTERS:
+        _starter_names.add(n)
+        a = _PITCHER_ALIASES.get(n)
+        if a:
+            _starter_names.add(a)
+        a2 = _PITCHER_ALIASES_REV.get(n)
+        if a2:
+            _starter_names.add(a2)
     highlev = []
     for p_name in dav_arsenals:
-        if p_name in _unavailable:
+        if p_name in _unavailable or p_name in _starter_names:
             continue
         scores = []
         for h_name in pitching_matrix:
@@ -3984,6 +3995,7 @@ def _render_overview_page(pack):
 # ── Main entry point ────────────────────────────────────────────────────────
 
 def main():
+    matchup_only = "--matchup-only" in sys.argv
     print("Loading Bryant combined pack...")
     pack = load_bryant_combined_pack()
     if pack is None:
@@ -4008,82 +4020,84 @@ def main():
     out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bryant_scouting_pdfs")
     os.makedirs(out_dir, exist_ok=True)
 
-    all_pdf_path = os.path.join(out_dir, "bryant_all_hitters.pdf")
-    all_pdf = PdfPages(all_pdf_path)
-    generated = 0
+    if not matchup_only:
+        all_pdf_path = os.path.join(out_dir, "bryant_all_hitters.pdf")
+        all_pdf = PdfPages(all_pdf_path)
+        generated = 0
 
-    for hitter in hitters:
-        # Skip pure pitchers
-        if not _is_hitter(hitter):
-            print(f"  Skipping {hitter} (pitcher)")
-            continue
+        for hitter in hitters:
+            # Skip pure pitchers
+            if not _is_hitter(hitter):
+                print(f"  Skipping {hitter} (pitcher)")
+                continue
 
-        print(f"  Generating: {hitter}...")
-        try:
-            fig = _render_hitter_page(hitter, pack, pitches)
-        except Exception as e:
-            print(f"    ERROR: {e}")
-            continue
-
-        if fig is None:
-            print(f"    Skipped (< 5 PA)")
-            continue
-
-        safe_name = hitter.replace(", ", "_").replace(" ", "_")
-        fig_path = os.path.join(out_dir, f"{safe_name}.pdf")
-        fig.savefig(fig_path, bbox_inches="tight")
-        all_pdf.savefig(fig, bbox_inches="tight")
-        plt.close(fig)
-        generated += 1
-        print(f"    Saved → {fig_path}")
-
-    all_pdf.close()
-    print(f"\nDone! Generated {generated} hitter scouting reports.")
-    print(f"  Individual PDFs: {out_dir}/")
-    print(f"  Combined PDF:    {all_pdf_path}")
-
-    # ── Pitcher PDFs ──────────────────────────────────────────────────
-    print("\n--- Generating PITCHER scouting reports ---")
-    pitcher_pitches = _load_pitcher_pitches()
-    print(f"  {len(pitcher_pitches)} pitcher pitch-level rows loaded")
-
-    p_trad = _tm_team(pack["pitching"].get("traditional", pd.DataFrame()), _TEAM)
-    if p_trad.empty:
-        print("No pitchers found in pack.")
-    else:
-        pitchers = sorted(p_trad["playerFullName"].unique())
-        print(f"Found {len(pitchers)} pitchers in pitching traditional table")
-
-        pitcher_pdf_path = os.path.join(out_dir, "bryant_all_pitchers.pdf")
-        pitcher_pdf = PdfPages(pitcher_pdf_path)
-        p_generated = 0
-
-        for pitcher in pitchers:
-            print(f"  Generating: {pitcher}...")
+            print(f"  Generating: {hitter}...")
             try:
-                fig = _render_pitcher_page(pitcher, pack, pitcher_pitches)
+                fig = _render_hitter_page(hitter, pack, pitches)
             except Exception as e:
-                import traceback
                 print(f"    ERROR: {e}")
-                traceback.print_exc()
                 continue
 
             if fig is None:
-                print(f"    Skipped (< 1 IP)")
+                print(f"    Skipped (< 5 PA)")
                 continue
 
-            safe_name = pitcher.replace(", ", "_").replace(" ", "_")
-            fig_path = os.path.join(out_dir, f"P_{safe_name}.pdf")
-            fig.savefig(fig_path, bbox_inches="tight", dpi=300)
-            pitcher_pdf.savefig(fig, bbox_inches="tight", dpi=300)
+            safe_name = hitter.replace(", ", "_").replace(" ", "_")
+            fig_path = os.path.join(out_dir, f"{safe_name}.pdf")
+            fig.savefig(fig_path, bbox_inches="tight")
+            all_pdf.savefig(fig, bbox_inches="tight")
             plt.close(fig)
-            p_generated += 1
+            generated += 1
             print(f"    Saved → {fig_path}")
 
-        pitcher_pdf.close()
-        print(f"\nDone! Generated {p_generated} pitcher scouting reports.")
-        print(f"  Individual PDFs: {out_dir}/P_*.pdf")
-        print(f"  Combined PDF:    {pitcher_pdf_path}")
+        all_pdf.close()
+        print(f"\nDone! Generated {generated} hitter scouting reports.")
+        print(f"  Individual PDFs: {out_dir}/")
+        print(f"  Combined PDF:    {all_pdf_path}")
+
+    # ── Pitcher PDFs ──────────────────────────────────────────────────
+    if not matchup_only:
+        print("\n--- Generating PITCHER scouting reports ---")
+        pitcher_pitches = _load_pitcher_pitches()
+        print(f"  {len(pitcher_pitches)} pitcher pitch-level rows loaded")
+
+        p_trad = _tm_team(pack["pitching"].get("traditional", pd.DataFrame()), _TEAM)
+        if p_trad.empty:
+            print("No pitchers found in pack.")
+        else:
+            pitchers = sorted(p_trad["playerFullName"].unique())
+            print(f"Found {len(pitchers)} pitchers in pitching traditional table")
+
+            pitcher_pdf_path = os.path.join(out_dir, "bryant_all_pitchers.pdf")
+            pitcher_pdf = PdfPages(pitcher_pdf_path)
+            p_generated = 0
+
+            for pitcher in pitchers:
+                print(f"  Generating: {pitcher}...")
+                try:
+                    fig = _render_pitcher_page(pitcher, pack, pitcher_pitches)
+                except Exception as e:
+                    import traceback
+                    print(f"    ERROR: {e}")
+                    traceback.print_exc()
+                    continue
+
+                if fig is None:
+                    print(f"    Skipped (< 1 IP)")
+                    continue
+
+                safe_name = pitcher.replace(", ", "_").replace(" ", "_")
+                fig_path = os.path.join(out_dir, f"P_{safe_name}.pdf")
+                fig.savefig(fig_path, bbox_inches="tight", dpi=300)
+                pitcher_pdf.savefig(fig, bbox_inches="tight", dpi=300)
+                plt.close(fig)
+                p_generated += 1
+                print(f"    Saved → {fig_path}")
+
+            pitcher_pdf.close()
+            print(f"\nDone! Generated {p_generated} pitcher scouting reports.")
+            print(f"  Individual PDFs: {out_dir}/P_*.pdf")
+            print(f"  Combined PDF:    {pitcher_pdf_path}")
 
     # ── Matchup Strategy One-Pager ──────────────────────────────────────
     print("\n--- Generating MATCHUP STRATEGY page ---")
@@ -4126,10 +4140,12 @@ def main():
 
     # Build Davidson hitter profiles
     dav_hitter_profiles = {}
+    # Two-way players: include as hitters even if they also pitch
+    _TWO_WAY = {"Howard, Jed"}
     if not dav_data.empty:
         for name in ROSTER_2026:
             pos = POSITION.get(name, "")
-            if "RHP" in pos or "LHP" in pos:
+            if name not in _TWO_WAY and ("RHP" in pos or "LHP" in pos):
                 continue
             try:
                 prof = _get_our_hitter_profile(dav_data, name)
@@ -4139,44 +4155,14 @@ def main():
                 pass
     print(f"  Davidson hitter profiles: {len(dav_hitter_profiles)}")
 
-    # ── Vannoy switch-hitter split ──────────────────────────────────────
+    # ── Vannoy switch-hitter: mark as S ──────────────────────────────────
     _VANNOY = "Vannoy, Matthew"
-    if _VANNOY in dav_hitter_profiles and not dav_data.empty:
-        from config import filter_davidson
-        vannoy_batter_df = filter_davidson(dav_data, role="batter")
-        vannoy_batter_df = vannoy_batter_df[vannoy_batter_df["Batter"] == _VANNOY]
-
-        # Right-side profile: exclude his Left-side rows
-        dav_data_vannoy_R = dav_data[
-            ~((dav_data["Batter"] == _VANNOY) & (dav_data["BatterSide"] == "Left"))
-        ]
-        try:
-            prof_r = _get_our_hitter_profile(dav_data_vannoy_R, _VANNOY)
-            if prof_r:
-                prof_r["bats"] = "R"
-                prof_r["name"] = f"{_VANNOY} (R)"
-                dav_hitter_profiles[f"{_VANNOY} (R)"] = prof_r
-        except Exception:
-            pass
-
-        # Left-side profile: exclude his Right-side rows
-        dav_data_vannoy_L = dav_data[
-            ~((dav_data["Batter"] == _VANNOY) & (dav_data["BatterSide"] == "Right"))
-        ]
-        try:
-            prof_l = _get_our_hitter_profile(dav_data_vannoy_L, _VANNOY)
-            if prof_l:
-                prof_l["bats"] = "L"
-                prof_l["name"] = f"{_VANNOY} (L)"
-                dav_hitter_profiles[f"{_VANNOY} (L)"] = prof_l
-        except Exception:
-            pass
-
-        # Remove the combined profile
-        del dav_hitter_profiles[_VANNOY]
-        print(f"  Vannoy split into R/L profiles")
+    if _VANNOY in dav_hitter_profiles:
+        dav_hitter_profiles[_VANNOY]["bats"] = "S"
 
     # Build Bryant pitcher profiles
+    if matchup_only:
+        pitcher_pitches = _load_pitcher_pitches()
     bryant_pitcher_profiles = {}
     bp_trad = _tm_team(pack["pitching"].get("traditional", pd.DataFrame()), _TEAM)
     bp_pitchers = sorted(bp_trad["playerFullName"].unique()) if not bp_trad.empty else []

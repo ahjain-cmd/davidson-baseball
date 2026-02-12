@@ -32,7 +32,10 @@ from config import (
 def get_duckdb_con():
     """Return a DuckDB connection with a VIEW over the parquet dataset."""
     if not os.path.exists(PARQUET_PATH):
-        raise FileNotFoundError(f"Parquet file not found: {PARQUET_PATH}")
+        # No parquet — return empty connection (precomputed duckdb covers core pages)
+        con = duckdb.connect(database=':memory:')
+        con.execute("CREATE VIEW trackman AS SELECT 1 WHERE FALSE")
+        return con
     con = duckdb.connect(database=':memory:')
     # Use a VIEW to avoid loading the full parquet into memory at startup.
     _pname = _name_case_sql("Pitcher")
