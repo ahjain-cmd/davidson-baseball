@@ -1010,8 +1010,8 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
         cmd_metrics = []
         for _, row in cmd_df.iterrows():
             cmd_val = row["Command+"]
-            pctl_mapped = min(max((cmd_val - 80) * 2.5, 0), 100)
-            cmd_metrics.append((row["Pitch"], cmd_val, pctl_mapped, ".0f", True))
+            pctl = row.get("Percentile", min(max((cmd_val - 80) * 2.5, 0), 100))
+            cmd_metrics.append((row["Pitch"], cmd_val, pctl, ".0f", True))
         if cmd_metrics:
             render_savant_percentile_section(cmd_metrics,
                                              title="Command+ Percentile Rankings")
@@ -2840,9 +2840,8 @@ def _pitching_lab_content(data, pitcher, season_filter, pdf, stuff_df,
             metrics = []
             for _, row in cmd_df.iterrows():
                 cmd_val = row["Command+"]
-                # Map Command+ to percentile-like scale for the bar
-                pctl_mapped = min(max((cmd_val - 80) * 2.5, 0), 100)
-                metrics.append((row["Pitch"], cmd_val, pctl_mapped, ".0f", True))
+                pctl = row.get("Percentile", min(max((cmd_val - 80) * 2.5, 0), 100))
+                metrics.append((row["Pitch"], cmd_val, pctl, ".0f", True))
             if metrics:
                 render_savant_percentile_section(metrics)
 

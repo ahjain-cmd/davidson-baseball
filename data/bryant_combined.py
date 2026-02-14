@@ -613,7 +613,10 @@ def build_bryant_combined_pack(
         pitcher_pitches_all = pd.concat(all_pitcher_dfs, ignore_index=True)
         uid_col = "trackmanPitchUID"
         if uid_col in pitcher_pitches_all.columns:
-            pitcher_pitches_all = pitcher_pitches_all.drop_duplicates(subset=[uid_col], keep="first")
+            has_uid = pitcher_pitches_all[uid_col].notna()
+            with_uid = pitcher_pitches_all[has_uid].drop_duplicates(subset=[uid_col], keep="first")
+            without_uid = pitcher_pitches_all[~has_uid]
+            pitcher_pitches_all = pd.concat([with_uid, without_uid], ignore_index=True)
         _pp_path = _bryant_pitcher_pitches_path()
         os.makedirs(os.path.dirname(_pp_path), exist_ok=True)
         pitcher_pitches_all.to_parquet(_pp_path, index=False)

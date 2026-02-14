@@ -104,6 +104,9 @@ _BRYANT_PITCHER_THROWS = {
     "Dressler": "R",
 }
 
+# Bryant pitchers to exclude from Page 2 offensive matrix
+_BRYANT_PITCHER_EXCLUDE = {"Dylan Scudder", "Jackson Vanesko"}
+
 
 def _resolve_pitcher_name(name, arsenal_dict):
     """Return the key in *arsenal_dict* that matches *name* (handles aliases)."""
@@ -1300,6 +1303,7 @@ def _compute_count_predictability_by_hand(pitcher_pp, min_pitches=20):
     if df.empty:
         return []
     df = normalize_pitch_types(df)
+    df = filter_minor_pitches(df)
     bad_labels = {"UN", "UNK", "UNKNOWN", "UNDEFINED", "OTHER", "NONE", "NULL", "NAN", ""}
     bad_labels |= {str(v).strip().upper() for v in PITCH_TYPES_TO_DROP}
     pt_upper = df["TaggedPitchType"].astype(str).str.strip().str.upper()
@@ -1666,7 +1670,7 @@ def _draw_baserunning_panel(fig, gs_slot, pitcher_pp, pitcher_name):
 
     if not pitcher_pp.empty and "Balls" in pitcher_pp.columns:
         # Find the count with highest offspeed %
-        _OFFSPEED = {"Slider", "Curveball", "Changeup", "Splitter", "Sweeper", "Knuckle Curve"}
+        _OFFSPEED = {"Slider", "Curveball", "Changeup", "Splitter"}
         balls = pd.to_numeric(pitcher_pp["Balls"], errors="coerce")
         strikes = pd.to_numeric(pitcher_pp["Strikes"], errors="coerce")
 
@@ -3992,6 +3996,1101 @@ def _render_overview_page(pack):
     return fig
 
 
+# ── Pitch Sequencing Analysis ──────────────────────────────────────────────
+
+# Pitchers to generate sequencing pages for
+_SEQUENCING_PITCHERS = ["Jackson Vanesko", "Dylan Scudder"]
+
+
+def _build_sequencing_data(pitcher_pp, pitcher_name, batter_hand=None):
+    """Build all sequencing stats for a single pitcher.
+
+    Returns a dict with transition matrices, count tendencies,
+    cross-PA carryover, and multi-pitch sequences.
+    If batter_hand is set ("Right" or "Left"), filters to that split.
+    """
+    df = pitcher_pp[pitcher_pp["Pitcher"] == pitcher_name].copy()
+    df = df.dropna(subset=["TaggedPitchType"])
+    if df.empty:
+        return None
+
+    df = normalize_pitch_types(df)
+    df = df.dropna(subset=["TaggedPitchType"])
+
+    # Optional batter-hand filter
+    if batter_hand and "BatterSide" in df.columns:
+        df = df[df["BatterSide"].isin([batter_hand, batter_hand[0]])]
+        if df.empty:
+            return None
+
+    # Detect column names (TrueMedia vs Trackman format)
+    _game_col = "gameDate" if "gameDate" in df.columns else "GameID"
+    _pa_col = "abNumInSide" if "abNumInSide" in df.columns else "PAofInning"
+    _pitch_col = "pitchNumInAB" if "pitchNumInAB" in df.columns else "PitchofPA"
+
+    df = df.sort_values([_game_col, "Inning", _pa_col, _pitch_col])
+
+    # Pitch type shorthand — combine Sweeper into Slider
+    _PT_SHORT = {
+        "Fastball": "FB", "Sinker": "SI", "Slider": "SL", "Curveball": "CB",
+        "Changeup": "CH", "Cutter": "CT", "Sweeper": "SL", "Splitter": "SP",
+        "Knuckle Curve": "CB",
+    }
+    df["pt_short"] = df["TaggedPitchType"].map(_PT_SHORT).fillna(df["TaggedPitchType"])
+
+    # Drop pitch types below 5% usage
+    mix_raw = df["pt_short"].value_counts()
+    total_raw = mix_raw.sum()
+    keep_pts = {pt for pt, n in mix_raw.items() if n / total_raw * 100 >= 5}
+    df = df[df["pt_short"].isin(keep_pts)]
+
+    # Unique PA identifier
+    df["PA_ID"] = (df[_game_col].astype(str) + "_" +
+                   df["Inning"].astype(str) + "_" +
+                   df[_pa_col].astype(str))
+
+    result = {
+        "name": pitcher_name,
+        "n_pitches": len(df),
+        "pitch_types": _PT_SHORT,
+    }
+
+    # ── 1. Overall pitch mix ──
+    mix = df["pt_short"].value_counts()
+    total = mix.sum()
+    result["pitch_mix"] = {pt: {"n": int(n), "pct": round(n / total * 100, 1)}
+                           for pt, n in mix.items()}
+
+    # ── 2. Pitch-to-pitch transition matrix ──
+    # P(next pitch = Y | current pitch = X), within same PA
+    transitions = {}
+    for pa_id, grp in df.groupby("PA_ID"):
+        pts = grp.sort_values(_pitch_col)["pt_short"].tolist()
+        for i in range(len(pts) - 1):
+            key = pts[i]
+            nxt = pts[i + 1]
+            if key not in transitions:
+                transitions[key] = {}
+            transitions[key][nxt] = transitions[key].get(nxt, 0) + 1
+    # Normalize to percentages
+    trans_pct = {}
+    for k, v in transitions.items():
+        total_k = sum(v.values())
+        if total_k >= 5:
+            trans_pct[k] = {nxt: {"n": n, "pct": round(n / total_k * 100, 1)}
+                            for nxt, n in sorted(v.items(), key=lambda x: -x[1])}
+            trans_pct[k]["_total"] = total_k
+    result["transitions"] = trans_pct
+
+    # ── 3. Multi-pitch sequences (2→3rd, 3→4th) ──
+    seq_3 = {}  # (p1, p2) → {p3: count}
+    seq_4 = {}  # (p1, p2, p3) → {p4: count}
+    for pa_id, grp in df.groupby("PA_ID"):
+        pts = grp.sort_values(_pitch_col)["pt_short"].tolist()
+        for i in range(len(pts) - 2):
+            key2 = (pts[i], pts[i + 1])
+            p3 = pts[i + 2]
+            if key2 not in seq_3:
+                seq_3[key2] = {}
+            seq_3[key2][p3] = seq_3[key2].get(p3, 0) + 1
+        for i in range(len(pts) - 3):
+            key3 = (pts[i], pts[i + 1], pts[i + 2])
+            p4 = pts[i + 3]
+            if key3 not in seq_4:
+                seq_4[key3] = {}
+            seq_4[key3][p4] = seq_4[key3].get(p4, 0) + 1
+
+    # Filter to sequences with enough data
+    result["seq_3"] = {}
+    for k, v in seq_3.items():
+        total_k = sum(v.values())
+        if total_k >= 3:
+            result["seq_3"][k] = {
+                "next": {nxt: {"n": n, "pct": round(n / total_k * 100, 1)}
+                         for nxt, n in sorted(v.items(), key=lambda x: -x[1])},
+                "total": total_k,
+            }
+    result["seq_4"] = {}
+    for k, v in seq_4.items():
+        total_k = sum(v.values())
+        if total_k >= 3:
+            result["seq_4"][k] = {
+                "next": {nxt: {"n": n, "pct": round(n / total_k * 100, 1)}
+                         for nxt, n in sorted(v.items(), key=lambda x: -x[1])},
+                "total": total_k,
+            }
+
+    # ── 4. Count-specific pitch tendencies ──
+    count_pitches = {}
+    for _, row in df.iterrows():
+        b = int(row.get("Balls", 0)) if pd.notna(row.get("Balls")) else 0
+        s = int(row.get("Strikes", 0)) if pd.notna(row.get("Strikes")) else 0
+        count_key = f"{b}-{s}"
+        pt = row["pt_short"]
+        if count_key not in count_pitches:
+            count_pitches[count_key] = {}
+        count_pitches[count_key][pt] = count_pitches[count_key].get(pt, 0) + 1
+    result["by_count"] = {}
+    for count_key, v in count_pitches.items():
+        total_k = sum(v.values())
+        if total_k >= 3:
+            result["by_count"][count_key] = {
+                "pitches": {pt: {"n": n, "pct": round(n / total_k * 100, 1)}
+                            for pt, n in sorted(v.items(), key=lambda x: -x[1])},
+                "total": total_k,
+            }
+
+    # ── 5. Path-dependent count analysis ──
+    # Does the sequence to arrive at a count matter?
+    # Group by (count, previous_pitch) → pitch distribution
+    path_count = {}
+    for pa_id, grp in df.groupby("PA_ID"):
+        pts = grp.sort_values(_pitch_col)
+        pt_list = pts["pt_short"].tolist()
+        balls_list = pts["Balls"].tolist()
+        strikes_list = pts["Strikes"].tolist()
+        for i in range(1, len(pt_list)):
+            b = int(balls_list[i]) if pd.notna(balls_list[i]) else 0
+            s = int(strikes_list[i]) if pd.notna(strikes_list[i]) else 0
+            count_key = f"{b}-{s}"
+            prev_pt = pt_list[i - 1]
+            curr_pt = pt_list[i]
+            pk = (count_key, prev_pt)
+            if pk not in path_count:
+                path_count[pk] = {}
+            path_count[pk][curr_pt] = path_count[pk].get(curr_pt, 0) + 1
+    result["path_count"] = {}
+    for (count_key, prev_pt), v in path_count.items():
+        total_k = sum(v.values())
+        if total_k >= 3:
+            result["path_count"][(count_key, prev_pt)] = {
+                "pitches": {pt: {"n": n, "pct": round(n / total_k * 100, 1)}
+                            for pt, n in sorted(v.items(), key=lambda x: -x[1])},
+                "total": total_k,
+            }
+
+    # ── 5b. Count arrival context ──
+    # For each pitch i>0, record what pitch+result from the previous pitch
+    # brought us to the current count.
+    _RESULT_GROUP = {
+        "BallCalled": "Ball", "HitByPitch": "Ball", "BallinDirt": "Ball",
+        "BallIntentional": "Ball",
+        "StrikeCalled": "Strike", "StrikeSwinging": "Strike",
+        "FoulBall": "Foul", "FoulBallNotFieldable": "Foul",
+        "FoulBallFieldable": "Foul",
+        "InPlay": "InPlay",
+    }
+    count_arrivals = {}   # count -> {(prev_pt, result_group): n}
+    count_departures = {} # count -> {(pt, result_group): n}
+    cond_next = {}        # (arriving_count, prev_pt, prev_result_group) -> {curr_pt: n}
+
+    for pa_id, grp in df.groupby("PA_ID"):
+        pts = grp.sort_values(_pitch_col)
+        pt_list = pts["pt_short"].tolist()
+        balls_list = pts["Balls"].tolist()
+        strikes_list = pts["Strikes"].tolist()
+        call_list = (pts["PitchCall"].tolist()
+                     if "PitchCall" in pts.columns else [None] * len(pt_list))
+
+        for i in range(len(pt_list)):
+            b = int(balls_list[i]) if pd.notna(balls_list[i]) else 0
+            s = int(strikes_list[i]) if pd.notna(strikes_list[i]) else 0
+            count_key = f"{b}-{s}"
+            curr_pt = pt_list[i]
+            call_raw = str(call_list[i]) if call_list[i] is not None else ""
+            result_grp = _RESULT_GROUP.get(call_raw, "Other")
+
+            # 5c: count departure — what pitch+result at this count
+            if count_key not in count_departures:
+                count_departures[count_key] = {}
+            dep_key = (curr_pt, result_grp)
+            count_departures[count_key][dep_key] = \
+                count_departures[count_key].get(dep_key, 0) + 1
+
+            if i > 0:
+                prev_pt = pt_list[i - 1]
+                prev_call = str(call_list[i - 1]) if call_list[i - 1] is not None else ""
+                prev_result_grp = _RESULT_GROUP.get(prev_call, "Other")
+
+                # 5b: count arrival
+                if count_key not in count_arrivals:
+                    count_arrivals[count_key] = {}
+                arr_key = (prev_pt, prev_result_grp)
+                count_arrivals[count_key][arr_key] = \
+                    count_arrivals[count_key].get(arr_key, 0) + 1
+
+                # 5d: conditional next pitch
+                cn_key = (count_key, prev_pt, prev_result_grp)
+                if cn_key not in cond_next:
+                    cond_next[cn_key] = {}
+                cond_next[cn_key][curr_pt] = cond_next[cn_key].get(curr_pt, 0) + 1
+
+    # Store arrivals (filter n>=3)
+    result["count_arrivals"] = {}
+    for count_key, v in count_arrivals.items():
+        filtered = {k: n for k, n in v.items() if n >= 3}
+        if filtered:
+            total_a = sum(filtered.values())
+            result["count_arrivals"][count_key] = {
+                "paths": {k: {"n": n, "pct": round(n / total_a * 100, 1)}
+                          for k, n in sorted(filtered.items(), key=lambda x: -x[1])},
+                "total": total_a,
+            }
+
+    # Store departures (filter n>=3)
+    result["count_departures"] = {}
+    for count_key, v in count_departures.items():
+        filtered = {k: n for k, n in v.items() if n >= 3}
+        if filtered:
+            total_d = sum(filtered.values())
+            result["count_departures"][count_key] = {
+                "paths": {k: {"n": n, "pct": round(n / total_d * 100, 1)}
+                          for k, n in sorted(filtered.items(), key=lambda x: -x[1])},
+                "total": total_d,
+            }
+
+    # Store conditional next (filter n>=3)
+    result["cond_next"] = {}
+    for cn_key, v in cond_next.items():
+        total_cn = sum(v.values())
+        if total_cn >= 3:
+            result["cond_next"][cn_key] = {
+                "pitches": {pt: {"n": n, "pct": round(n / total_cn * 100, 1)}
+                            for pt, n in sorted(v.items(), key=lambda x: -x[1])},
+                "total": total_cn,
+            }
+
+    # ── 6. Cross-PA carryover: strikeout pitch → first pitch next batter ──
+    # When he strikes out a batter with pitch X, how often does he throw X
+    # as the first pitch to the next batter?
+    pa_groups = []
+    for pa_id, grp in df.groupby("PA_ID", sort=False):
+        ordered = grp.sort_values(_pitch_col)
+        pa_groups.append(ordered)
+
+    # Sort PAs by game sequence
+    pa_groups.sort(key=lambda g: (
+        str(g[_game_col].iloc[0]),
+        int(g["Inning"].iloc[0]) if pd.notna(g["Inning"].iloc[0]) else 0,
+        int(g[_pa_col].iloc[0]) if pd.notna(g[_pa_col].iloc[0]) else 0,
+    ))
+
+    carryover = {"total_k": 0, "same_pitch_first": 0, "by_pitch": {}}
+    for i in range(len(pa_groups) - 1):
+        curr_pa = pa_groups[i]
+        next_pa = pa_groups[i + 1]
+
+        # Check if current PA ended in strikeout
+        last_row = curr_pa.iloc[-1]
+        play_result = str(last_row.get("PlayResult", "")).strip()
+        if play_result != "Strikeout":
+            continue
+
+        # Must be same game
+        if curr_pa[_game_col].iloc[0] != next_pa[_game_col].iloc[0]:
+            continue
+
+        k_pitch = last_row["pt_short"]
+        first_pitch_next = next_pa.iloc[0]["pt_short"]
+
+        carryover["total_k"] += 1
+        if k_pitch not in carryover["by_pitch"]:
+            carryover["by_pitch"][k_pitch] = {"total": 0, "same": 0,
+                                               "next_first": {}}
+        carryover["by_pitch"][k_pitch]["total"] += 1
+        nfp = carryover["by_pitch"][k_pitch]["next_first"]
+        nfp[first_pitch_next] = nfp.get(first_pitch_next, 0) + 1
+        if k_pitch == first_pitch_next:
+            carryover["same_pitch_first"] += 1
+            carryover["by_pitch"][k_pitch]["same"] += 1
+
+    result["carryover"] = carryover
+
+    # ── 7. First-pitch tendencies ──
+    first_pitches = {}
+    for pa_id, grp in df.groupby("PA_ID"):
+        ordered = grp.sort_values(_pitch_col)
+        fp = ordered.iloc[0]["pt_short"]
+        first_pitches[fp] = first_pitches.get(fp, 0) + 1
+    total_fp = sum(first_pitches.values())
+    result["first_pitch"] = {pt: {"n": n, "pct": round(n / total_fp * 100, 1)}
+                             for pt, n in sorted(first_pitches.items(),
+                                                 key=lambda x: -x[1])}
+    result["first_pitch"]["_total"] = total_fp
+
+    return result
+
+
+def _render_sequencing_page(seq_data):
+    """Render a visual pitch sequencing analysis page for one pitcher."""
+    if not seq_data:
+        return None
+
+    import numpy as np
+
+    name = seq_data["name"]
+
+    # ── Pitch-type color palette ──
+    _PT_CLR = {
+        "FB": "#c0392b", "SI": "#d35400", "CT": "#e67e22",
+        "SL": "#2980b9", "CB": "#8e44ad", "CH": "#27ae60",
+        "SW": "#16a085", "SP": "#e91e63", "KC": "#6c3483",
+    }
+    _DFLT_CLR = "#95a5a6"
+    _HDR_BG = "#1a1a2e"
+    _SECTION_BG = "#2c3e50"
+    _ALT_ROW = "#f7f9fc"
+
+    fig = plt.figure(figsize=(11, 8.5))
+    gs = gridspec.GridSpec(5, 2, figure=fig,
+                          height_ratios=[0.22, 1.45, 0.70, 1.05, 0.38],
+                          hspace=0.40, wspace=0.20,
+                          top=0.97, bottom=0.02, left=0.05, right=0.96)
+
+    # ════════════════════════════════════════════════════════════════════
+    # ROW 0 — HEADER (full width)
+    # ════════════════════════════════════════════════════════════════════
+    ax_hdr = fig.add_subplot(gs[0, :])
+    ax_hdr.set_xlim(0, 1); ax_hdr.set_ylim(0, 1)
+    ax_hdr.set_xticks([]); ax_hdr.set_yticks([])
+    for sp in ax_hdr.spines.values():
+        sp.set_visible(False)
+    ax_hdr.patch.set_facecolor(_HDR_BG)
+
+    ax_hdr.text(0.5, 0.72,
+                f"PITCH SEQUENCING ANALYSIS  \u00b7  {name.upper()}",
+                fontsize=14, fontweight="bold", color="white",
+                ha="center", va="center", transform=ax_hdr.transAxes)
+
+    mix = seq_data.get("pitch_mix", {})
+    n_pitches = seq_data["n_pitches"]
+    sorted_mix = sorted(mix.items(), key=lambda x: -x[1]["pct"])
+    chip_str = "    ".join(f"{pt} {d['pct']:.0f}%" for pt, d in sorted_mix if d["pct"] >= 1)
+    ax_hdr.text(0.5, 0.22,
+                f"{n_pitches} pitches   \u2502   {chip_str}",
+                fontsize=7.5, color="#bbb", ha="center", va="center",
+                family="monospace", transform=ax_hdr.transAxes)
+
+    # ════════════════════════════════════════════════════════════════════
+    # ROW 1 LEFT — HEATMAP TRANSITION MATRIX
+    # ════════════════════════════════════════════════════════════════════
+    ax_heat = fig.add_subplot(gs[1, 0])
+    trans = seq_data.get("transitions", {})
+    if trans:
+        all_pts = sorted(set(list(trans.keys()) +
+                             [p for v in trans.values() for p in v if p != "_total"]))
+        n_pt = len(all_pts)
+        matrix = np.zeros((n_pt, n_pt))
+        for i, pf in enumerate(all_pts):
+            if pf in trans:
+                for j, pt_to in enumerate(all_pts):
+                    if pt_to in trans[pf] and pt_to != "_total":
+                        matrix[i, j] = trans[pf][pt_to]["pct"]
+
+        im = ax_heat.imshow(matrix, cmap="Blues", vmin=0, vmax=65,
+                            aspect="auto", interpolation="nearest")
+
+        # Annotate cells with percentages
+        for i in range(n_pt):
+            for j in range(n_pt):
+                val = matrix[i, j]
+                if val > 0:
+                    clr = "white" if val >= 35 else _HDR_BG
+                    ax_heat.text(j, i, f"{val:.0f}%", ha="center", va="center",
+                                fontsize=7.5, fontweight="bold", color=clr)
+
+        # Grid lines
+        for k in range(n_pt + 1):
+            ax_heat.axhline(k - 0.5, color="white", linewidth=1.5)
+            ax_heat.axvline(k - 0.5, color="white", linewidth=1.5)
+
+        ax_heat.set_xticks(range(n_pt))
+        ax_heat.set_xticklabels(all_pts, fontsize=7.5, fontweight="bold")
+        ax_heat.set_yticks(range(n_pt))
+        ax_heat.set_yticklabels(all_pts, fontsize=7.5, fontweight="bold")
+        ax_heat.xaxis.set_ticks_position("top")
+        ax_heat.xaxis.set_label_position("top")
+        ax_heat.tick_params(axis="both", length=0, pad=4)
+        ax_heat.set_ylabel("FROM", fontsize=7, fontweight="bold",
+                           color="#666", labelpad=8)
+        ax_heat.set_xlabel("TO", fontsize=7, fontweight="bold",
+                           color="#666", labelpad=6)
+        ax_heat.set_title("PITCH-TO-PITCH TRANSITIONS", fontsize=8,
+                         fontweight="bold", color=_HDR_BG, loc="left", pad=20)
+    else:
+        ax_heat.axis("off")
+
+    # ════════════════════════════════════════════════════════════════════
+    # ROW 1 RIGHT — STACKED HORIZONTAL BARS BY COUNT
+    # ════════════════════════════════════════════════════════════════════
+    ax_bars = fig.add_subplot(gs[1, 1])
+    by_count = seq_data.get("by_count", {})
+    if by_count:
+        # Group counts: pitcher ahead (top) → even → behind (bottom)
+        count_groups = [
+            ("#ffebee", "BEHIND", ["3-1", "3-0", "2-1", "2-0", "1-0"]),
+            ("#fff8e1", "EVEN", ["3-2", "2-2", "1-1", "0-0"]),
+            ("#e8f5e9", "AHEAD", ["1-2", "0-2", "0-1"]),
+        ]
+
+        display_order = []   # bottom-to-top for barh
+        group_bounds = []    # (start, end, bg_color, label)
+        for bg_clr, grp_label, counts in count_groups:
+            filtered = [c for c in counts if c in by_count]
+            if filtered:
+                start = len(display_order)
+                display_order.extend(filtered)
+                group_bounds.append((start, len(display_order), bg_clr, grp_label))
+
+        y_pos = list(range(len(display_order)))
+
+        # Background bands for groups
+        for start, end, bg_clr, grp_label in group_bounds:
+            ax_bars.axhspan(start - 0.5, end - 0.5, color=bg_clr,
+                           alpha=0.35, zorder=0)
+            mid = (start + end - 1) / 2
+            ax_bars.text(103, mid, grp_label, fontsize=4.5, fontweight="bold",
+                        va="center", ha="left", color="#888",
+                        fontstyle="italic")
+
+        # Get pitch types sorted by overall frequency
+        all_bar_pts = sorted(
+            set(pt for c in display_order
+                for pt in by_count.get(c, {}).get("pitches", {})),
+            key=lambda pt: -sum(
+                by_count.get(c, {}).get("pitches", {}).get(pt, {}).get("pct", 0)
+                for c in display_order))
+
+        lefts = [0.0] * len(display_order)
+        for pt in all_bar_pts:
+            widths = [by_count.get(c, {}).get("pitches", {}).get(pt, {}).get("pct", 0)
+                      for c in display_order]
+            ax_bars.barh(y_pos, widths, left=lefts, height=0.65,
+                        color=_PT_CLR.get(pt, _DFLT_CLR),
+                        edgecolor="white", linewidth=0.5, label=pt, zorder=1)
+            for i, (w, l) in enumerate(zip(widths, lefts)):
+                if w >= 18:
+                    ax_bars.text(l + w / 2, i, f"{pt}\n{w:.0f}%",
+                                ha="center", va="center", fontsize=4.2,
+                                color="white", fontweight="bold", zorder=2,
+                                linespacing=1.0)
+            lefts = [l + w for l, w in zip(lefts, widths)]
+
+        # N labels on the right
+        for i, c in enumerate(display_order):
+            n_c = by_count.get(c, {}).get("total", 0)
+            ax_bars.text(101, i, str(n_c), fontsize=4.5, va="center",
+                        color="#888", ha="center", zorder=2)
+
+        ax_bars.set_yticks(y_pos)
+        ax_bars.set_yticklabels(display_order, fontsize=6.5, fontweight="bold")
+        ax_bars.set_xlim(0, 112)
+        ax_bars.set_xticks([])
+        ax_bars.spines["top"].set_visible(False)
+        ax_bars.spines["right"].set_visible(False)
+        ax_bars.spines["bottom"].set_visible(False)
+
+        # Compact legend
+        handles, labels = ax_bars.get_legend_handles_labels()
+        ax_bars.legend(handles, labels, loc="lower right", fontsize=5,
+                      ncol=min(len(all_bar_pts), 6), frameon=True,
+                      fancybox=True, framealpha=0.9, edgecolor="#ddd")
+
+        ax_bars.set_title("PITCH USAGE BY COUNT", fontsize=8,
+                         fontweight="bold", color=_HDR_BG, loc="left", pad=10)
+    else:
+        ax_bars.axis("off")
+
+    # ════════════════════════════════════════════════════════════════════
+    # ROW 2 — SITUATION DONUT CARDS (full width, 5 donuts)
+    # ════════════════════════════════════════════════════════════════════
+    gs_donuts = gridspec.GridSpecFromSubplotSpec(
+        1, 5, subplot_spec=gs[2, :], wspace=0.40)
+
+    situations = [
+        ("1ST PITCH\n(0-0)", ["0-0"]),
+        ("PITCHER\nAHEAD", ["0-1", "0-2", "1-2"]),
+        ("PITCHER\nBEHIND", ["1-0", "2-0", "3-0", "3-1"]),
+        ("EVEN\nCOUNT", ["1-1", "2-2"]),
+        ("2 STRIKES", ["0-2", "1-2", "2-2", "3-2"]),
+    ]
+
+    for idx, (sit_name, sit_counts) in enumerate(situations):
+        ax_d = fig.add_subplot(gs_donuts[0, idx])
+        agg = {}
+        total = 0
+        for c in sit_counts:
+            if c in by_count:
+                for pt, d in by_count[c]["pitches"].items():
+                    agg[pt] = agg.get(pt, 0) + d["n"]
+                    total += d["n"]
+
+        if total == 0:
+            ax_d.text(0.5, 0.5, "N/A", ha="center", va="center",
+                      fontsize=8, color="#ccc", transform=ax_d.transAxes)
+            ax_d.set_title(sit_name, fontsize=5.5, fontweight="bold",
+                          color=_HDR_BG, pad=2, linespacing=1.1)
+            ax_d.axis("off")
+            continue
+
+        sorted_agg = sorted(agg.items(), key=lambda x: -x[1])
+        labels_d = [pt for pt, _ in sorted_agg]
+        sizes_d = [n for _, n in sorted_agg]
+        colors_d = [_PT_CLR.get(pt, _DFLT_CLR) for pt in labels_d]
+
+        wedges, _ = ax_d.pie(
+            sizes_d, colors=colors_d, startangle=90,
+            wedgeprops=dict(width=0.33, edgecolor="white", linewidth=1.5),
+            counterclock=False)
+
+        # Center: dominant pitch + %
+        dom_pt = labels_d[0]
+        dom_pct = sizes_d[0] / total * 100
+        ax_d.text(0, 0.08, dom_pt, ha="center", va="center",
+                  fontsize=10, fontweight="bold",
+                  color=_PT_CLR.get(dom_pt, "#333"))
+        ax_d.text(0, -0.22, f"{dom_pct:.0f}%", ha="center", va="center",
+                  fontsize=7.5, color="#555")
+
+        ax_d.set_title(sit_name, fontsize=5.5, fontweight="bold",
+                      color=_HDR_BG, pad=2, linespacing=1.1)
+
+        # Legend below donut
+        legend_str = "  ".join(
+            f"{pt} {n / total * 100:.0f}%" for pt, n in sorted_agg[:4])
+        ax_d.text(0, -1.45, legend_str, ha="center", fontsize=4.2, color="#777")
+        ax_d.text(0, -1.7, f"n={total}", ha="center", fontsize=3.8, color="#aaa")
+
+    # ════════════════════════════════════════════════════════════════════
+    # ROW 3 LEFT — TOP 3-PITCH SEQUENCES
+    # ════════════════════════════════════════════════════════════════════
+    ax_seq3 = fig.add_subplot(gs[3, 0])
+    ax_seq3.axis("off")
+    ax_seq3.set_title("TOP 3-PITCH SEQUENCES", fontsize=7.5,
+                     fontweight="bold", color=_HDR_BG, loc="left", pad=6)
+
+    seq3 = seq_data.get("seq_3", {})
+    if seq3:
+        sorted_seq3 = sorted(seq3.items(), key=lambda x: -x[1]["total"])[:8]
+        col_labels_s3 = ["SEQUENCE", "MOST LIKELY NEXT", "N"]
+        rows_s3 = []
+        for (p1, p2), data in sorted_seq3:
+            seq_label = f"{p1} \u2192 {p2} \u2192 ?"
+            next_items = list(data["next"].items())[:3]
+            next_str = "   ".join(f"{pt} {d['pct']:.0f}%" for pt, d in next_items)
+            rows_s3.append([seq_label, next_str, str(data["total"])])
+
+        if rows_s3:
+            col_w = [0.26, 0.56, 0.08]
+            tbl = ax_seq3.table(cellText=rows_s3, colLabels=col_labels_s3,
+                                loc="upper center", cellLoc="center",
+                                colWidths=col_w,
+                                colColours=[_SECTION_BG] * 3)
+            tbl.auto_set_font_size(False)
+            tbl.set_fontsize(6)
+            tbl.scale(1, 1.25)
+            for j in range(3):
+                tbl[0, j].set_text_props(color="white", fontweight="bold",
+                                         fontsize=5.5)
+            for i in range(len(rows_s3)):
+                bg = "#ffffff" if i % 2 == 0 else _ALT_ROW
+                for j in range(3):
+                    tbl[i + 1, j].set_facecolor(bg)
+                tbl[i + 1, 0].set_text_props(fontweight="bold")
+
+    # ════════════════════════════════════════════════════════════════════
+    # ROW 3 RIGHT — TOP 4-PITCH SEQUENCES
+    # ════════════════════════════════════════════════════════════════════
+    ax_seq4 = fig.add_subplot(gs[3, 1])
+    ax_seq4.axis("off")
+    ax_seq4.set_title("TOP 4-PITCH SEQUENCES", fontsize=7.5,
+                     fontweight="bold", color=_HDR_BG, loc="left", pad=6)
+
+    seq4 = seq_data.get("seq_4", {})
+    if seq4:
+        sorted_seq4 = sorted(seq4.items(), key=lambda x: -x[1]["total"])[:8]
+        col_labels_s4 = ["SEQUENCE", "MOST LIKELY NEXT", "N"]
+        rows_s4 = []
+        for (p1, p2, p3), data in sorted_seq4:
+            seq_label = f"{p1}\u2192{p2}\u2192{p3}\u2192?"
+            next_items = list(data["next"].items())[:3]
+            next_str = "   ".join(f"{pt} {d['pct']:.0f}%" for pt, d in next_items)
+            rows_s4.append([seq_label, next_str, str(data["total"])])
+
+        if rows_s4:
+            col_w = [0.30, 0.52, 0.08]
+            tbl = ax_seq4.table(cellText=rows_s4, colLabels=col_labels_s4,
+                                loc="upper center", cellLoc="center",
+                                colWidths=col_w,
+                                colColours=[_SECTION_BG] * 3)
+            tbl.auto_set_font_size(False)
+            tbl.set_fontsize(6)
+            tbl.scale(1, 1.25)
+            for j in range(3):
+                tbl[0, j].set_text_props(color="white", fontweight="bold",
+                                         fontsize=5.5)
+            for i in range(len(rows_s4)):
+                bg = "#ffffff" if i % 2 == 0 else _ALT_ROW
+                for j in range(3):
+                    tbl[i + 1, j].set_facecolor(bg)
+                tbl[i + 1, 0].set_text_props(fontweight="bold")
+
+    # ════════════════════════════════════════════════════════════════════
+    # ROW 4 — FIRST PITCH BAR + CARRYOVER CALLOUT + FOOTER (full width)
+    # ════════════════════════════════════════════════════════════════════
+    ax_bot = fig.add_subplot(gs[4, :])
+    ax_bot.set_xlim(0, 1); ax_bot.set_ylim(0, 1)
+    ax_bot.set_xticks([]); ax_bot.set_yticks([])
+    for sp in ax_bot.spines.values():
+        sp.set_visible(False)
+
+    # First-pitch stacked bar
+    fp = seq_data.get("first_pitch", {})
+    fp_total = fp.get("_total", 0)
+    fp_items = {k: v for k, v in fp.items() if k != "_total"}
+    sorted_fp = sorted(fp_items.items(), key=lambda x: -x[1]["pct"])
+
+    bar_y = 0.52; bar_h = 0.35
+    x_cursor = 0.12; bar_w = 0.52
+    ax_bot.text(0.01, bar_y + bar_h / 2, f"1ST PITCH\n({fp_total} PA)",
+               fontsize=5.5, fontweight="bold", color=_HDR_BG,
+               va="center", ha="left", transform=ax_bot.transAxes)
+    for pt, d in sorted_fp:
+        seg_w = d["pct"] / 100.0 * bar_w
+        if seg_w < 0.003:
+            continue
+        clr = _PT_CLR.get(pt, _DFLT_CLR)
+        rect = plt.Rectangle((x_cursor, bar_y), seg_w, bar_h,
+                              facecolor=clr, edgecolor="white", linewidth=0.5,
+                              transform=ax_bot.transAxes, clip_on=False)
+        ax_bot.add_patch(rect)
+        if seg_w > 0.04:
+            ax_bot.text(x_cursor + seg_w / 2, bar_y + bar_h / 2,
+                       f"{pt} {d['pct']:.0f}%",
+                       fontsize=5.5, fontweight="bold", color="white",
+                       ha="center", va="center", transform=ax_bot.transAxes)
+        x_cursor += seg_w
+
+    # Carryover callout box
+    carry = seq_data.get("carryover", {})
+    total_k = carry.get("total_k", 0)
+    if total_k > 0:
+        same_pct = carry["same_pitch_first"] / total_k * 100
+        cx, cy, cw, ch = 0.70, 0.22, 0.28, 0.72
+        rect_bg = plt.Rectangle(
+            (cx, cy), cw, ch, facecolor="#f0f4f8", edgecolor=_SECTION_BG,
+            linewidth=1.2, transform=ax_bot.transAxes, clip_on=False,
+            zorder=2, joinstyle="round")
+        ax_bot.add_patch(rect_bg)
+        ax_bot.text(cx + cw / 2, cy + ch - 0.08,
+                    "AFTER STRIKEOUT \u2192", fontsize=5.5, fontweight="bold",
+                    color=_HDR_BG, ha="center", va="top",
+                    transform=ax_bot.transAxes, zorder=3)
+        ax_bot.text(cx + cw / 2, cy + ch * 0.38,
+                    f"{same_pct:.0f}% repeat same pitch\n"
+                    f"to next batter ({carry['same_pitch_first']}/{total_k} K's)",
+                    fontsize=5.5, color="#444", ha="center", va="center",
+                    transform=ax_bot.transAxes, zorder=3, linespacing=1.5)
+
+    # Footer
+    ax_bot.text(0.01, 0.03,
+               "Source: TrueMedia  \u00b7  N = sample size  \u00b7  Min N=3",
+               fontsize=4, color="#aaa", fontstyle="italic",
+               transform=ax_bot.transAxes)
+
+    return fig
+
+
+def _render_sequencing_deep_dive(seq_data, hand_label, focus_count="1-1"):
+    """Render count-conditional sequencing deep-dive page for one pitcher + hand split."""
+    if not seq_data:
+        return None
+
+    import numpy as np
+
+    name = seq_data["name"]
+    n_pitches = seq_data["n_pitches"]
+    if n_pitches < 10:
+        return None
+
+    _PT_CLR = {
+        "FB": "#c0392b", "SI": "#d35400", "CT": "#e67e22",
+        "SL": "#2980b9", "CB": "#8e44ad", "CH": "#27ae60",
+        "SW": "#16a085", "SP": "#e91e63", "KC": "#6c3483",
+    }
+    _DFLT_CLR = "#95a5a6"
+    _HDR_BG = "#1a1a2e"
+    _SECTION_BG = "#2c3e50"
+    _ALT_ROW = "#f7f9fc"
+
+    by_count = seq_data.get("by_count", {})
+    count_arrivals = seq_data.get("count_arrivals", {})
+    count_departures = seq_data.get("count_departures", {})
+    cond_next = seq_data.get("cond_next", {})
+    mix = seq_data.get("pitch_mix", {})
+
+    # Ordered pitch types for heatmap columns (sorted by overall usage)
+    all_pts = sorted(mix.keys(), key=lambda p: -mix[p]["pct"])
+
+    fig = plt.figure(figsize=(11, 8.5))
+    gs = gridspec.GridSpec(4, 2, figure=fig,
+                          height_ratios=[0.20, 1.50, 1.10, 1.10],
+                          hspace=0.35, wspace=0.25,
+                          top=0.97, bottom=0.02, left=0.05, right=0.96)
+
+    # ── ROW 0: HEADER (full width) ──
+    ax_hdr = fig.add_subplot(gs[0, :])
+    ax_hdr.set_xlim(0, 1); ax_hdr.set_ylim(0, 1)
+    ax_hdr.set_xticks([]); ax_hdr.set_yticks([])
+    for sp in ax_hdr.spines.values():
+        sp.set_visible(False)
+    ax_hdr.patch.set_facecolor(_HDR_BG)
+
+    ax_hdr.text(0.5, 0.72,
+                f"COUNT SEQUENCING DEEP DIVE  \u00b7  {name.upper()}  \u00b7  {hand_label.upper()}",
+                fontsize=13, fontweight="bold", color="white",
+                ha="center", va="center", transform=ax_hdr.transAxes)
+    sorted_mix = sorted(mix.items(), key=lambda x: -x[1]["pct"])
+    chip_str = "    ".join(f"{pt} {d['pct']:.0f}%" for pt, d in sorted_mix if d["pct"] >= 1)
+    ax_hdr.text(0.5, 0.22,
+                f"{n_pitches} pitches   \u2502   {chip_str}",
+                fontsize=7.5, color="#bbb", ha="center", va="center",
+                family="monospace", transform=ax_hdr.transAxes)
+
+    # ── ROW 1 LEFT: FOCUS COUNT PANEL ──
+    ax_focus = fig.add_subplot(gs[1, 0])
+    ax_focus.set_xlim(0, 1); ax_focus.set_ylim(0, 1)
+    ax_focus.set_xticks([]); ax_focus.set_yticks([])
+    for sp in ax_focus.spines.values():
+        sp.set_visible(False)
+
+    ax_focus.text(0.5, 0.97, f"FOCUS COUNT: {focus_count}",
+                  fontsize=10, fontweight="bold", color=_HDR_BG,
+                  ha="center", va="top", transform=ax_focus.transAxes)
+
+    # -- How he arrives at focus count --
+    y_cursor = 0.88
+    ax_focus.text(0.05, y_cursor, f"How he arrives at {focus_count}",
+                  fontsize=7.5, fontweight="bold", color=_SECTION_BG,
+                  transform=ax_focus.transAxes)
+    y_cursor -= 0.04
+
+    arrivals = count_arrivals.get(focus_count, {})
+    arr_paths = arrivals.get("paths", {})
+    if arr_paths:
+        sorted_arr = sorted(arr_paths.items(), key=lambda x: -x[1]["n"])[:8]
+        arr_total = arrivals.get("total", sum(d["n"] for d in arr_paths.values()))
+        bar_y = y_cursor
+        for (prev_pt, prev_res), d in sorted_arr:
+            pct = d["n"] / arr_total
+            label = f"{prev_pt} {prev_res.lower()}"
+            color = _PT_CLR.get(prev_pt, _DFLT_CLR)
+            ax_focus.barh(bar_y, pct * 0.55, left=0.05, height=0.035,
+                         color=color, alpha=0.85, edgecolor="white", linewidth=0.5)
+            ax_focus.text(0.05 + pct * 0.55 + 0.01, bar_y,
+                         f"{label} ({d['pct']:.0f}%, n={d['n']})",
+                         fontsize=5, va="center", color="#333",
+                         transform=ax_focus.transAxes)
+            bar_y -= 0.05
+        y_cursor = bar_y - 0.02
+    else:
+        ax_focus.text(0.05, y_cursor - 0.04, "No arrival data",
+                      fontsize=6, color="#aaa", transform=ax_focus.transAxes)
+        y_cursor -= 0.10
+
+    # -- What he throws AT focus count (donut) --
+    ax_focus.text(0.05, y_cursor, f"What he throws at {focus_count}",
+                  fontsize=7.5, fontweight="bold", color=_SECTION_BG,
+                  transform=ax_focus.transAxes)
+    y_cursor -= 0.03
+
+    focus_data = by_count.get(focus_count, {})
+    focus_pitches = focus_data.get("pitches", {})
+    focus_total = focus_data.get("total", 0)
+    if focus_pitches and focus_total > 0:
+        sorted_fp = sorted(focus_pitches.items(), key=lambda x: -x[1]["n"])
+        labels_fp = [pt for pt, _ in sorted_fp]
+        sizes_fp = [d["n"] for _, d in sorted_fp]
+        colors_fp = [_PT_CLR.get(pt, _DFLT_CLR) for pt in labels_fp]
+
+        # Inset axes for donut
+        donut_left = 0.08
+        donut_bottom = y_cursor - 0.22
+        donut_size = 0.18
+        ax_donut = fig.add_axes([donut_left, donut_bottom, donut_size, donut_size * (11/8.5)])
+        wedges, _ = ax_donut.pie(
+            sizes_fp, colors=colors_fp, startangle=90,
+            wedgeprops=dict(width=0.33, edgecolor="white", linewidth=1.5),
+            counterclock=False)
+        dom_pt = labels_fp[0]
+        dom_pct = sizes_fp[0] / focus_total * 100
+        ax_donut.text(0, 0.08, dom_pt, ha="center", va="center",
+                      fontsize=10, fontweight="bold",
+                      color=_PT_CLR.get(dom_pt, "#333"))
+        ax_donut.text(0, -0.22, f"{dom_pct:.0f}%", ha="center", va="center",
+                      fontsize=7.5, color="#555")
+
+        # Legend to the right of donut
+        for j, (pt, d) in enumerate(sorted_fp[:5]):
+            ax_focus.text(0.35, y_cursor - 0.04 - j * 0.04,
+                         f"{pt}: {d['pct']:.0f}% (n={d['n']})",
+                         fontsize=6, color=_PT_CLR.get(pt, "#333"),
+                         fontweight="bold", transform=ax_focus.transAxes)
+        ax_focus.text(0.35, y_cursor - 0.04 - len(sorted_fp[:5]) * 0.04,
+                     f"Total n={focus_total}", fontsize=5, color="#888",
+                     transform=ax_focus.transAxes)
+        y_cursor = donut_bottom - 0.03
+    else:
+        ax_focus.text(0.05, y_cursor - 0.04, "No data at this count",
+                      fontsize=6, color="#aaa", transform=ax_focus.transAxes)
+
+    # ── ROW 1 RIGHT: SITUATION DONUTS ──
+    gs_donuts = gridspec.GridSpecFromSubplotSpec(
+        2, 3, subplot_spec=gs[1, 1], wspace=0.50, hspace=0.55)
+
+    situations = [
+        ("1ST PITCH\n(0-0)", ["0-0"]),
+        ("PITCHER\nAHEAD", ["0-1", "0-2", "1-2"]),
+        ("PITCHER\nBEHIND", ["1-0", "2-0", "3-0", "3-1"]),
+        ("EVEN\nCOUNT", ["1-1", "2-2"]),
+        ("2 STRIKES", ["0-2", "1-2", "2-2", "3-2"]),
+    ]
+
+    for idx, (sit_name, sit_counts) in enumerate(situations):
+        row_d, col_d = divmod(idx, 3)
+        ax_d = fig.add_subplot(gs_donuts[row_d, col_d])
+        agg = {}
+        total = 0
+        for c in sit_counts:
+            if c in by_count:
+                for pt, d in by_count[c]["pitches"].items():
+                    agg[pt] = agg.get(pt, 0) + d["n"]
+                    total += d["n"]
+
+        if total == 0:
+            ax_d.text(0.5, 0.5, "N/A", ha="center", va="center",
+                      fontsize=8, color="#ccc", transform=ax_d.transAxes)
+            ax_d.set_title(sit_name, fontsize=5.5, fontweight="bold",
+                          color=_HDR_BG, pad=2, linespacing=1.1)
+            ax_d.axis("off")
+            continue
+
+        sorted_agg = sorted(agg.items(), key=lambda x: -x[1])
+        labels_d = [pt for pt, _ in sorted_agg]
+        sizes_d = [n for _, n in sorted_agg]
+        colors_d = [_PT_CLR.get(pt, _DFLT_CLR) for pt in labels_d]
+
+        wedges, _ = ax_d.pie(
+            sizes_d, colors=colors_d, startangle=90,
+            wedgeprops=dict(width=0.33, edgecolor="white", linewidth=1.5),
+            counterclock=False)
+
+        dom_pt = labels_d[0]
+        dom_pct = sizes_d[0] / total * 100
+        ax_d.text(0, 0.08, dom_pt, ha="center", va="center",
+                  fontsize=9, fontweight="bold",
+                  color=_PT_CLR.get(dom_pt, "#333"))
+        ax_d.text(0, -0.22, f"{dom_pct:.0f}%", ha="center", va="center",
+                  fontsize=7, color="#555")
+
+        ax_d.set_title(sit_name, fontsize=5.5, fontweight="bold",
+                      color=_HDR_BG, pad=2, linespacing=1.1)
+
+        legend_str = "  ".join(
+            f"{pt} {n / total * 100:.0f}%" for pt, n in sorted_agg[:4])
+        ax_d.text(0, -1.45, legend_str, ha="center", fontsize=4.2, color="#777")
+        ax_d.text(0, -1.7, f"n={total}", ha="center", fontsize=3.8, color="#aaa")
+
+    # ── ROW 2: CONDITIONAL TRANSITION TABLE (full width) ──
+    ax_cond = fig.add_subplot(gs[2, :])
+    ax_cond.set_xlim(0, 1); ax_cond.set_ylim(0, 1)
+    ax_cond.set_xticks([]); ax_cond.set_yticks([])
+    for sp in ax_cond.spines.values():
+        sp.set_visible(False)
+
+    ax_cond.text(0.5, 0.97,
+                 f"CONDITIONAL NEXT PITCH AT {focus_count}",
+                 fontsize=9, fontweight="bold", color=_HDR_BG,
+                 ha="center", va="top", transform=ax_cond.transAxes)
+    ax_cond.text(0.5, 0.91,
+                 "If the previous pitch was X with result Y, he throws:",
+                 fontsize=6, color="#666", ha="center", va="top",
+                 transform=ax_cond.transAxes)
+
+    # Filter cond_next entries for the focus count, sorted by sample size
+    focus_cond = {k: v for k, v in cond_next.items()
+                  if k[0] == focus_count and v["total"] >= 3}
+    sorted_cond = sorted(focus_cond.items(), key=lambda x: -x[1]["total"])[:10]
+
+    if sorted_cond:
+        # Table header
+        header_y = 0.85
+        ax_cond.add_patch(plt.Rectangle((0.02, header_y - 0.015), 0.96, 0.04,
+                          facecolor=_SECTION_BG, edgecolor="none",
+                          transform=ax_cond.transAxes, clip_on=False))
+        col_x = [0.04, 0.22, 0.38, 0.95]
+        for txt, x, ha in [("PREV PITCH → RESULT", col_x[0], "left"),
+                           ("ARRIVES AT", col_x[1], "left"),
+                           ("NEXT PITCH DISTRIBUTION", col_x[2], "left"),
+                           ("N", col_x[3], "right")]:
+            ax_cond.text(x, header_y + 0.005, txt,
+                        fontsize=5, fontweight="bold", color="white",
+                        ha=ha, va="center", transform=ax_cond.transAxes)
+
+        row_y = header_y - 0.055
+        row_h = 0.055
+        for i, ((cnt, prev_pt, prev_res), data) in enumerate(sorted_cond):
+            if row_y < 0.05:
+                break
+            # Alternating row background
+            if i % 2 == 1:
+                ax_cond.add_patch(plt.Rectangle(
+                    (0.02, row_y - row_h / 2 + 0.005), 0.96, row_h,
+                    facecolor=_ALT_ROW, edgecolor="none",
+                    transform=ax_cond.transAxes, clip_on=False))
+
+            ax_cond.text(col_x[0], row_y,
+                        f"{prev_pt} {prev_res.lower()}",
+                        fontsize=6, fontweight="bold",
+                        color=_PT_CLR.get(prev_pt, "#333"),
+                        ha="left", va="center", transform=ax_cond.transAxes)
+            ax_cond.text(col_x[1], row_y, cnt,
+                        fontsize=6, color="#555",
+                        ha="left", va="center", transform=ax_cond.transAxes)
+
+            # Stacked bar for pitch distribution
+            bar_left = col_x[2]
+            bar_width = 0.50
+            total_n = data["total"]
+            pitches_sorted = sorted(data["pitches"].items(),
+                                   key=lambda x: -x[1]["n"])
+            cum_x = bar_left
+            for pt, pd_item in pitches_sorted:
+                seg_w = pd_item["n"] / total_n * bar_width
+                ax_cond.add_patch(plt.Rectangle(
+                    (cum_x, row_y - 0.012), seg_w, 0.024,
+                    facecolor=_PT_CLR.get(pt, _DFLT_CLR),
+                    edgecolor="white", linewidth=0.5,
+                    transform=ax_cond.transAxes, clip_on=False))
+                if seg_w > 0.04:
+                    ax_cond.text(cum_x + seg_w / 2, row_y,
+                                f"{pt} {pd_item['pct']:.0f}%",
+                                fontsize=4.5, color="white", fontweight="bold",
+                                ha="center", va="center",
+                                transform=ax_cond.transAxes)
+                cum_x += seg_w
+
+            ax_cond.text(col_x[3], row_y, str(total_n),
+                        fontsize=6, color="#555",
+                        ha="right", va="center", transform=ax_cond.transAxes)
+            row_y -= row_h
+    else:
+        ax_cond.text(0.5, 0.50, f"No conditional data at {focus_count} (n\u22653 required)",
+                     fontsize=8, color="#aaa", ha="center", va="center",
+                     transform=ax_cond.transAxes)
+
+    # ── ROW 3: ALL-COUNTS HEATMAP (full width) ──
+    ax_heat = fig.add_subplot(gs[3, :])
+    ax_heat.set_xlim(0, 1); ax_heat.set_ylim(0, 1)
+    ax_heat.set_xticks([]); ax_heat.set_yticks([])
+    for sp in ax_heat.spines.values():
+        sp.set_visible(False)
+
+    ax_heat.text(0.5, 0.97, "PITCH USAGE BY COUNT",
+                 fontsize=9, fontweight="bold", color=_HDR_BG,
+                 ha="center", va="top", transform=ax_heat.transAxes)
+
+    count_order = ["0-0", "1-0", "0-1", "1-1", "2-0", "2-1", "0-2",
+                   "3-0", "3-1", "2-2", "1-2", "3-2"]
+    # Filter to counts that exist
+    active_counts = [c for c in count_order if c in by_count]
+    active_pts = [pt for pt in all_pts if pt in mix]
+
+    if active_counts and active_pts:
+        n_rows = len(active_counts)
+        n_cols = len(active_pts)
+
+        # Build matrix
+        matrix = np.zeros((n_rows, n_cols))
+        for ri, cnt in enumerate(active_counts):
+            cnt_data = by_count.get(cnt, {}).get("pitches", {})
+            for ci, pt in enumerate(active_pts):
+                if pt in cnt_data:
+                    matrix[ri, ci] = cnt_data[pt]["pct"]
+
+        # Layout
+        table_left = 0.10
+        table_right = 0.92
+        table_top = 0.88
+        table_bottom = 0.08
+        cell_w = (table_right - table_left) / n_cols
+        cell_h = (table_top - table_bottom) / n_rows
+
+        # Column headers (pitch types)
+        for ci, pt in enumerate(active_pts):
+            x = table_left + ci * cell_w + cell_w / 2
+            ax_heat.text(x, table_top + 0.03, pt,
+                        fontsize=6, fontweight="bold",
+                        color=_PT_CLR.get(pt, "#333"),
+                        ha="center", va="center", transform=ax_heat.transAxes)
+
+        # Draw cells
+        for ri, cnt in enumerate(active_counts):
+            y = table_top - ri * cell_h
+            # Row label
+            cnt_weight = "bold" if cnt == focus_count else "normal"
+            cnt_color = "#c0392b" if cnt == focus_count else "#333"
+            ax_heat.text(table_left - 0.02, y - cell_h / 2, cnt,
+                        fontsize=6, fontweight=cnt_weight, color=cnt_color,
+                        ha="right", va="center", transform=ax_heat.transAxes)
+
+            cnt_total = by_count.get(cnt, {}).get("total", 0)
+            ax_heat.text(table_right + 0.02, y - cell_h / 2,
+                        f"n={cnt_total}" if cnt_total else "",
+                        fontsize=4.5, color="#999",
+                        ha="left", va="center", transform=ax_heat.transAxes)
+
+            for ci, pt in enumerate(active_pts):
+                x = table_left + ci * cell_w
+                val = matrix[ri, ci]
+                # Color intensity based on usage %
+                if val > 0:
+                    base_color = _PT_CLR.get(pt, _DFLT_CLR)
+                    # Convert hex to rgba with alpha based on value
+                    import matplotlib.colors as mcolors
+                    rgb = mcolors.to_rgb(base_color)
+                    alpha = min(0.15 + val / 100 * 0.85, 1.0)
+                    cell_color = (*rgb, alpha)
+                else:
+                    cell_color = (0.95, 0.95, 0.95, 1.0)
+
+                ax_heat.add_patch(plt.Rectangle(
+                    (x, y - cell_h), cell_w, cell_h,
+                    facecolor=cell_color, edgecolor="white", linewidth=0.8,
+                    transform=ax_heat.transAxes, clip_on=False))
+
+                if val > 0:
+                    txt_color = "white" if val > 35 else "#333"
+                    ax_heat.text(x + cell_w / 2, y - cell_h / 2,
+                                f"{val:.0f}%",
+                                fontsize=5.5, fontweight="bold",
+                                color=txt_color,
+                                ha="center", va="center",
+                                transform=ax_heat.transAxes)
+    else:
+        ax_heat.text(0.5, 0.50, "Insufficient count data for heatmap",
+                     fontsize=8, color="#aaa", ha="center", va="center",
+                     transform=ax_heat.transAxes)
+
+    # Footer
+    ax_heat.text(0.01, 0.01,
+                 "Source: TrueMedia  \u00b7  N = sample size  \u00b7  Min N=3  \u00b7  Focus count highlighted in red",
+                 fontsize=4, color="#aaa", fontstyle="italic",
+                 transform=ax_heat.transAxes)
+
+    return fig
+
+
 # ── Main entry point ────────────────────────────────────────────────────────
 
 def main():
@@ -4141,10 +5240,16 @@ def main():
     # Build Davidson hitter profiles
     dav_hitter_profiles = {}
     # Two-way players: include as hitters even if they also pitch
-    _TWO_WAY = {"Howard, Jed"}
+    _TWO_WAY = {
+        "Howard, Jed", "Vokal, Jacob", "Papciak, Will",
+        "Lietz, Forrest", "Jimenez, Ethan", "Hoyt, Ivan",
+    }
+    _EXCLUDE_HITTERS = {"Katz, Adam"}
     if not dav_data.empty:
         for name in ROSTER_2026:
             pos = POSITION.get(name, "")
+            if name in _EXCLUDE_HITTERS:
+                continue
             if name not in _TWO_WAY and ("RHP" in pos or "LHP" in pos):
                 continue
             try:
@@ -4222,6 +5327,40 @@ def main():
         matchup_pdf.savefig(fig3, bbox_inches="tight")
         plt.close(fig3)
         pages_saved += 1
+
+    # Pages 4+: Pitch sequencing analysis for key pitchers
+    if matchup_only:
+        _seq_pitcher_pitches = _load_pitcher_pitches()
+    else:
+        _seq_pitcher_pitches = pitcher_pitches
+    for seq_pitcher in _SEQUENCING_PITCHERS:
+        print(f"  Building sequencing page for {seq_pitcher}...")
+        seq_data = _build_sequencing_data(_seq_pitcher_pitches, seq_pitcher)
+        if seq_data:
+            fig_seq = _render_sequencing_page(seq_data)
+            if fig_seq:
+                matchup_pdf.savefig(fig_seq, bbox_inches="tight")
+                plt.close(fig_seq)
+                pages_saved += 1
+                print(f"    {seq_data['n_pitches']} pitches analyzed")
+        else:
+            print(f"    No pitch data found for {seq_pitcher}")
+
+    # Pages: Count-conditional deep dive (RHH/LHH split)
+    for seq_pitcher in _SEQUENCING_PITCHERS:
+        for hand, hand_label in [("Right", "vs RHH"), ("Left", "vs LHH")]:
+            print(f"  Building sequencing deep dive for {seq_pitcher} {hand_label}...")
+            seq_data_hand = _build_sequencing_data(
+                _seq_pitcher_pitches, seq_pitcher, batter_hand=hand)
+            if seq_data_hand:
+                fig_dd = _render_sequencing_deep_dive(seq_data_hand, hand_label)
+                if fig_dd:
+                    matchup_pdf.savefig(fig_dd, bbox_inches="tight")
+                    plt.close(fig_dd)
+                    pages_saved += 1
+                    print(f"    {seq_data_hand['n_pitches']} pitches analyzed ({hand_label})")
+            else:
+                print(f"    No data for {seq_pitcher} {hand_label}")
 
     matchup_pdf.close()
     if pages_saved:

@@ -172,6 +172,8 @@ PITCH_TYPE_MAP = {
     "OneSeamFastBall": "Sinker",
     "TwoSeamFastBall": "Sinker",
     "ChangeUp": "Changeup",
+    "Sweeper": "Slider",
+    "Knuckle Curve": "Curveball",
     "Knuckleball": "Other",
     "Undefined": "Other",
     "UN": "Other",
@@ -309,7 +311,7 @@ def normalize_pitch_types(df):
     return df
 
 
-def filter_minor_pitches(df, min_pct=3.0):
+def filter_minor_pitches(df, min_pct=5.0):
     """Remove pitch types that make up less than min_pct% of a pitcher's arsenal."""
     if df.empty or "TaggedPitchType" not in df.columns:
         return df

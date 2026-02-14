@@ -12,9 +12,38 @@ from config import (
 from data.loader import query_population
 
 
+def _build_fallback_spreads(data, pitch_types):
+    """Compute per-pitcher loc spreads from in-memory Davidson data as fallback."""
+    if data is None or data.empty:
+        return {}
+    req = {"TaggedPitchType", "Pitcher", "PlateLocSide", "PlateLocHeight"}
+    if not req.issubset(data.columns):
+        return {}
+    loc = data.dropna(subset=["PlateLocSide", "PlateLocHeight", "TaggedPitchType"]).copy()
+    loc = loc[
+        loc["PlateLocSide"].between(-PLATE_SIDE_MAX, PLATE_SIDE_MAX)
+        & loc["PlateLocHeight"].between(PLATE_HEIGHT_MIN, PLATE_HEIGHT_MAX)
+        & loc["TaggedPitchType"].isin(pitch_types)
+    ]
+    if loc.empty:
+        return {}
+    result = {}
+    for pt, grp in loc.groupby("TaggedPitchType"):
+        pitcher_spreads = []
+        for _, pg in grp.groupby("Pitcher"):
+            if len(pg) < 10:
+                continue
+            s = np.sqrt(pg["PlateLocHeight"].std()**2 + pg["PlateLocSide"].std()**2)
+            if np.isfinite(s):
+                pitcher_spreads.append(s)
+        if len(pitcher_spreads) >= 3:
+            result[pt] = np.array(pitcher_spreads)
+    return result
+
+
 def _compute_command_plus(pdf, data=None):
     """Compute Command+ for each pitch type. Returns DataFrame with
-    Pitch, Pitches, Loc Spread (ft), Zone%, Edge%, CSW%, Chase%, Command+.
+    Pitch, Pitches, Loc Spread (ft), Zone%, Edge%, CSW%, Chase%, Command+, Percentile.
     Returns empty DataFrame if insufficient data."""
     cmd_rows = []
     for pt in sorted(pdf["TaggedPitchType"].unique()):
@@ -90,24 +119,46 @@ def _compute_command_plus(pdf, data=None):
     else:
         baseline_df = pd.DataFrame()
 
+    # Fallback: if D1 population query failed, use in-memory data
+    fallback_spreads = {}
+    if baseline_df.empty and data is not None:
+        fallback_spreads = _build_fallback_spreads(data, pitch_types)
+
     cmd_scores = []
+    cmd_pctls = []
     for _, row in cmd_df.iterrows():
         pt = row["Pitch"]
-        if baseline_df.empty:
+        my_spread = row["Loc Spread (ft)"]
+        if pd.isna(my_spread):
             cmd_scores.append(100.0)
+            cmd_pctls.append(50.0)
             continue
-        pt_df = baseline_df[baseline_df["PitchType"] == pt].copy()
-        if pt_df.empty:
+
+        # Try D1 population baseline first
+        spreads = None
+        if not baseline_df.empty:
+            pt_df = baseline_df[baseline_df["PitchType"] == pt].copy()
+            if not pt_df.empty:
+                spreads = np.sqrt(pt_df["std_h"].astype(float)**2 + pt_df["std_s"].astype(float)**2)
+                spreads = spreads.replace([np.inf, -np.inf], np.nan).dropna()
+                if len(spreads) < 3:
+                    spreads = None
+
+        # Fallback to in-memory data
+        if spreads is None and pt in fallback_spreads:
+            spreads = fallback_spreads[pt]
+
+        if spreads is None:
             cmd_scores.append(100.0)
+            cmd_pctls.append(50.0)
             continue
-        spreads = np.sqrt(pt_df["std_h"].astype(float)**2 + pt_df["std_s"].astype(float)**2)
-        spreads = spreads.replace([np.inf, -np.inf], np.nan).dropna()
-        if len(spreads) < 3 or pd.isna(row["Loc Spread (ft)"]):
-            cmd_scores.append(100.0)
-            continue
-        pctl = 100 - percentileofscore(spreads, row["Loc Spread (ft)"], kind="rank")
+
+        pctl = 100 - percentileofscore(spreads, my_spread, kind="rank")
         cmd_scores.append(round(100 + (pctl - 50) * 0.4, 0))
+        cmd_pctls.append(round(pctl, 1))
+
     cmd_df["Command+"] = cmd_scores
+    cmd_df["Percentile"] = cmd_pctls
     cmd_df = cmd_df.sort_values("Command+", ascending=False)
     return cmd_df
 
