@@ -11,7 +11,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code only (data files mounted at runtime)
-COPY config.py precompute.py app.py ./
+COPY config.py precompute.py app.py generate_postgame_report_pdf.py generate_ab_review_pdf.py generate_series_report_pdf.py ./
 COPY data/ data/
 COPY analytics/ analytics/
 COPY viz/ viz/
