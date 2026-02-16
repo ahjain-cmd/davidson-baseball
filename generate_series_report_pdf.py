@@ -536,34 +536,79 @@ def _spray_chart(ax, in_play_df):
 
 # ── Stuff+/Command+ Bars ────────────────────────────────────────────────────
 
-def _stuff_cmd_bars(ax, stuff_by_pt, cmd_df):
+def _build_stuff_population(data):
+    """Build per-pitch-type Stuff+ population: dict of pitch_type -> array of
+    per-pitcher average Stuff+ scores across all pitchers in the database."""
+    stuff_pop = {}
+    if data is None or data.empty:
+        return stuff_pop
+    stuff_df = _compute_stuff_plus(data.copy())
+    if "StuffPlus" in stuff_df.columns:
+        pitcher_pt = stuff_df.dropna(subset=["StuffPlus"]).groupby(
+            ["Pitcher", "TaggedPitchType"])["StuffPlus"].mean().reset_index()
+        for pt, grp in pitcher_pt.groupby("TaggedPitchType"):
+            if len(grp) >= 3:
+                stuff_pop[pt] = grp["StuffPlus"].values
+    return stuff_pop
+
+
+def _stuff_cmd_bars(ax, stuff_by_pt, cmd_df, stuff_pop=None):
     pitch_types = sorted(stuff_by_pt.keys())
+    # Command+ already has a Percentile column from _compute_command_plus
+    cmd_pctl_map = {}
     cmd_map = {}
-    if cmd_df is not None and not cmd_df.empty and "Pitch" in cmd_df.columns and "Command+" in cmd_df.columns:
-        cmd_map = dict(zip(cmd_df["Pitch"], cmd_df["Command+"]))
+    if cmd_df is not None and not cmd_df.empty and "Pitch" in cmd_df.columns:
+        if "Percentile" in cmd_df.columns:
+            cmd_pctl_map = dict(zip(cmd_df["Pitch"], cmd_df["Percentile"]))
+        if "Command+" in cmd_df.columns:
+            cmd_map = dict(zip(cmd_df["Pitch"], cmd_df["Command+"]))
     if not pitch_types:
         ax.axis("off")
         return
-    stuff_vals = [stuff_by_pt.get(pt, 100) for pt in pitch_types]
-    cmd_vals = [cmd_map.get(pt, 100) for pt in pitch_types]
+
+    # Convert Stuff+ raw scores to percentiles vs population
+    stuff_pctls, cmd_pctls = [], []
+    for pt in pitch_types:
+        sv = stuff_by_pt.get(pt, 100)
+        if stuff_pop and pt in stuff_pop and len(stuff_pop[pt]) >= 3:
+            stuff_pctls.append(percentileofscore(stuff_pop[pt], sv, kind="rank"))
+        else:
+            # Fallback: approximate from z-score (100=mean, 10=1sd)
+            from scipy.stats import norm
+            stuff_pctls.append(norm.cdf((sv - 100) / 10) * 100)
+        # Use Command+ Percentile directly if available
+        if pt in cmd_pctl_map:
+            cmd_pctls.append(cmd_pctl_map[pt])
+        else:
+            cv = cmd_map.get(pt, 100)
+            from scipy.stats import norm
+            cmd_pctls.append(norm.cdf((cv - 100) / 10) * 100)
+
     y = np.arange(len(pitch_types))
     bar_h = 0.35
-    def _bar_color(v):
-        return "#d22d49" if v > 110 else "#2d7fc1" if v < 90 else "#9e9e9e"
-    ax.barh(y + bar_h/2, stuff_vals, bar_h, label="Stuff+",
-            color=[_bar_color(v) for v in stuff_vals])
-    ax.barh(y - bar_h/2, cmd_vals, bar_h, label="Command+",
-            color=[_bar_color(v) for v in cmd_vals], alpha=0.7)
-    ax.axvline(100, color="#aaa", linestyle="--", linewidth=1)
+
+    def _pctl_color(pctl):
+        if pctl >= 75:
+            return "#d22d49"
+        if pctl <= 25:
+            return "#2d7fc1"
+        return "#9e9e9e"
+
+    ax.barh(y + bar_h/2, stuff_pctls, bar_h, label="Stuff+",
+            color=[_pctl_color(v) for v in stuff_pctls])
+    ax.barh(y - bar_h/2, cmd_pctls, bar_h, label="Command+",
+            color=[_pctl_color(v) for v in cmd_pctls], alpha=0.7)
+    ax.axvline(50, color="#aaa", linestyle="--", linewidth=1)
     ax.set_yticks(y); ax.set_yticklabels(pitch_types, fontsize=6)
-    ax.set_xlim(50, max(max(stuff_vals + cmd_vals, default=100) + 15, 130))
+    ax.set_xlim(0, 100)
+    ax.set_xlabel("Percentile", fontsize=5, labelpad=2)
     ax.legend(fontsize=5, loc="lower right")
     ax.tick_params(axis="x", labelsize=5)
-    for i, (sv, cv) in enumerate(zip(stuff_vals, cmd_vals)):
-        ax.text(sv + 1, i + bar_h/2, f"{sv:.0f}", fontsize=5, va="center")
-        ax.text(cv + 1, i - bar_h/2, f"{cv:.0f}", fontsize=5, va="center")
+    for i, (sv, cv) in enumerate(zip(stuff_pctls, cmd_pctls)):
+        ax.text(min(sv + 1, 93), i + bar_h/2, f"{sv:.0f}", fontsize=5, va="center")
+        ax.text(min(cv + 1, 93), i - bar_h/2, f"{cv:.0f}", fontsize=5, va="center")
     ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
-    ax.set_title("Stuff+ / Command+", fontsize=7, fontweight="bold", color=_DARK, loc="left", pad=2)
+    ax.set_title("Stuff+ / Command+  (Percentile)", fontsize=7, fontweight="bold", color=_DARK, loc="left", pad=2)
 
 
 # ── Feedback ─────────────────────────────────────────────────────────────────
@@ -880,7 +925,7 @@ def _render_takeaways_page(combined_gd, data, series_label):
     return fig
 
 
-def _render_pitcher_page(pdf, data, pitcher, series_label):
+def _render_pitcher_page(pdf, data, pitcher, series_label, stuff_pop=None):
     """Individual pitcher page with tier badge, velo sparkline and count breakdown."""
     n_pitches = len(pdf)
     if n_pitches < 20:
@@ -928,9 +973,9 @@ def _render_pitcher_page(pdf, data, pitcher, series_label):
     ax_mov = fig.add_subplot(outer[1, 1])
     _movement_profile(ax_mov, pdf)
 
-    # Row 2 left: Stuff+/Cmd+
+    # Row 2 left: Stuff+/Cmd+ (percentile)
     ax_bars = fig.add_subplot(outer[2, 0])
-    _stuff_cmd_bars(ax_bars, stuff_by_pt, cmd_df)
+    _stuff_cmd_bars(ax_bars, stuff_by_pt, cmd_df, stuff_pop=stuff_pop)
 
     # Row 2 right: Velo sparkline + Count breakdown
     r2_right = gridspec.GridSpecFromSubplotSpec(2, 1, subplot_spec=outer[2, 1],
@@ -1229,11 +1274,17 @@ def generate_series_pdf_bytes(game_ids, data, series_label) -> bytes:
         # 4. Individual Pitcher pages (20+ pitches only)
         dav_pitching = combined_gd[combined_gd["PitcherTeam"] == DAVIDSON_TEAM_ID].copy()
         if not dav_pitching.empty:
+            # Build Stuff+ population distribution once for percentile conversion
+            try:
+                stuff_pop = _build_stuff_population(data)
+            except Exception:
+                stuff_pop = {}
             pitchers = dav_pitching.groupby("Pitcher").size().sort_values(ascending=False).index.tolist()
             for pitcher in pitchers:
                 try:
                     pitcher_df = dav_pitching[dav_pitching["Pitcher"] == pitcher].copy()
-                    fig = _render_pitcher_page(pitcher_df, data, pitcher, series_label)
+                    fig = _render_pitcher_page(pitcher_df, data, pitcher, series_label,
+                                              stuff_pop=stuff_pop)
                     if fig:
                         pdf.savefig(fig); plt.close(fig)
                 except Exception:
