@@ -15,6 +15,7 @@ from _pages.development import page_development
 from _pages.defense import page_defensive_positioning
 from _pages.scouting import page_scouting
 from _pages.postgame import page_postgame
+from _pages.series import page_series
 from _pages.data_quality import page_data_quality
 try:
     from _pages.decision_engine import page_decision_engine
@@ -62,6 +63,7 @@ def main():
         "Defensive Positioning",
         "Opponent Scouting",
         "Postgame Report",
+        "Series Report",
         "Data Quality",
     ]
 
@@ -107,6 +109,8 @@ def main():
         page_decision_engine(data)
     elif page == "Postgame Report":
         page_postgame(data)
+    elif page == "Series Report":
+        page_series(data)
     elif page == "Data Quality":
         page_data_quality()
 
