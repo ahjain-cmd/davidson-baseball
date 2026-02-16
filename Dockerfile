@@ -10,6 +10,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Fix Streamlit Material Symbols font — Tornado serves bundled .woff2 as text/html.
+# Patch the CSS to load from Google CDN instead.
+RUN CSSFILE=$(find /usr/local/lib -path '*/streamlit/static/static/css/*.css' -name 'index.*' | head -1) && \
+    if [ -n "$CSSFILE" ]; then \
+      sed -i 's|src:url(../media/MaterialSymbols-Rounded[^)]*)|src:url(https://fonts.gstatic.com/s/materialsymbolsrounded/v316/syl0-zNym6YjUruM-QrEh7-nyTnjDwKNJ_190FjpZIvDmUSVOK7BDB_Qb9vUSzq3wzLK-P0J-V_Zs-QtQth3-jOcbTCVpeRL2w5rwZu2rIelXxI.ttf)|' "$CSSFILE"; \
+    fi
+
 # Copy application code only (data files mounted at runtime)
 COPY config.py precompute.py app.py generate_postgame_report_pdf.py generate_ab_review_pdf.py generate_series_report_pdf.py entrypoint.sh ./
 COPY data/ data/
