@@ -671,17 +671,17 @@ def _mpl_best_zone_heatmap(ax_heat, ax_key, bdf, bats):
     # Color gradient bar
     gradient = np.linspace(0, 100, 256).reshape(1, -1)
     ax_key.imshow(gradient, cmap=cmap, aspect="auto",
-                  extent=[0.10, 0.90, 0.72, 0.92], zorder=5)
-    ax_key.text(0.10, 0.62, "Cold", fontsize=5, color="#c62828",
-                fontweight="bold", va="top", ha="left", transform=ax_key.transAxes)
-    ax_key.text(0.90, 0.62, "Hot", fontsize=5, color="#2e7d32",
-                fontweight="bold", va="top", ha="right", transform=ax_key.transAxes)
+                  extent=[0.15, 0.85, 0.68, 0.88], zorder=5)
+    ax_key.text(0.14, 0.78, "Cold", fontsize=5, color="#c62828",
+                fontweight="bold", va="center", ha="right", transform=ax_key.transAxes)
+    ax_key.text(0.86, 0.78, "Hot", fontsize=5, color="#2e7d32",
+                fontweight="bold", va="center", ha="left", transform=ax_key.transAxes)
 
     # Description lines
     n_bbe = sum(m.get("n_contact", 0) for m in zone_metrics.values())
-    ax_key.text(0.50, 0.42, f"Season data  |  {len(loc_df)} pitches  |  {n_bbe} batted balls",
+    ax_key.text(0.50, 0.48, f"Season data  |  {len(loc_df)} pitches  |  {n_bbe} batted balls",
                 fontsize=4.5, color="#666", va="top", ha="center", transform=ax_key.transAxes)
-    ax_key.text(0.50, 0.22,
+    ax_key.text(0.50, 0.24,
                 "Score = 45% Exit Velo + 30% Barrel% + 25% Contact%",
                 fontsize=4.5, color="#888", va="top", ha="center", transform=ax_key.transAxes)
 
@@ -1165,7 +1165,7 @@ def _render_hitter_page(bdf, data, batter, series_label, game_ids=None):
 
     # Center: Best Swing Zones (season-long data) — heatmap + key
     r1_center = gridspec.GridSpecFromSubplotSpec(2, 1, subplot_spec=r1[1],
-        height_ratios=[0.78, 0.22], hspace=0.05)
+        height_ratios=[0.70, 0.30], hspace=0.22)
     ax_zones = fig.add_subplot(r1_center[0])
     ax_zones_key = fig.add_subplot(r1_center[1])
     bats = season_bdf["BatterSide"].iloc[0] if "BatterSide" in season_bdf.columns and len(season_bdf) > 0 else "Right"
