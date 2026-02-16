@@ -880,20 +880,28 @@ def _render_cover_page(gd, game_label):
     return fig
 
 
-def _render_umpire_page(gd, game_label):
-    """Umpire report page (adapted from existing generate_postgame_pdf)."""
+def _prepare_umpire_data(gd):
+    """Prepare called pitch DataFrame with Correct/Gifted/Missed flags."""
     called = gd[gd["PitchCall"].isin(["StrikeCalled", "BallCalled"])].copy()
     called["PlateLocSide"] = pd.to_numeric(called.get("PlateLocSide"), errors="coerce")
     called["PlateLocHeight"] = pd.to_numeric(called.get("PlateLocHeight"), errors="coerce")
     called = called.dropna(subset=["PlateLocSide", "PlateLocHeight"])
     if called.empty:
         return None
-
     iz = in_zone_mask(called)
     is_strike = called["PitchCall"] == "StrikeCalled"
     called["Correct"] = (is_strike & iz) | (~is_strike & ~iz)
     called["Gifted"] = is_strike & ~iz
     called["Missed"] = ~is_strike & iz
+    return called
+
+
+def _render_umpire_page(called, game_label):
+    """Umpire report page (adapted from existing generate_postgame_pdf)."""
+    if called is None or called.empty:
+        return None
+
+    is_strike = called["PitchCall"] == "StrikeCalled"
 
     fig = plt.figure(figsize=_FIG_SIZE)
     fig.patch.set_facecolor("white")
@@ -1020,6 +1028,132 @@ def _render_umpire_page(gd, game_label):
         if pit_rows:
             _styled_table(ax_pitcher, pit_rows, ["Pitcher", "Pitches", "Acc%", "Gifted", "Missed"],
                           [0.30, 0.15, 0.18, 0.15, 0.15], fontsize=7, row_height=1.4)
+
+    return fig
+
+
+def _call_leverage_score(row):
+    """Compute a simple leverage score for a missed/gifted call."""
+    score = 1.0
+    b = int(row.get("Balls", 0) or 0)
+    s = int(row.get("Strikes", 0) or 0)
+    # Count leverage
+    if b == 3 and s == 2:
+        score *= 2.0       # full count
+    elif b == 3 or s == 2:
+        score *= 1.5       # payoff counts
+    # Inning weight
+    inn = int(row.get("Inning", 1) or 1)
+    if inn >= 7:
+        score *= 1.5
+    elif inn >= 4:
+        score *= 1.2
+    # Runners
+    risp = any(
+        pd.notna(row.get(c)) and str(row.get(c)).strip() not in ("", " ")
+        for c in ["Runner2B", "Runner3B"]
+    )
+    runners_on = risp or (
+        pd.notna(row.get("Runner1B")) and str(row.get("Runner1B")).strip() not in ("", " ")
+    )
+    if risp:
+        score *= 1.5
+    elif runners_on:
+        score *= 1.2
+    # Outs
+    if int(row.get("Outs", 0) or 0) == 2:
+        score *= 1.3
+    return score
+
+
+def _render_umpire_page2(called, game_label):
+    """Umpire report page 2: By Batter Side scatter + Biggest Leverage Missed Calls."""
+    if called is None or called.empty:
+        return None
+
+    fig = plt.figure(figsize=_FIG_SIZE)
+    fig.patch.set_facecolor("white")
+
+    outer = gridspec.GridSpec(3, 1, figure=fig,
+        height_ratios=[0.08, 0.45, 0.47],
+        hspace=0.08, top=0.97, bottom=0.03, left=0.03, right=0.97)
+
+    _header_bar(fig, outer[0], f"POSTGAME REPORT  |  {game_label}  |  UMPIRE")
+
+    # ── Row 1: By Batter Side scatter plots ──
+    scatter_gs = gridspec.GridSpecFromSubplotSpec(1, 2, subplot_spec=outer[1], wspace=0.12)
+
+    for idx, side in enumerate(["Right", "Left"]):
+        ax = fig.add_subplot(scatter_gs[0, idx])
+        side_df = called[called.get("BatterSide", pd.Series(dtype=str)) == side] if "BatterSide" in called.columns else pd.DataFrame()
+        if side_df.empty:
+            ax.axis("off")
+            ax.text(0.5, 0.5, f"No {side}-Handed Data", fontsize=9, color="#999",
+                    ha="center", va="center", transform=ax.transAxes)
+            continue
+
+        n_calls = len(side_df)
+        acc = side_df["Correct"].mean() * 100
+
+        ax.set_xlim(-2.5, 2.5)
+        ax.set_ylim(0, 5)
+        ax.set_aspect("equal")
+        ax.set_xticks([])
+        ax.set_yticks([])
+        for sp in ax.spines.values():
+            sp.set_linewidth(0.5)
+            sp.set_color("#ddd")
+        _draw_zone_rect(ax)
+
+        label = "RHH" if side == "Right" else "LHH"
+        ax.set_title(f"{label} — {n_calls} calls, {acc:.1f}% accuracy",
+                     fontsize=8, fontweight="bold", color=_DARK, loc="left", pad=4)
+
+        sc = side_df[side_df["Correct"]]
+        si = side_df[~side_df["Correct"]]
+        if not sc.empty:
+            ax.scatter(sc["PlateLocSide"], sc["PlateLocHeight"],
+                       c="#2ca02c", s=22, alpha=0.6, edgecolors="white",
+                       linewidths=0.3, zorder=10, label="Correct")
+        if not si.empty:
+            ax.scatter(si["PlateLocSide"], si["PlateLocHeight"],
+                       c="#d62728", s=35, alpha=0.8, marker="x",
+                       linewidths=1.2, zorder=11, label="Incorrect")
+        ax.legend(loc="upper right", fontsize=6, framealpha=0.8)
+
+    # ── Row 2: Biggest Leverage Missed Calls table ──
+    ax_table = fig.add_subplot(outer[2])
+    ax_table.axis("off")
+    ax_table.set_title("BIGGEST LEVERAGE MISSED CALLS", fontsize=9, fontweight="bold",
+                       color=_DARK, loc="left", pad=4)
+
+    incorrect = called[~called["Correct"]].copy()
+    if incorrect.empty:
+        ax_table.text(0.5, 0.5, "No missed calls this game!", fontsize=10, color="#2ca02c",
+                      ha="center", va="center", transform=ax_table.transAxes, fontweight="bold")
+    else:
+        incorrect["LeverageScore"] = incorrect.apply(_call_leverage_score, axis=1)
+        incorrect = incorrect.sort_values("LeverageScore", ascending=False).head(5)
+
+        table_rows = []
+        for _, row in incorrect.iterrows():
+            inn = str(int(row.get("Inning", 0) or 0))
+            b = int(row.get("Balls", 0) or 0)
+            s = int(row.get("Strikes", 0) or 0)
+            count = f"{b}-{s}"
+            outs = str(int(row.get("Outs", 0) or 0))
+            batter = display_name(row.get("Batter", ""), escape_html=False) if row.get("Batter") else ""
+            pitcher = display_name(row.get("Pitcher", ""), escape_html=False) if row.get("Pitcher") else ""
+            call_type = "Gifted Strike" if row.get("Gifted", False) else "Missed Strike"
+            lev = row["LeverageScore"]
+            lev_label = "High" if lev > 2.5 else ("Med" if lev > 1.5 else "Low")
+            table_rows.append([inn, count, outs, batter, pitcher, call_type, lev_label])
+
+        if table_rows:
+            _styled_table(ax_table, table_rows,
+                          ["Inn", "Count", "Outs", "Batter", "Pitcher", "Call Type", "Leverage"],
+                          [0.08, 0.10, 0.08, 0.22, 0.22, 0.18, 0.12],
+                          fontsize=7.5, row_height=1.6)
 
     return fig
 
@@ -1671,17 +1805,23 @@ def generate_postgame_pdf_bytes(gd, data, game_label) -> bytes:
         except Exception:
             traceback.print_exc()
 
-        # Page 2: Umpire
+        # Page 2-3: Umpire
         try:
-            fig = _render_umpire_page(gd, game_label)
+            called = _prepare_umpire_data(gd)
+            fig = _render_umpire_page(called, game_label)
             if fig:
                 pdf.savefig(fig)
                 plt.close(fig)
                 pages_saved += 1
+            fig2 = _render_umpire_page2(called, game_label)
+            if fig2:
+                pdf.savefig(fig2)
+                plt.close(fig2)
+                pages_saved += 1
         except Exception:
             traceback.print_exc()
 
-        # Page 3: Pitching summary
+        # Pitching summary
         try:
             fig = _render_pitching_summary_page(gd, game_label)
             if fig:
@@ -1763,12 +1903,17 @@ def generate_umpire_pdf_bytes(gd, game_label) -> bytes:
     Returns raw bytes suitable for st.download_button.
     """
     buf = io.BytesIO()
+    called = _prepare_umpire_data(gd)
     with PdfPages(buf) as pdf:
         try:
-            fig = _render_umpire_page(gd, game_label)
+            fig = _render_umpire_page(called, game_label)
             if fig:
                 pdf.savefig(fig)
                 plt.close(fig)
+            fig2 = _render_umpire_page2(called, game_label)
+            if fig2:
+                pdf.savefig(fig2)
+                plt.close(fig2)
         except Exception:
             traceback.print_exc()
     buf.seek(0)
