@@ -140,11 +140,21 @@ def query_precompute(sql):
         return pd.DataFrame()
 
 
+_FEATHER_PATH = os.path.join(_APP_DIR, ".cache", "davidson_data.feather")
+
+
 @st.cache_data(show_spinner="Loading Davidson data...")
 def load_davidson_data():
-    """Load only Davidson rows from parquet into pandas (~300k rows)."""
+    """Load only Davidson rows into pandas. Prefers feather (fast) over DuckDB."""
     data = pd.DataFrame()
-    if _precompute_table_exists("davidson_data"):
+    # Fast path: feather file exported by precompute.py
+    if os.path.exists(_FEATHER_PATH):
+        try:
+            data = pd.read_feather(_FEATHER_PATH)
+        except Exception:
+            data = pd.DataFrame()
+    # Fallback: DuckDB precomputed table
+    if data.empty and _precompute_table_exists("davidson_data"):
         data = _read_precompute_table("davidson_data")
     if data.empty:
         if not os.path.exists(PARQUET_PATH):

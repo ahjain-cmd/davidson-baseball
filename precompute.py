@@ -66,9 +66,9 @@ def _create_trackman_view(con, parquet_path):
             * EXCLUDE (Pitcher, Batter, TaggedPitchType, BatterSide, PitcherThrows),
             CASE
                 WHEN "Date" IS NOT NULL THEN
-                    CASE WHEN EXTRACT(MONTH FROM "Date") >= 8
-                         THEN EXTRACT(YEAR FROM "Date")::INT + 1
-                         ELSE EXTRACT(YEAR FROM "Date")::INT
+                    CASE WHEN EXTRACT(MONTH FROM CAST("Date" AS DATE)) >= 8
+                         THEN EXTRACT(YEAR FROM CAST("Date" AS DATE))::INT + 1
+                         ELSE EXTRACT(YEAR FROM CAST("Date" AS DATE))::INT
                     END
                 ELSE NULL
             END AS Season,
@@ -438,9 +438,9 @@ def _create_davidson_data(con, parquet_path):
             * EXCLUDE (Pitcher, Batter, TaggedPitchType, BatterSide, PitcherThrows),
             CASE
                 WHEN "Date" IS NOT NULL THEN
-                    CASE WHEN EXTRACT(MONTH FROM "Date") >= 8
-                         THEN EXTRACT(YEAR FROM "Date")::INT + 1
-                         ELSE EXTRACT(YEAR FROM "Date")::INT
+                    CASE WHEN EXTRACT(MONTH FROM CAST("Date" AS DATE)) >= 8
+                         THEN EXTRACT(YEAR FROM CAST("Date" AS DATE))::INT + 1
+                         ELSE EXTRACT(YEAR FROM CAST("Date" AS DATE))::INT
                     END
                 ELSE NULL
             END AS Season,
@@ -500,6 +500,13 @@ def _attach_stuff_plus(con, baselines_dict):
     df = _compute_stuff_plus(df, baselines_dict=baselines_dict)
     con.register("dav_df", df)
     con.execute("CREATE OR REPLACE TABLE davidson_data AS SELECT * FROM dav_df")
+
+    # Export feather for fast app startup (avoids DuckDB→pandas on first load)
+    from config import CACHE_DIR
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    feather_path = os.path.join(CACHE_DIR, "davidson_data.feather")
+    df.to_feather(feather_path)
+    print(f"  Exported {feather_path} ({len(df):,} rows)")
 
     _stuff_cols = [c for c in ["PitchUID", "Pitcher", "Season", "Date", "TaggedPitchType", "StuffPlus"] if c in df.columns]
     stuff_df = df[_stuff_cols].copy()
