@@ -902,6 +902,7 @@ def _render_umpire_page(called, game_label):
         return None
 
     is_strike = called["PitchCall"] == "StrikeCalled"
+    iz = in_zone_mask(called)
 
     fig = plt.figure(figsize=_FIG_SIZE)
     fig.patch.set_facecolor("white")

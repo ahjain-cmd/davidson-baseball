@@ -3,7 +3,12 @@ import streamlit as st
 
 GLOBAL_CSS = """<style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
-    @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined');
+    /* Hide garbled Material Symbols icon text in expander toggles (Docker font issue) */
+    .material-symbols-outlined {
+        font-size: 0 !important;
+        width: 0 !important;
+        overflow: hidden !important;
+    }
 
     /* Force light backgrounds everywhere */
     [data-testid="stAppViewContainer"],
