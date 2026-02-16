@@ -2290,22 +2290,26 @@ def _render_best_zone_heatmap(bdf, game_df, bats, key_suffix):
                        x1=ZONE_SIDE, y1=ZONE_HEIGHT_TOP,
                        line=dict(color="#333", width=2))
         if not game_loc.empty:
-            # Color by result
-            for _, row in game_loc.iterrows():
+            # Batch by color group for performance (avoid one trace per pitch)
+            def _color_group(row):
                 call = row.get("PitchCall", "")
                 play = row.get("PlayResult", "")
                 if call == "InPlay" and play in ("Single", "Double", "Triple", "HomeRun"):
-                    color = "#2e7d32"  # hit - green
+                    return "hit"
                 elif call in SWING_CALLS:
-                    color = "#d32f2f"  # swing/out - red
-                else:
-                    color = "#1976d2"  # no swing - blue
+                    return "swing"
+                return "take"
+            game_loc["_cg"] = game_loc.apply(_color_group, axis=1)
+            _cg_colors = {"hit": "#2e7d32", "swing": "#d32f2f", "take": "#1976d2"}
+            for cg, grp in game_loc.groupby("_cg"):
                 fig2.add_trace(go.Scatter(
-                    x=[row["PlateLocSide"]], y=[row["PlateLocHeight"]],
+                    x=grp["PlateLocSide"].tolist(),
+                    y=grp["PlateLocHeight"].tolist(),
                     mode="markers",
-                    marker=dict(size=8, color=color, line=dict(width=0.5, color="white")),
+                    marker=dict(size=8, color=_cg_colors.get(cg, "#1976d2"),
+                                line=dict(width=0.5, color="white")),
                     showlegend=False,
-                    hovertemplate=f"{row.get('TaggedPitchType','?')} | {call}<extra></extra>",
+                    hoverinfo="skip",
                 ))
         fig2.update_layout(
             title=dict(text="Game Swings", font=dict(size=13)),
@@ -2624,12 +2628,13 @@ def _postgame_grades(gd, data):
             if not small_sample:
                 _render_radar_chart(grades, key_suffix=f"pit_{slug}")
 
-            # 6b. Pitch Call Grade
+            # 6b. Pitch Call Grade (on-demand — only compute when user checks)
             if n_pitches >= _MIN_PITCHER_PITCHES:
-                try:
-                    _render_call_grade_section(pdf, data, pitcher, key_suffix=f"pit_{slug}")
-                except Exception:
-                    pass
+                if st.checkbox("Show Game Call Grade", key=f"pg_cg_chk_{slug}", value=False):
+                    try:
+                        _render_call_grade_section(pdf, data, pitcher, key_suffix=f"pit_{slug}")
+                    except Exception:
+                        st.caption("Could not compute call grade.")
 
             # 7. Batter-by-Batter Breakdown
             pa_cols_p = [c for c in ["GameID", "Batter", "Inning", "PAofInning"] if c in pdf.columns]
@@ -2724,16 +2729,17 @@ def _postgame_grades(gd, data):
             if not small_sample:
                 _render_radar_chart(grades, key_suffix=f"hit_{slug}")
 
-            # 5b. Best Zone Heatmap
+            # 5b. Best Zone Heatmap (on-demand — only compute when user checks)
             batter_side = bdf["BatterSide"].iloc[0] if "BatterSide" in bdf.columns and len(bdf) > 0 else "Right"
             if pd.isna(batter_side):
                 batter_side = "Right"
-            try:
-                _render_best_zone_heatmap(
-                    season_bdf if not season_bdf.empty and len(season_bdf) >= 30 else bdf,
-                    bdf, batter_side, key_suffix=f"hit_{slug}")
-            except Exception:
-                pass
+            if st.checkbox("Show Best Hitting Zones", key=f"pg_bz_chk_{slug}", value=False):
+                try:
+                    _render_best_zone_heatmap(
+                        season_bdf if not season_bdf.empty and len(season_bdf) >= 30 else bdf,
+                        bdf, batter_side, key_suffix=f"hit_{slug}")
+                except Exception:
+                    st.caption("Could not compute best zone heatmap.")
 
             # 6. At-Bat Breakdowns
             sort_cols = [c for c in ["Inning", "PAofInning", "PitchNo"] if c in bdf.columns]
@@ -2851,4 +2857,11 @@ def page_postgame(data):
     with tab_hit:
         _postgame_hitters(gd, data)
     with tab_grades:
-        _postgame_grades(gd, data)
+        _grades_key = f"pg_grades_loaded_{sel_game}"
+        if st.session_state.get(_grades_key):
+            _postgame_grades(gd, data)
+        else:
+            st.info("Grades require additional computation. Click below to load.")
+            if st.button("Load Grades & Feedback", key="pg_load_grades_btn"):
+                st.session_state[_grades_key] = True
+                st.rerun()
