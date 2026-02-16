@@ -54,9 +54,6 @@ from _pages.postgame import (
     _pg_build_pa_pitch_rows,
     _score_linear,
     _compute_takeaways,
-    _tier_label,
-    _tier_color,
-    _tier_icon,
     _split_feedback,
     _compute_call_grade,
     _ZONE_X_EDGES,
@@ -145,14 +142,8 @@ def _mpl_radar_chart(fig, gs_slot, grades):
     vals_closed = vals + [vals[0]]
     angles_closed = angles + [angles[0]]
 
-    overall = np.mean(vals)
-    tier = _tier_label(overall)
-    _tier_fill_map = {
-        "Strength": ((46 / 255, 125 / 255, 50 / 255, 0.20), "#2e7d32"),
-        "Average": ((249 / 255, 168 / 255, 37 / 255, 0.20), "#f9a825"),
-        "Needs Work": ((198 / 255, 40 / 255, 40 / 255, 0.20), "#c62828"),
-    }
-    fill_color, line_color = _tier_fill_map.get(tier, ((0.6, 0.6, 0.6, 0.20), "#9e9e9e"))
+    fill_color = (0.13, 0.39, 0.68, 0.20)
+    line_color = "#2163ae"
 
     ax = fig.add_subplot(gs_slot, projection="polar")
     ax.set_theta_offset(np.pi / 2)
@@ -316,8 +307,8 @@ def _mpl_stuff_cmd_bars(ax, stuff_by_pt, cmd_df,
     ax.set_title(title_text, fontsize=8, fontweight="bold", color=_DARK, loc="left", pad=3)
 
 
-def _mpl_grade_header(ax, name, n_pitches, overall, label_extra="", small_sample=False):
-    """Player name + tier pill badge banner."""
+def _mpl_grade_header(ax, name, n_pitches, overall=None, label_extra="", small_sample=False):
+    """Player name banner."""
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
     ax.set_xticks([])
@@ -325,15 +316,6 @@ def _mpl_grade_header(ax, name, n_pitches, overall, label_extra="", small_sample
     for sp in ax.spines.values():
         sp.set_visible(False)
     ax.set_facecolor("#000000")
-    if small_sample:
-        tier = "Small Sample"
-        badge_color = "#9e9e9e"
-    elif overall is not None:
-        tier = _tier_label(overall)
-        badge_color = _tier_color(tier)
-    else:
-        tier = "N/A"
-        badge_color = "#9e9e9e"
     jersey = JERSEY.get(name, "")
     pos = POSITION.get(name, "")
     dname = display_name(name, escape_html=False)
@@ -345,45 +327,11 @@ def _mpl_grade_header(ax, name, n_pitches, overall, label_extra="", small_sample
     ax.text(0.03, 0.18, f"{pos} | {n_pitches} pitches{extra}",
             fontsize=9, color="#aaa", va="center", ha="left", transform=ax.transAxes,
             clip_on=False)
-    # Tier pill badge instead of letter grade
-    badge = FancyBboxPatch((0.82, 0.25), 0.15, 0.50,
-        boxstyle="round,pad=0.02,rounding_size=0.04",
-        facecolor=badge_color, edgecolor="none", transform=ax.transAxes,
-        zorder=5, clip_on=False)
-    ax.add_patch(badge)
-    icon = _tier_icon(tier) if tier not in ("N/A", "Small Sample") else ""
-    badge_text = f"{icon} {tier}" if icon else tier
-    ax.text(0.895, 0.50, badge_text, fontsize=11, fontweight="bold",
-            color="white", va="center", ha="center", transform=ax.transAxes,
-            clip_on=False, zorder=6)
 
 
 def _mpl_grade_cards(ax, grades):
-    """Row of compact tier pill badges."""
-    n = len(grades) if grades else 1
-    ax.set_xlim(0, n)
-    ax.set_ylim(0, 1)
+    """Placeholder — grade cards removed."""
     ax.axis("off")
-    for i, (cat, score) in enumerate(grades.items()):
-        if score is None:
-            ax.text(i + 0.5, 0.65, cat, fontsize=6, color="#888",
-                    va="center", ha="center")
-            ax.text(i + 0.5, 0.30, "N/A", fontsize=8, color="#ccc",
-                    va="center", ha="center")
-            continue
-        tier = _tier_label(score)
-        color = _tier_color(tier)
-        icon = _tier_icon(tier)
-        # Tier pill background
-        pill = FancyBboxPatch((i + 0.12, 0.15), 0.76, 0.45,
-            boxstyle="round,pad=0.02,rounding_size=0.08",
-            facecolor=color, alpha=0.15, edgecolor=color, linewidth=0.5,
-            clip_on=False)
-        ax.add_patch(pill)
-        ax.text(i + 0.5, 0.80, cat, fontsize=5.5, color="#555",
-                va="center", ha="center")
-        ax.text(i + 0.5, 0.38, icon, fontsize=12, fontweight="900",
-                color=color, va="center", ha="center")
 
 
 def _mpl_zone_scatter(ax, pdf):

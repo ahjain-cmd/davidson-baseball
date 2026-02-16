@@ -1117,27 +1117,12 @@ def _score_linear(val, lo, hi):
     return float(np.clip((val - lo) / max(hi - lo, 1e-9) * 100, 0, 100))
 
 
-def _render_grade_header(name, n_pitches, overall, label_extra="", small_sample=False):
-    """Render player name + overall tier badge header."""
-    if small_sample:
-        tier = "Small Sample"
-        badge_color = "#9e9e9e"
-        badge_text = "Small Sample"
-    elif overall is not None:
-        tier = _tier_label(overall)
-        badge_color = _tier_color(tier)
-        badge_text = f"{_tier_icon(tier)} {tier}"
-    else:
-        tier = "N/A"
-        badge_color = "#9e9e9e"
-        badge_text = "N/A"
+def _render_grade_header(name, n_pitches, overall=None, label_extra="", small_sample=False):
+    """Render player name header."""
     extra = f" · {label_extra}" if label_extra else ""
     st.markdown(
         f'<div style="display:flex;align-items:center;gap:12px;padding:8px 0;">'
         f'<span style="font-size:18px;font-weight:700;">{display_name(name)}</span>'
-        f'<span style="display:inline-block;padding:3px 12px;border-radius:12px;'
-        f'background:{badge_color};color:white;font-size:12px;font-weight:700;'
-        f'letter-spacing:0.5px;">{badge_text}</span>'
         f'<span style="font-size:12px;color:#888;">{n_pitches} pitches{extra}</span>'
         f'</div>', unsafe_allow_html=True)
 
@@ -1179,16 +1164,8 @@ def _render_radar_chart(grades, key_suffix=""):
         return
     cats = list(valid.keys())
     vals = [valid[c] for c in cats]
-    overall = np.mean(vals)
-    tier = _tier_label(overall)
-    tier_c = _tier_color(tier)
-    # Create rgba fill from tier color
-    _color_map = {
-        "#2e7d32": ("rgba(46,125,50,0.20)", "#2e7d32"),
-        "#f9a825": ("rgba(249,168,37,0.20)", "#f9a825"),
-        "#c62828": ("rgba(198,40,40,0.20)", "#c62828"),
-    }
-    fill_color, line_color = _color_map.get(tier_c, ("rgba(158,158,158,0.20)", "#9e9e9e"))
+    fill_color = "rgba(33,99,174,0.20)"
+    line_color = "#2163ae"
     fig = go.Figure()
     fig.add_trace(go.Scatterpolar(
         r=vals + [vals[0]],
@@ -2748,15 +2725,11 @@ def _postgame_grades(gd, data):
                     for fb in feedback:
                         st.markdown(f'<div style="font-size:14px;padding:2px 0 2px 12px;">~ {fb}</div>', unsafe_allow_html=True)
 
-            if not small_sample:
-                # 3. Tier Breakdown — compact pills
-                _render_grade_cards(grades)
-
-            # 4. Percentile Bars
+            # 3. Percentile Bars
             pctl_metrics = _compute_pitcher_percentile_metrics(pdf, season_pdf)
             render_savant_percentile_section(pctl_metrics, title="Game vs Season Percentiles")
 
-            # 5. Stuff+/Cmd+ Bars (game values; season comparison on-demand)
+            # 4. Stuff+/Cmd+ Bars (game values; season comparison on-demand)
             if stuff_by_pt:
                 _season_stuff = None
                 _season_cmd = None
@@ -2769,10 +2742,6 @@ def _postgame_grades(gd, data):
                     season_stuff_by_pt=_season_stuff,
                     season_cmd_by_pt=_season_cmd,
                 )
-
-            # 6. Radar Chart — smaller, supporting visual
-            if not small_sample:
-                _render_radar_chart(grades, key_suffix=f"pit_{slug}")
 
             # 6b. Pitch Call Grade (on-demand — only compute when user checks)
             if n_pitches >= _MIN_PITCHER_PITCHES:
@@ -2863,17 +2832,9 @@ def _postgame_grades(gd, data):
                     for fb in feedback:
                         st.markdown(f'<div style="font-size:14px;padding:2px 0 2px 12px;">~ {fb}</div>', unsafe_allow_html=True)
 
-            if not small_sample:
-                # 3. Tier Breakdown — compact pills
-                _render_grade_cards(grades)
-
-            # 4. Percentile Bars
+            # 3. Percentile Bars
             pctl_metrics = _compute_hitter_percentile_metrics(bdf, season_bdf)
             render_savant_percentile_section(pctl_metrics, title="Game vs Season Percentiles")
-
-            # 5. Radar Chart — smaller, supporting visual
-            if not small_sample:
-                _render_radar_chart(grades, key_suffix=f"hit_{slug}")
 
             # 5b. Best Zone Heatmap (on-demand — only compute when user checks)
             batter_side = bdf["BatterSide"].iloc[0] if "BatterSide" in bdf.columns and len(bdf) > 0 else "Right"
