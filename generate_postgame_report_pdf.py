@@ -1176,7 +1176,7 @@ def _render_pitcher_page(pdf, data, pitcher, game_label):
     pctl_metrics = _compute_pitcher_percentile_metrics(pdf, season_pdf)
     ax_pctl = fig.add_subplot(outer[4, 0])
     _mpl_percentile_bars(ax_pctl, pctl_metrics)
-    ax_pctl.set_title("Game vs Season Percentiles", fontsize=7, fontweight="bold",
+    ax_pctl.set_title("Game vs Historical Percentiles", fontsize=7, fontweight="bold",
                       color=_DARK, loc="left", pad=2)
 
     # Row 4 right: Call grade (top) + feedback (bottom)
@@ -1467,7 +1467,7 @@ def _render_hitter_page(bdf, data, batter, game_label):
             _mpl_damage_heatmap(ax_heat, grid, annot, h_labels, v_labels, sw_xy)
         else:
             ax_heat.axis("off")
-            ax_heat.text(0.5, 0.5, "Not enough season data\nfor damage heatmap",
+            ax_heat.text(0.5, 0.5, "Not enough historical data\nfor damage heatmap",
                          fontsize=7, color="#999", ha="center", va="center",
                          transform=ax_heat.transAxes)
 
@@ -1475,7 +1475,7 @@ def _render_hitter_page(bdf, data, batter, game_label):
     pctl_metrics = _compute_hitter_percentile_metrics(bdf, season_bdf)
     ax_pctl = fig.add_subplot(outer[4, 0])
     _mpl_percentile_bars(ax_pctl, pctl_metrics)
-    ax_pctl.set_title("Game vs Season Percentiles", fontsize=7, fontweight="bold",
+    ax_pctl.set_title("Game vs Historical Percentiles", fontsize=7, fontweight="bold",
                       color=_DARK, loc="left", pad=2)
 
     # Row 4 right: At-bat grades (top) + feedback (bottom)

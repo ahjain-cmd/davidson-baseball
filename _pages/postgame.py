@@ -1353,13 +1353,12 @@ def _compute_pitcher_grades(pdf, data, pitcher):
                      "FoulBallNotFieldable", "FoulBallFieldable", "InPlay"])]
                 season_fps = len(sfp_str) / len(sfp) * 100
         context = "above" if fps_game > season_fps else "below"
-        feedback.append(f"Got ahead in {len(fp_strikes)}/{n_pas} PAs ({fps_game:.0f}% FPS) — {context} season rate ({season_fps:.0f}%).")
+        feedback.append(f"Got ahead in {len(fp_strikes)}/{n_pas} PAs ({fps_game:.0f}% FPS) — {context} historical rate ({season_fps:.0f}%).")
 
     # --- Swing & Miss (CSW%) ---
     csw_pct = pdf["PitchCall"].isin(["StrikeCalled", "StrikeSwinging"]).mean() * 100
     grades["Swing & Miss"] = _score_linear(csw_pct, 15, 35)
-    csw_tier = _tier_label(grades["Swing & Miss"])
-    feedback.append(f"CSW% at {csw_pct:.1f}% ({csw_tier.lower()}).")
+    feedback.append(f"CSW% at {csw_pct:.1f}%.")
 
     # Best/worst pitch by CSW%
     if "TaggedPitchType" in pdf.columns:
@@ -1603,8 +1602,7 @@ def _compute_hitter_grades(bdf, data, batter):
             chase_pct = len(oz_swings) / len(out_zone_df) * 100
         chase_score = min(100, max(0, 100 - chase_pct * 2.5))
         grades["Discipline"] = chase_score * 0.6 + bb_score * 0.4
-        disc_tier = _tier_label(grades["Discipline"])
-        feedback.append(f"Chase rate at {chase_pct:.0f}% ({disc_tier.lower()}).")
+        feedback.append(f"Chase rate at {chase_pct:.0f}%.")
     else:
         grades["Discipline"] = None
 
@@ -1619,8 +1617,7 @@ def _compute_hitter_grades(bdf, data, batter):
         hh_score = _score_linear(hh_pct, 10, 60)
         barrel_score = _score_linear(barrel_pct, 0, 25)
         grades["Power"] = ev_score * 0.4 + hh_score * 0.3 + barrel_score * 0.3
-        pwr_tier = _tier_label(grades["Power"])
-        feedback.append(f"Power: {avg_ev:.1f} mph avg EV, {hh_pct:.0f}% hard hit ({pwr_tier.lower()}).")
+        feedback.append(f"Avg EV {avg_ev:.1f} mph, {hh_pct:.0f}% hard hit.")
     else:
         grades["Power"] = None
 
@@ -1698,7 +1695,7 @@ def _compute_hitter_grades(bdf, data, batter):
                 top_swings = game_in_top[game_in_top["PitchCall"].isin(SWING_CALLS)]
                 top_ev_swing_rate = len(top_swings) / len(game_in_top) * 100
                 best_ev_val = ev_zones[0][2]
-                feedback.append(f"Swung at {top_ev_swing_rate:.0f}% of pitches in best EV zones (season avg: {best_ev_val:.0f} mph).")
+                feedback.append(f"Swung at {top_ev_swing_rate:.0f}% of pitches in best EV zones (historical avg: {best_ev_val:.0f} mph).")
 
         # Take rate in worst whiff zones
         take_bad_rate = 50.0
@@ -1801,9 +1798,9 @@ def _compute_hitter_grades(bdf, data, batter):
             game_swing_pct = len(game_swings) / len(loc_df) * 100
             diff = game_swing_pct - season_swing_pct
             if diff > 5:
-                feedback.append(f"More aggressive than season norms (+{diff:.0f}% swing rate).")
+                feedback.append(f"More aggressive than historical norms (+{diff:.0f}% swing rate).")
             elif diff < -5:
-                feedback.append(f"More passive than season norms ({diff:.0f}% swing rate).")
+                feedback.append(f"More passive than historical norms ({diff:.0f}% swing rate).")
 
     return grades, feedback
 
@@ -2026,7 +2023,7 @@ def _compute_takeaways(gd, data):
             if len(season_fb) > 0:
                 season_avg = season_fb["RelSpeed"].mean()
                 diff = avg_v - season_avg
-                comp = f" ({diff:+.1f} vs season avg)" if abs(diff) >= 0.5 else ""
+                comp = f" ({diff:+.1f} vs historical avg)" if abs(diff) >= 0.5 else ""
             else:
                 comp = ""
             pitching_bullets.append(f"FB velocity: {avg_v:.1f} avg / {max_v:.1f} max{comp}")
@@ -2130,15 +2127,7 @@ def _split_feedback(feedback, grades):
     areas = []
     for fb in feedback:
         lower = fb.lower()
-        # Primary: check embedded tier labels from _tier_label()
-        if "(needs work)" in lower:
-            areas.append(fb)
-        elif "(strength)" in lower:
-            strengths.append(fb)
-        elif "(average)" in lower:
-            strengths.append(fb)  # neutral → keep as strength
-        # Fallback: keyword heuristic
-        elif any(w in lower for w in [
+        if any(w in lower for w in [
             "struggled", "dropped", "below", "poor", "weak",
             "passive", "more aggressive", "fatigue",
         ]):
@@ -2291,7 +2280,7 @@ def _render_best_zone_heatmap(bdf, game_df, bats, key_suffix):
         fig.update_xaxes(tickvals=[0, 1, 2], ticktext=h_labels, side="bottom")
         fig.update_yaxes(tickvals=[0, 1, 2], ticktext=v_labels)
         fig.update_layout(
-            title=dict(text="Best Hitting Zones (Season)", font=dict(size=13)),
+            title=dict(text="Best Hitting Zones (Historical)", font=dict(size=13)),
             height=320, margin=dict(l=40, r=20, t=40, b=30),
             coloraxis_colorbar=dict(title="", thickness=12, len=0.6),
         )
@@ -2727,14 +2716,14 @@ def _postgame_grades(gd, data):
 
             # 3. Percentile Bars
             pctl_metrics = _compute_pitcher_percentile_metrics(pdf, season_pdf)
-            render_savant_percentile_section(pctl_metrics, title="Game vs Season Percentiles")
+            render_savant_percentile_section(pctl_metrics, title="Game vs Historical Percentiles")
 
-            # 4. Stuff+/Cmd+ Bars (game values; season comparison on-demand)
+            # 4. Stuff+/Cmd+ Bars (game values; historical comparison on-demand)
             if stuff_by_pt:
                 _season_stuff = None
                 _season_cmd = None
-                if st.checkbox("Compare to season history", key=f"pg_hist_chk_{slug}", value=False):
-                    with st.spinner("Computing season distributions..."):
+                if st.checkbox("Compare to historical data", key=f"pg_hist_chk_{slug}", value=False):
+                    with st.spinner("Computing historical distributions..."):
                         _season_stuff, _season_cmd = _compute_historical_stuff_cmd_distributions(
                             season_pdf, data, pitcher_name=pitcher)
                 _render_stuff_cmd_bars(
@@ -2834,7 +2823,7 @@ def _postgame_grades(gd, data):
 
             # 3. Percentile Bars
             pctl_metrics = _compute_hitter_percentile_metrics(bdf, season_bdf)
-            render_savant_percentile_section(pctl_metrics, title="Game vs Season Percentiles")
+            render_savant_percentile_section(pctl_metrics, title="Game vs Historical Percentiles")
 
             # 5b. Best Zone Heatmap (on-demand — only compute when user checks)
             batter_side = bdf["BatterSide"].iloc[0] if "BatterSide" in bdf.columns and len(bdf) > 0 else "Right"

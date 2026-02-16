@@ -621,24 +621,6 @@ def _mpl_best_zone_heatmap(ax_heat, ax_key, bdf, bats):
     masked = np.ma.masked_invalid(grid)
     ax_heat.imshow(masked, cmap=cmap, vmin=0, vmax=100, aspect="auto")
 
-    # Text overlay — labeled EV and Brl%
-    idx = 0
-    for yb in range(3):
-        for xb in range(3):
-            m = zone_metrics.get((xb, yb), {})
-            r, c = 2 - yb, xb
-            v = grid[r, c]
-            if not np.isnan(v):
-                has_stats = m.get("n_contact", 0) >= 5
-                ev_str = f"EV {m.get('ev_mean', 0):.0f}" if has_stats and "ev_mean" in m else ""
-                bp_str = f"Brl {m.get('barrel_pct', 0):.0f}%" if has_stats and "barrel_pct" in m else ""
-                txt = f"{ev_str}\n{bp_str}" if ev_str and bp_str else ev_str or bp_str
-                brightness = v / 100.0
-                color = "white" if brightness > 0.7 or brightness < 0.15 else "black"
-                ax_heat.text(c, r, txt, ha="center", va="center", fontsize=5.5,
-                             fontweight="bold", color=color)
-            idx += 1
-
     # Zone styling
     for x in [0.5, 1.5]:
         ax_heat.axvline(x, color="white", lw=1.5, zorder=2)
@@ -661,7 +643,7 @@ def _mpl_best_zone_heatmap(ax_heat, ax_key, bdf, bats):
     ax_heat.set_xticks([0, 2])
     ax_heat.set_xticklabels([left_lbl, right_lbl], fontsize=5.5, fontweight="bold")
     ax_heat.tick_params(axis="x", length=0, pad=2)
-    ax_heat.set_title("Best Hitting Zones  (Season)", fontsize=7,
+    ax_heat.set_title("Best Hitting Zones  (Historical)", fontsize=7,
                       fontweight="bold", color=_DARK, pad=3)
 
     # ── Key / description below the heatmap ──
@@ -679,7 +661,7 @@ def _mpl_best_zone_heatmap(ax_heat, ax_key, bdf, bats):
 
     # Description lines
     n_bbe = sum(m.get("n_contact", 0) for m in zone_metrics.values())
-    ax_key.text(0.50, 0.48, f"Season data  |  {len(loc_df)} pitches  |  {n_bbe} batted balls",
+    ax_key.text(0.50, 0.48, f"Historical data  |  {len(loc_df)} pitches  |  {n_bbe} batted balls",
                 fontsize=4.5, color="#666", va="top", ha="center", transform=ax_key.transAxes)
     ax_key.text(0.50, 0.24,
                 "Score = 45% Exit Velo + 30% Barrel% + 25% Contact%",
@@ -727,7 +709,7 @@ def _season_delta_block(ax, series_df, season_df, role="hitter"):
     """Show series stats vs season averages with arrows."""
     ax.set_xlim(0, 1); ax.set_ylim(0, 1)
     ax.axis("off")
-    ax.text(0.02, 0.95, "Series vs Season", fontsize=7, fontweight="bold",
+    ax.text(0.02, 0.95, "Series vs Historical", fontsize=7, fontweight="bold",
             color=_DARK, va="top", ha="left", transform=ax.transAxes)
 
     lines = []
@@ -747,13 +729,13 @@ def _season_delta_block(ax, series_df, season_df, role="hitter"):
         if len(ev) > 0 and len(s_ev) > 0:
             d = ev.mean() - s_ev.mean()
             arrow = "+" if d > 0 else ""
-            lines.append(f"Avg EV: {ev.mean():.1f}  ({arrow}{d:.1f} vs season)")
+            lines.append(f"Avg EV: {ev.mean():.1f}  ({arrow}{d:.1f} vs historical)")
         if len(swings) > 0 and len(s_swings) > 0:
             w = len(whiffs) / len(swings) * 100
             sw = len(s_whiffs) / len(s_swings) * 100
             d = w - sw
             arrow = "+" if d > 0 else ""
-            lines.append(f"Whiff%: {w:.1f}%  ({arrow}{d:.1f}% vs season)")
+            lines.append(f"Whiff%: {w:.1f}%  ({arrow}{d:.1f}% vs historical)")
         loc = series_df.dropna(subset=["PlateLocSide", "PlateLocHeight"])
         s_loc = season_df.dropna(subset=["PlateLocSide", "PlateLocHeight"])
         if len(loc) > 0 and len(s_loc) > 0:
@@ -767,7 +749,7 @@ def _season_delta_block(ax, series_df, season_df, role="hitter"):
             s_ch = len(s_oz_sw) / max(len(s_oz), 1) * 100
             d = ch - s_ch
             arrow = "+" if d > 0 else ""
-            lines.append(f"Chase%: {ch:.1f}%  ({arrow}{d:.1f}% vs season)")
+            lines.append(f"Chase%: {ch:.1f}%  ({arrow}{d:.1f}% vs historical)")
     else:
         # Pitcher
         velo = pd.to_numeric(series_df["RelSpeed"], errors="coerce").dropna() if "RelSpeed" in series_df.columns else pd.Series(dtype=float)
@@ -775,12 +757,12 @@ def _season_delta_block(ax, series_df, season_df, role="hitter"):
         if len(velo) > 0 and len(s_velo) > 0:
             d = velo.mean() - s_velo.mean()
             arrow = "+" if d > 0 else ""
-            lines.append(f"Avg Velo: {velo.mean():.1f}  ({arrow}{d:.1f} vs season)")
+            lines.append(f"Avg Velo: {velo.mean():.1f}  ({arrow}{d:.1f} vs historical)")
         csw = series_df["PitchCall"].isin(["StrikeCalled", "StrikeSwinging"]).mean() * 100
         s_csw = season_df["PitchCall"].isin(["StrikeCalled", "StrikeSwinging"]).mean() * 100
         d = csw - s_csw
         arrow = "+" if d > 0 else ""
-        lines.append(f"CSW%: {csw:.1f}%  ({arrow}{d:.1f}% vs season)")
+        lines.append(f"CSW%: {csw:.1f}%  ({arrow}{d:.1f}% vs historical)")
 
     text = "\n".join(f"  {l}" for l in lines)
     ax.text(0.02, 0.78, text, fontsize=6, va="top", ha="left",
