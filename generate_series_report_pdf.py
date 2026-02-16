@@ -329,14 +329,14 @@ def _pitch_locations_seen(fig, gs_slot, bdf):
 
         if not took.empty:
             ax.scatter(took["PlateLocSide"], took["PlateLocHeight"],
-                       marker="o", c=color, s=22, alpha=0.6,
+                       marker="o", c=color, s=35, alpha=0.6,
                        edgecolors="white", linewidths=0.5, zorder=10)
         if not swung.empty:
             ax.scatter(swung["PlateLocSide"], swung["PlateLocHeight"],
-                       marker="D", c=color, s=28, alpha=0.9,
+                       marker="D", c=color, s=42, alpha=0.9,
                        edgecolors="white", linewidths=0.5, zorder=11)
 
-        ax.set_title(f"{pt} ({count})", fontsize=6, fontweight="bold",
+        ax.set_title(f"{pt} ({count})", fontsize=7, fontweight="bold",
                      color=_DARK, pad=2)
 
     # Legend in last subplot space or below
@@ -1000,18 +1000,21 @@ def _render_hitter_page(bdf, data, batter, series_label, game_ids=None):
     fig = plt.figure(figsize=_FIG_SIZE)
     fig.patch.set_facecolor("white")
 
-    # 4 rows x 2 cols (radar removed)
+    # 4 rows x 2 cols — redesigned layout
     outer = gridspec.GridSpec(4, 2, figure=fig,
-        height_ratios=[0.08, 0.25, 0.30, 0.37],
-        hspace=0.18, wspace=0.15,
-        top=0.97, bottom=0.05, left=0.04, right=0.96)
+        height_ratios=[0.07, 0.25, 0.35, 0.33],
+        hspace=0.14, wspace=0.12,
+        top=0.97, bottom=0.04, left=0.04, right=0.96)
 
     # Row 0: Header
     ax_hdr = fig.add_subplot(outer[0, :])
     _player_header(ax_hdr, batter, n_pitches, f"{n_pas} PA", overall=overall, small_sample=small_sample)
 
-    # Row 1 left: Discipline + BBQ stats
-    ax_disc = fig.add_subplot(outer[1, 0])
+    # Row 1 left: Discipline + BBQ stats + Strengths/Areas feedback
+    r1_left = gridspec.GridSpecFromSubplotSpec(2, 1, subplot_spec=outer[1, 0],
+        height_ratios=[0.50, 0.50], hspace=0.08)
+
+    ax_disc = fig.add_subplot(r1_left[0])
     ax_disc.axis("off")
     ax_disc.set_title("Plate Discipline & BBQ", fontsize=7, fontweight="bold",
                       color=_DARK, loc="left", pad=2)
@@ -1035,8 +1038,12 @@ def _render_hitter_page(bdf, data, batter, series_label, game_ids=None):
         disc_lines.append(f"Hard Hit%:   {(ev >= 95).mean()*100:.0f}%")
     else:
         disc_lines.append("No batted ball data.")
-    ax_disc.text(0.05, 0.88, "\n".join(disc_lines), fontsize=6.5, va="top", ha="left",
+    ax_disc.text(0.05, 0.95, "\n".join(disc_lines), fontsize=6.5, va="top", ha="left",
                  color=_DARK, transform=ax_disc.transAxes, family="monospace", linespacing=1.4)
+
+    # Feedback (Strengths / Areas) below discipline stats
+    ax_fb = fig.add_subplot(r1_left[1])
+    _feedback_block(ax_fb, feedback)
 
     # Row 1 right: Spray chart
     ax_spray = fig.add_subplot(outer[1, 1])
@@ -1047,7 +1054,7 @@ def _render_hitter_page(bdf, data, batter, series_label, game_ids=None):
         ax_spray.text(0.5, 0.5, "No in-play data", fontsize=7, color="#999",
                       ha="center", va="center", transform=ax_spray.transAxes)
 
-    # Row 2 left: Pitch Locations Seen
+    # Row 2 left: Pitch Locations Seen (bigger)
     _pitch_locations_seen(fig, outer[2, 0], bdf)
 
     # Row 2 right: Pitch-type results + Count breakdown
@@ -1058,15 +1065,17 @@ def _render_hitter_page(bdf, data, batter, series_label, game_ids=None):
     ax_count = fig.add_subplot(r2_right[1])
     _count_breakdown_table(ax_count, bdf, role="hitter")
 
-    # Row 3 left: Percentile bars
+    # Row 3 left: Percentile bars + Season delta
+    r3_left = gridspec.GridSpecFromSubplotSpec(2, 1, subplot_spec=outer[3, 0],
+        height_ratios=[0.65, 0.35], hspace=0.10)
     pctl = _compute_hitter_percentile_metrics(bdf, season_bdf)
-    ax_pctl = fig.add_subplot(outer[3, 0])
+    ax_pctl = fig.add_subplot(r3_left[0])
     _flat_percentile_bars(ax_pctl, pctl)
+    ax_delta = fig.add_subplot(r3_left[1])
+    _season_delta_block(ax_delta, bdf, season_bdf, role="hitter")
 
-    # Row 3 right: AB grades + feedback + season delta (3 sub-rows)
-    r3_right = gridspec.GridSpecFromSubplotSpec(3, 1, subplot_spec=outer[3, 1],
-        height_ratios=[0.50, 0.28, 0.22], hspace=0.12)
-    ax_ab = fig.add_subplot(r3_right[0])
+    # Row 3 right: AB grades table
+    ax_ab = fig.add_subplot(outer[3, 1])
     if ab_display:
         _ab_grades_table(ax_ab, ab_display)
         if ab_overflow > 0:
@@ -1074,10 +1083,6 @@ def _render_hitter_page(bdf, data, batter, series_label, game_ids=None):
                        ha="right", va="bottom", transform=ax_ab.transAxes)
     else:
         ax_ab.axis("off")
-    ax_fb = fig.add_subplot(r3_right[1])
-    _feedback_block(ax_fb, feedback)
-    ax_delta = fig.add_subplot(r3_right[2])
-    _season_delta_block(ax_delta, bdf, season_bdf, role="hitter")
 
     _add_page_number(fig)
     return fig
