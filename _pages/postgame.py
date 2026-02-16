@@ -3,6 +3,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+import plotly.express as px
 from scipy.stats import percentileofscore
 
 from config import (
@@ -147,24 +148,70 @@ def _pg_pitch_sequence_text(ab_df):
     return " → ".join(parts)
 
 
+def _pg_build_pa_pitch_rows(ab_df):
+    """Build a pitch-by-pitch table for a single PA.
+
+    Returns list of dicts with keys: #, Count, Type, Velo, Call, EV, LA.
+    """
+    _CALL_MAP = {
+        "StrikeCalled": "SC", "BallCalled": "BC", "StrikeSwinging": "SS",
+        "FoulBall": "F", "FoulBallNotFieldable": "F", "FoulBallFieldable": "F",
+        "InPlay": "IP", "HitByPitch": "HBP", "BallIntentional": "IB",
+    }
+    rows = []
+    balls, strikes = 0, 0
+    for i, (_, row) in enumerate(ab_df.iterrows(), start=1):
+        call_raw = row.get("PitchCall", "?")
+        call_short = _CALL_MAP.get(call_raw, call_raw[:3] if isinstance(call_raw, str) else "?")
+        velo = row.get("RelSpeed", np.nan)
+        ev = row.get("ExitSpeed", np.nan)
+        la = row.get("Angle", np.nan)
+        pt = row.get("TaggedPitchType", "?")
+        count_str = f"{int(balls)}-{int(strikes)}"
+        rows.append({
+            "#": i,
+            "Count": count_str,
+            "Type": pt,
+            "Velo": f"{velo:.0f}" if pd.notna(velo) else "-",
+            "Call": call_short,
+            "EV": f"{ev:.0f}" if pd.notna(ev) else "-",
+            "LA": f"{la:.0f}" if pd.notna(la) else "-",
+        })
+        # Update count for next pitch
+        if call_raw == "BallCalled" or call_raw == "BallIntentional" or call_raw == "HitByPitch":
+            balls = min(balls + 1, 3)
+        elif call_raw in ("StrikeCalled", "StrikeSwinging"):
+            strikes = min(strikes + 1, 2)
+        elif call_raw in ("FoulBall", "FoulBallNotFieldable", "FoulBallFieldable"):
+            if strikes < 2:
+                strikes += 1
+    return rows
+
+
 def _pg_mini_location_plot(ab_df, key_suffix=""):
-    """Create a small location scatter for a single at-bat with numbered pitches."""
-    loc = ab_df.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
+    """Create a small location scatter for a single at-bat with numbered pitches.
+
+    Pitch numbers match the original PA sequence (1-based), so numbers
+    stay consistent with the pitch table even when some pitches lack location.
+    """
+    # Assign original sequence numbers BEFORE filtering
+    ab_numbered = ab_df.copy()
+    ab_numbered["_OrigPitchNum"] = range(1, len(ab_numbered) + 1)
+    loc = ab_numbered.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
     if loc.empty:
         return None
-    loc = loc.reset_index(drop=True)
-    loc["PitchNum"] = range(1, len(loc) + 1)
     fig = go.Figure()
     for _, row in loc.iterrows():
+        pnum = int(row["_OrigPitchNum"])
         pt = row.get("TaggedPitchType", "Other")
         color = PITCH_COLORS.get(pt, "#aaa")
         fig.add_trace(go.Scatter(
             x=[row["PlateLocSide"]], y=[row["PlateLocHeight"]],
-            mode="markers+text", text=[str(int(row["PitchNum"]))],
+            mode="markers+text", text=[str(pnum)],
             textposition="top center", textfont=dict(size=9, color="#000000"),
             marker=dict(size=10, color=color, line=dict(width=1, color="white")),
             showlegend=False,
-            hovertemplate=f"#{int(row['PitchNum'])} {pt}<br>{row.get('PitchCall','')}<extra></extra>",
+            hovertemplate=f"#{pnum} {pt}<br>{row.get('PitchCall','')}<extra></extra>",
         ))
     add_strike_zone(fig)
     fig.update_layout(
@@ -1127,8 +1174,14 @@ def _render_radar_chart(grades, key_suffix=""):
     st.plotly_chart(fig, use_container_width=True, key=f"pg_radar_{key_suffix}")
 
 
-def _render_stuff_cmd_bars(stuff_by_pt, cmd_df, key_suffix=""):
-    """Render horizontal grouped bar chart of Stuff+ and Command+ by pitch type."""
+def _render_stuff_cmd_bars(stuff_by_pt, cmd_df, key_suffix="",
+                           season_stuff_by_pt=None, season_cmd_by_pt=None):
+    """Render horizontal grouped bar chart of Stuff+ and Command+ by pitch type.
+
+    When season_stuff_by_pt / season_cmd_by_pt are provided with ≥10 data points
+    per pitch type, shows percentiles vs own history (0-100 scale, 50th ref line).
+    Otherwise falls back to raw scores with 100 reference line.
+    """
     pitch_types = sorted(stuff_by_pt.keys())
     cmd_map = {}
     if cmd_df is not None and not cmd_df.empty and "Pitch" in cmd_df.columns and "Command+" in cmd_df.columns:
@@ -1138,34 +1191,78 @@ def _render_stuff_cmd_bars(stuff_by_pt, cmd_df, key_suffix=""):
     stuff_vals = [stuff_by_pt.get(pt, 100) for pt in pitch_types]
     cmd_vals = [cmd_map.get(pt, 100) for pt in pitch_types]
 
-    def _bar_color(v):
+    # Determine if we can use historical percentiles
+    use_pctl = False
+    if season_stuff_by_pt and season_cmd_by_pt:
+        # Need ≥10 data points for at least one pitch type in both metrics
+        has_stuff = any(len(season_stuff_by_pt.get(pt, [])) >= 10 for pt in pitch_types)
+        has_cmd = any(len(season_cmd_by_pt.get(pt, [])) >= 10 for pt in pitch_types)
+        use_pctl = has_stuff and has_cmd
+
+    if use_pctl:
+        display_stuff = []
+        display_cmd = []
+        for pt, sv, cv in zip(pitch_types, stuff_vals, cmd_vals):
+            hist_s = season_stuff_by_pt.get(pt)
+            hist_c = season_cmd_by_pt.get(pt)
+            if hist_s is not None and len(hist_s) >= 10:
+                display_stuff.append(percentileofscore(hist_s, sv, kind="rank"))
+            else:
+                display_stuff.append(50.0)  # neutral when insufficient data
+            if hist_c is not None and len(hist_c) >= 10:
+                display_cmd.append(percentileofscore(hist_c, cv, kind="rank"))
+            else:
+                display_cmd.append(50.0)
+        x_range = [0, 108]
+        ref_line = 50
+        x_title = "Percentile (vs Own History)"
+        title_text = "Stuff+ / Command+ (vs Own History)"
+    else:
+        display_stuff = stuff_vals
+        display_cmd = cmd_vals
+        x_range = [50, max(max(stuff_vals + cmd_vals, default=100) + 15, 130)]
+        ref_line = 100
+        x_title = "Score"
+        title_text = "Stuff+ / Command+"
+
+    def _bar_color_pctl(v):
+        if v >= 75:
+            return "#d22d49"
+        if v <= 25:
+            return "#2d7fc1"
+        return "#9e9e9e"
+
+    def _bar_color_raw(v):
         if v > 110:
             return "#d22d49"
         if v < 90:
             return "#2d7fc1"
         return "#9e9e9e"
 
+    _bar_color = _bar_color_pctl if use_pctl else _bar_color_raw
+
     fig = go.Figure()
     fig.add_trace(go.Bar(
-        y=pitch_types, x=stuff_vals, orientation="h", name="Stuff+",
-        marker=dict(color=[_bar_color(v) for v in stuff_vals]),
-        text=[f"{v:.0f}" for v in stuff_vals], textposition="outside",
+        y=pitch_types, x=display_stuff, orientation="h", name="Stuff+",
+        marker=dict(color=[_bar_color(v) for v in display_stuff]),
+        text=[f"{v:.0f}" for v in display_stuff], textposition="outside",
     ))
     fig.add_trace(go.Bar(
-        y=pitch_types, x=cmd_vals, orientation="h", name="Command+",
-        marker=dict(color=[_bar_color(v) for v in cmd_vals], opacity=0.7),
-        text=[f"{v:.0f}" for v in cmd_vals], textposition="outside",
+        y=pitch_types, x=display_cmd, orientation="h", name="Command+",
+        marker=dict(color=[_bar_color(v) for v in display_cmd], opacity=0.7),
+        text=[f"{v:.0f}" for v in display_cmd], textposition="outside",
     ))
     fig.update_layout(
         barmode="group", height=max(180, 40 * len(pitch_types) + 50),
-        xaxis=dict(title="Score", range=[50, max(max(stuff_vals + cmd_vals, default=100) + 15, 130)]),
+        title=dict(text=title_text, font=dict(size=11)),
+        xaxis=dict(title=x_title, range=x_range),
         yaxis=dict(title=""),
-        margin=dict(l=10, r=40, t=20, b=30),
+        margin=dict(l=10, r=40, t=40, b=30),
         paper_bgcolor="white", plot_bgcolor="white",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5, font=dict(size=10)),
         font=dict(color="#000000", family="Inter, Arial, sans-serif"),
     )
-    fig.add_vline(x=100, line_dash="dash", line_color="#aaa", line_width=1)
+    fig.add_vline(x=ref_line, line_dash="dash", line_color="#aaa", line_width=1)
     st.plotly_chart(fig, use_container_width=True, key=f"pg_stuffcmd_{key_suffix}")
 
 
@@ -1320,6 +1417,48 @@ def _compute_pitcher_grades(pdf, data, pitcher):
                 feedback.append(f"Velo dropped {peak_velo - last_inn_velo:.1f} mph from peak in final inning — possible fatigue.")
 
     return grades, feedback, stuff_by_pt, cmd_df
+
+
+def _compute_historical_stuff_cmd_distributions(season_pdf, data):
+    """Per-pitch-type game-level Stuff+ and Command+ distributions for a single pitcher.
+
+    Returns (season_stuff_by_pt, season_cmd_by_pt) — dicts of {pitch_type: np.array}
+    containing per-game average values. Minimum 3 games with that pitch type to include.
+    """
+    season_stuff_by_pt = {}
+    season_cmd_by_pt = {}
+
+    if season_pdf is None or season_pdf.empty or "GameID" not in season_pdf.columns:
+        return season_stuff_by_pt, season_cmd_by_pt
+
+    # --- Stuff+ per game per pitch type ---
+    stuff_df = _compute_stuff_plus(season_pdf)
+    if "StuffPlus" in stuff_df.columns and "TaggedPitchType" in stuff_df.columns:
+        for pt, pt_df in stuff_df.groupby("TaggedPitchType"):
+            game_means = pt_df.groupby("GameID")["StuffPlus"].mean().dropna().values
+            if len(game_means) >= 3:
+                season_stuff_by_pt[pt] = game_means
+
+    # --- Command+ per game per pitch type ---
+    for game_id, game_df in season_pdf.groupby("GameID"):
+        try:
+            cmd_df = _compute_command_plus(game_df, data)
+            if cmd_df.empty or "Pitch" not in cmd_df.columns or "Command+" not in cmd_df.columns:
+                continue
+            for _, row in cmd_df.iterrows():
+                pt = row["Pitch"]
+                val = row["Command+"]
+                if pd.notna(val):
+                    season_cmd_by_pt.setdefault(pt, []).append(val)
+        except Exception:
+            continue
+
+    # Convert lists to arrays and filter minimum 3 games
+    season_cmd_by_pt = {
+        pt: np.array(vals) for pt, vals in season_cmd_by_pt.items() if len(vals) >= 3
+    }
+
+    return season_stuff_by_pt, season_cmd_by_pt
 
 
 def _compute_pitcher_percentile_metrics(pdf, season_pdf):
@@ -1972,13 +2111,451 @@ def _split_feedback(feedback, grades):
     strengths = []
     areas = []
     for fb in feedback:
-        # Heuristic: if feedback mentions struggle, low, dropped, below, poor -> areas to improve
         lower = fb.lower()
-        if any(w in lower for w in ["struggled", "dropped", "below", "poor", "weak", "passive", "more aggressive"]):
+        # Primary: check embedded tier labels from _tier_label()
+        if "(needs work)" in lower:
+            areas.append(fb)
+        elif "(strength)" in lower:
+            strengths.append(fb)
+        elif "(average)" in lower:
+            strengths.append(fb)  # neutral → keep as strength
+        # Fallback: keyword heuristic
+        elif any(w in lower for w in [
+            "struggled", "dropped", "below", "poor", "weak",
+            "passive", "more aggressive", "fatigue",
+        ]):
             areas.append(fb)
         else:
             strengths.append(fb)
     return strengths, areas
+
+
+# ── Best Zone Heatmap ──
+
+_ZONE_X_EDGES = np.array([-1.5, -0.5, 0.5, 1.5])
+_ZONE_Y_EDGES = np.array([0.5, 2.0, 3.0, 4.5])
+
+
+def _zone_desc(xb, yb, bats):
+    """Human-readable zone label relative to batter handedness."""
+    v_labels = {0: "Down", 1: "Mid", 2: "Up"}
+    if bats == "Right":
+        h_labels = {0: "In", 1: "Mid", 2: "Away"}
+    elif bats == "Left":
+        h_labels = {0: "Away", 1: "Mid", 2: "In"}
+    else:
+        h_labels = {0: "Left", 1: "Mid", 2: "Right"}
+    h, v = h_labels[xb], v_labels[yb]
+    if h == "Mid" and v == "Mid":
+        return "Mid-Mid"
+    if h == "Mid":
+        return v
+    if v == "Mid":
+        return h
+    return f"{v}-{h}"
+
+
+def _render_best_zone_heatmap(bdf, game_df, bats, key_suffix):
+    """Render a 3x3 zone heatmap showing the hitter's season damage profile
+    with game swings overlaid."""
+    from analytics.zone_vulnerability import compute_zone_swing_metrics
+
+    loc_df = bdf.dropna(subset=["PlateLocSide", "PlateLocHeight"])
+    if len(loc_df) < 30:
+        return
+
+    zone_metrics = compute_zone_swing_metrics(bdf, bats)
+    if zone_metrics is None:
+        return
+
+    # Compute composite score per zone: 0.45*ev_pctl + 0.30*barrel_pctl + 0.25*(100-whiff_pctl)
+    # Pre-compute bins once for efficiency
+    loc_df = loc_df.copy()
+    loc_df["_xb"] = np.clip(np.digitize(loc_df["PlateLocSide"], _ZONE_X_EDGES) - 1, 0, 2)
+    loc_df["_yb"] = np.clip(np.digitize(loc_df["PlateLocHeight"], _ZONE_Y_EDGES) - 1, 0, 2)
+    ev_vals, barrel_vals, whiff_vals = [], [], []
+    for yb in range(3):
+        for xb in range(3):
+            m = zone_metrics.get((xb, yb), {})
+            ev_vals.append(m.get("ev_mean", np.nan))
+            barrel_vals.append(m.get("barrel_pct", np.nan))
+            zdf = loc_df[(loc_df["_xb"] == xb) & (loc_df["_yb"] == yb)]
+            swings = zdf[zdf["PitchCall"].isin(SWING_CALLS)] if "PitchCall" in zdf.columns else pd.DataFrame()
+            whiffs = zdf[zdf["PitchCall"] == "StrikeSwinging"] if "PitchCall" in zdf.columns else pd.DataFrame()
+            whiff_pct = len(whiffs) / max(len(swings), 1) * 100 if len(swings) >= 3 else np.nan
+            whiff_vals.append(whiff_pct)
+
+    ev_arr = np.array(ev_vals)
+    barrel_arr = np.array(barrel_vals)
+    whiff_arr = np.array(whiff_vals)
+
+    def _pctile_rank(arr):
+        valid = arr[~np.isnan(arr)]
+        if len(valid) < 2:
+            return np.full_like(arr, 50.0)
+        return np.array([percentileofscore(valid, v, kind="rank") if not np.isnan(v) else np.nan for v in arr])
+
+    ev_pctl = _pctile_rank(ev_arr)
+    barrel_pctl = _pctile_rank(barrel_arr)
+    whiff_pctl = _pctile_rank(whiff_arr)
+
+    composite = np.where(
+        np.isnan(ev_pctl) & np.isnan(barrel_pctl) & np.isnan(whiff_pctl),
+        np.nan,
+        np.nanmean([0.45 * np.where(np.isnan(ev_pctl), 50, ev_pctl),
+                     0.30 * np.where(np.isnan(barrel_pctl), 50, barrel_pctl),
+                     0.25 * (100 - np.where(np.isnan(whiff_pctl), 50, whiff_pctl))],
+                    axis=0) / (0.45 + 0.30 + 0.25) * (0.45 + 0.30 + 0.25)
+    )
+    # Simpler: just do weighted sum directly
+    composite_scores = []
+    for i in range(9):
+        parts = []
+        if not np.isnan(ev_pctl[i]):
+            parts.append(0.45 * ev_pctl[i])
+        if not np.isnan(barrel_pctl[i]):
+            parts.append(0.30 * barrel_pctl[i])
+        if not np.isnan(whiff_pctl[i]):
+            parts.append(0.25 * (100 - whiff_pctl[i]))
+        if parts:
+            total_w = sum([0.45 if not np.isnan(ev_pctl[i]) else 0,
+                           0.30 if not np.isnan(barrel_pctl[i]) else 0,
+                           0.25 if not np.isnan(whiff_pctl[i]) else 0])
+            composite_scores.append(sum(parts) / total_w if total_w > 0 else np.nan)
+        else:
+            composite_scores.append(np.nan)
+
+    # Build 3x3 grid (row 0 = top of zone)
+    grid = np.full((3, 3), np.nan)
+    text_grid = [[""]*3 for _ in range(3)]
+    idx = 0
+    for yb in range(3):
+        for xb in range(3):
+            m = zone_metrics.get((xb, yb), {})
+            grid[2 - yb, xb] = composite_scores[idx]
+            ev_str = f"{m.get('ev_mean', 0):.0f}" if m.get("n_contact", 0) >= 5 and "ev_mean" in m else ""
+            bp_str = f"{m.get('barrel_pct', 0):.0f}%" if m.get("n_contact", 0) >= 5 and "barrel_pct" in m else ""
+            if ev_str and bp_str:
+                text_grid[2 - yb][xb] = f"{ev_str}<br>{bp_str}"
+            elif ev_str:
+                text_grid[2 - yb][xb] = ev_str
+            idx += 1
+
+    # Handedness-aware labels
+    if bats == "Left":
+        h_labels = ["Away", "Mid", "In"]
+    elif bats == "Right":
+        h_labels = ["In", "Mid", "Away"]
+    else:
+        h_labels = ["L", "Mid", "R"]
+    v_labels = ["Up", "Mid", "Down"]
+
+    col_heat, col_scatter = st.columns([0.55, 0.45])
+
+    with col_heat:
+        fig = px.imshow(
+            grid,
+            color_continuous_scale="RdYlGn",
+            zmin=0, zmax=100,
+            aspect="auto",
+            labels=dict(color="Score"),
+        )
+        # Add text annotations
+        for r in range(3):
+            for c in range(3):
+                txt = text_grid[r][c]
+                if txt:
+                    fig.add_annotation(
+                        x=c, y=r, text=txt,
+                        showarrow=False,
+                        font=dict(size=11, color="black"),
+                    )
+        fig.update_xaxes(tickvals=[0, 1, 2], ticktext=h_labels, side="bottom")
+        fig.update_yaxes(tickvals=[0, 1, 2], ticktext=v_labels)
+        fig.update_layout(
+            title=dict(text="Best Hitting Zones (Season)", font=dict(size=13)),
+            height=320, margin=dict(l=40, r=20, t=40, b=30),
+            coloraxis_colorbar=dict(title="", thickness=12, len=0.6),
+        )
+        # Strike zone box
+        fig.add_shape(type="rect", x0=-0.5, y0=-0.5, x1=2.5, y1=2.5,
+                      line=dict(color="#333", width=2))
+        st.plotly_chart(fig, use_container_width=True, key=f"pg_bz_heat_{key_suffix}")
+
+    with col_scatter:
+        game_loc = game_df.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy() if game_df is not None and not game_df.empty else pd.DataFrame()
+        fig2 = go.Figure()
+        # Strike zone rectangle
+        fig2.add_shape(type="rect", x0=-ZONE_SIDE, y0=ZONE_HEIGHT_BOT,
+                       x1=ZONE_SIDE, y1=ZONE_HEIGHT_TOP,
+                       line=dict(color="#333", width=2))
+        if not game_loc.empty:
+            # Color by result
+            for _, row in game_loc.iterrows():
+                call = row.get("PitchCall", "")
+                play = row.get("PlayResult", "")
+                if call == "InPlay" and play in ("Single", "Double", "Triple", "HomeRun"):
+                    color = "#2e7d32"  # hit - green
+                elif call in SWING_CALLS:
+                    color = "#d32f2f"  # swing/out - red
+                else:
+                    color = "#1976d2"  # no swing - blue
+                fig2.add_trace(go.Scatter(
+                    x=[row["PlateLocSide"]], y=[row["PlateLocHeight"]],
+                    mode="markers",
+                    marker=dict(size=8, color=color, line=dict(width=0.5, color="white")),
+                    showlegend=False,
+                    hovertemplate=f"{row.get('TaggedPitchType','?')} | {call}<extra></extra>",
+                ))
+        fig2.update_layout(
+            title=dict(text="Game Swings", font=dict(size=13)),
+            xaxis=dict(range=[-2.2, 2.2], showgrid=False, zeroline=False,
+                       showticklabels=False, fixedrange=True, scaleanchor="y"),
+            yaxis=dict(range=[0.3, 4.7], showgrid=False, zeroline=False,
+                       showticklabels=False, fixedrange=True),
+            height=320, margin=dict(l=5, r=5, t=40, b=5),
+            plot_bgcolor="white", paper_bgcolor="white",
+        )
+        st.plotly_chart(fig2, use_container_width=True, key=f"pg_bz_scatter_{key_suffix}")
+
+
+# ── Call Grade Section ──
+
+def _compute_call_grade(pitcher_pdf, data, pitcher):
+    """Compute pitch call grade components for a pitcher with >=20 pitches.
+
+    Returns dict with: grade_letter, grade_score, seq_util_score, loc_exec_score,
+    top_pairs, top_sequences, best_locations, opp_weakness_pct.
+    """
+    from analytics.command_plus import _compute_pitch_pair_results
+    from analytics.tunnel import _compute_tunnel_score
+    from _pages.pitching import (
+        _build_pitch_metric_map as _pit_build_pitch_metric_map,
+        _rank_pairs as _pit_rank_pairs,
+        _rank_sequences_from_pdf as _pit_rank_sequences_from_pdf,
+    )
+
+    n = len(pitcher_pdf)
+    if n < 20:
+        return None
+
+    # Use GAME data only for expensive computations to avoid blocking the UI.
+    # Season data is too large for tunnel/pair computations in real-time.
+    game_pdf = pitcher_pdf
+
+    # Compute Stuff+/Cmd+ for metric map (lightweight — uses game data)
+    try:
+        stuff_df = _compute_stuff_plus(game_pdf)
+    except Exception:
+        stuff_df = pd.DataFrame()
+    try:
+        cmd_df_raw = _compute_command_plus(game_pdf)
+    except Exception:
+        cmd_df_raw = pd.DataFrame()
+
+    pitch_metrics = _pit_build_pitch_metric_map(game_pdf, stuff_df, cmd_df_raw)
+
+    # Tunnel scores (game data only — fast)
+    try:
+        tunnel_df = _compute_tunnel_score(game_pdf)
+    except Exception:
+        tunnel_df = pd.DataFrame()
+
+    # Pair results — use game data with lowered threshold
+    try:
+        pair_df = _compute_pitch_pair_results(game_pdf, data, tunnel_df)
+    except Exception:
+        pair_df = pd.DataFrame()
+
+    # Top pairs and sequences (use game data, lower min_n for small samples)
+    top_pairs = _pit_rank_pairs(tunnel_df, pair_df, pitch_metrics, top_n=2)
+    top_sequences = _pit_rank_sequences_from_pdf(game_pdf, pitch_metrics, tunnel_df, top_n=2, min_n=3)
+
+    # --- Sequence Utilization Score (50%) ---
+    seq_util_score = 50.0  # default
+    if top_pairs:
+        # Count how many times top pairs appeared in game transitions
+        game_sorted = pitcher_pdf.sort_values(
+            [c for c in ["Inning", "PAofInning", "PitchNo"] if c in pitcher_pdf.columns]
+        ).copy()
+        if "TaggedPitchType" in game_sorted.columns:
+            game_types = game_sorted["TaggedPitchType"].dropna().tolist()
+            total_transitions = max(len(game_types) - 1, 1)
+            top_pair_keys = set()
+            for p in top_pairs:
+                pair_str = p.get("Pair", "")
+                parts = [x.strip() for x in pair_str.split("/")]
+                if len(parts) == 2:
+                    top_pair_keys.add(tuple(sorted(parts)))
+            usage_count = 0
+            for i in range(len(game_types) - 1):
+                key = tuple(sorted([game_types[i], game_types[i + 1]]))
+                if key in top_pair_keys:
+                    usage_count += 1
+            usage_pct = usage_count / total_transitions * 100
+            n_pitch_types = len(set(game_types))
+            expected_pct = max(20.0, 100.0 / max(n_pitch_types, 1))
+            seq_util_score = min(usage_pct / expected_pct, 1.0) * 100
+
+    # --- Location Execution Score (50%) ---
+    loc_exec_score = 50.0
+    best_locations = {}
+    loc_df = pitcher_pdf.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
+    if not loc_df.empty and "TaggedPitchType" in loc_df.columns:
+        loc_df["_xb"] = np.clip(np.digitize(loc_df["PlateLocSide"], _ZONE_X_EDGES) - 1, 0, 2)
+        loc_df["_yb"] = np.clip(np.digitize(loc_df["PlateLocHeight"], _ZONE_Y_EDGES) - 1, 0, 2)
+        csw_calls = ["StrikeCalled", "StrikeSwinging"]
+        in_best_count = 0
+        total_count = 0
+        throws = pitcher_pdf["PitcherThrows"].iloc[0] if "PitcherThrows" in pitcher_pdf.columns else "Right"
+        if pd.isna(throws):
+            throws = "Right"
+
+        for pt, pt_grp in loc_df.groupby("TaggedPitchType"):
+            if len(pt_grp) < 10:
+                continue
+            total_count += len(pt_grp)
+            # Compute CSW% per zone for this pitch type
+            zone_csw = {}
+            for yb in range(3):
+                for xb in range(3):
+                    zdf = pt_grp[(pt_grp["_xb"] == xb) & (pt_grp["_yb"] == yb)]
+                    if len(zdf) >= 3:
+                        csw_n = len(zdf[zdf["PitchCall"].isin(csw_calls)])
+                        zone_csw[(xb, yb)] = csw_n / len(zdf) * 100
+            if zone_csw:
+                sorted_zones = sorted(zone_csw.items(), key=lambda x: x[1], reverse=True)
+                best_2 = [z[0] for z in sorted_zones[:2]]
+                best_zone_key, best_zone_csw = sorted_zones[0]
+                desc = _zone_desc(best_zone_key[0], best_zone_key[1], throws)
+                best_locations[pt] = f"{desc} ({best_zone_csw:.0f}% CSW)"
+                # Count pitches in best 2 zones
+                in_best_count += sum(len(pt_grp[(pt_grp["_xb"] == z[0]) & (pt_grp["_yb"] == z[1])]) for z in best_2)
+
+        if total_count > 0:
+            loc_exec_score = in_best_count / total_count * 100
+
+    # Combined grade
+    combined = 0.50 * seq_util_score + 0.50 * loc_exec_score
+    # Letter grade
+    if combined >= 85:
+        grade_letter = "A"
+    elif combined >= 70:
+        grade_letter = "B"
+    elif combined >= 55:
+        grade_letter = "C"
+    elif combined >= 40:
+        grade_letter = "D"
+    else:
+        grade_letter = "F"
+
+    # Plus/minus refinement
+    if grade_letter not in ("A", "F"):
+        remainder = combined % 15 if grade_letter == "B" else combined % 15
+        if combined >= 80:
+            grade_letter = "A-"
+        elif combined >= 75:
+            grade_letter = "B+"
+        elif combined >= 65:
+            grade_letter = "B-"
+        elif combined >= 60:
+            grade_letter = "C+"
+        elif combined >= 50:
+            grade_letter = "C-"
+        elif combined >= 45:
+            grade_letter = "D+"
+
+    # Opponent weakness check
+    opp_weakness_pct = None
+    try:
+        from data.bryant_combined import load_bryant_combined_pack
+        pack = load_bryant_combined_pack()
+        if pack and "hitting" in pack:
+            hole_data = pack["hitting"]
+            # Check if pitcher attacked opponent holes on 2-strike counts
+            two_strike_df = pitcher_pdf[
+                (pitcher_pdf.get("Strikes", pd.Series(dtype=float)).fillna(0).astype(int) == 2)
+            ] if "Strikes" in pitcher_pdf.columns else pd.DataFrame()
+            if len(two_strike_df) >= 5 and not loc_df.empty:
+                attacked = 0
+                total_2k = 0
+                for _, row in two_strike_df.iterrows():
+                    batter = row.get("Batter", "")
+                    if batter in hole_data and isinstance(hole_data[batter], pd.DataFrame):
+                        total_2k += 1
+                opp_weakness_pct = attacked / max(total_2k, 1) * 100 if total_2k > 0 else None
+    except Exception:
+        pass
+
+    return {
+        "grade_letter": grade_letter,
+        "grade_score": combined,
+        "seq_util_score": seq_util_score,
+        "loc_exec_score": loc_exec_score,
+        "top_pairs": top_pairs,
+        "top_sequences": top_sequences,
+        "best_locations": best_locations,
+        "opp_weakness_pct": opp_weakness_pct,
+    }
+
+
+def _render_call_grade_section(pitcher_pdf, data, pitcher, key_suffix):
+    """Render pitch call grade section for a pitcher with >=20 pitches."""
+    grade_info = _compute_call_grade(pitcher_pdf, data, pitcher)
+    if grade_info is None:
+        return
+
+    st.markdown("**Game Call Grade**")
+
+    # Grade metric card
+    col_grade, col_detail = st.columns([0.3, 0.7])
+    with col_grade:
+        grade_color = _grade_color(grade_info["grade_letter"])
+        st.markdown(
+            f'<div style="text-align:center;padding:10px;">'
+            f'<div style="font-size:48px;font-weight:bold;color:{grade_color};">'
+            f'{grade_info["grade_letter"]}</div>'
+            f'<div style="font-size:12px;color:#666;">Call Grade ({grade_info["grade_score"]:.0f})</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        st.caption(f"Seq Utilization: {grade_info['seq_util_score']:.0f}  |  "
+                   f"Location Exec: {grade_info['loc_exec_score']:.0f}")
+
+    with col_detail:
+        # Top pairs
+        if grade_info["top_pairs"]:
+            st.markdown("**Best Pitch Pairs**")
+            pair_rows = []
+            for p in grade_info["top_pairs"]:
+                pair_rows.append({
+                    "Pair": p.get("Pair", "?"),
+                    "Whiff%": f"{p.get('Whiff%', 0):.1f}" if pd.notna(p.get("Whiff%")) else "-",
+                    "CSW%": f"{p.get('K%', 0):.1f}" if pd.notna(p.get("K%")) else "-",
+                    "Tunnel": f"{p.get('Tunnel', 0):.0f}" if pd.notna(p.get("Tunnel")) else "-",
+                })
+            st.dataframe(pd.DataFrame(pair_rows), use_container_width=True, hide_index=True)
+
+        # Top sequences
+        if grade_info["top_sequences"]:
+            st.markdown("**Best 3-Pitch Sequences**")
+            seq_rows = []
+            for s in grade_info["top_sequences"]:
+                seq_rows.append({
+                    "Sequence": s.get("Seq", "?"),
+                    "Whiff%": f"{s.get('Whiff%', 0):.1f}" if pd.notna(s.get("Whiff%")) else "-",
+                    "K%": f"{s.get('K%', 0):.1f}" if pd.notna(s.get("K%")) else "-",
+                })
+            st.dataframe(pd.DataFrame(seq_rows), use_container_width=True, hide_index=True)
+
+        # Best location per pitch type
+        if grade_info["best_locations"]:
+            loc_parts = [f"{pt} → {loc}" for pt, loc in grade_info["best_locations"].items()]
+            st.markdown("**Best Location by Pitch**  \n" + "  |  ".join(loc_parts))
+
+        # Opponent weakness info
+        if grade_info.get("opp_weakness_pct") is not None:
+            st.caption(f"Attacked opponent holes {grade_info['opp_weakness_pct']:.0f}% of 2-strike pitches")
 
 
 # ── Grades & Feedback ──
@@ -2034,13 +2611,66 @@ def _postgame_grades(gd, data):
             pctl_metrics = _compute_pitcher_percentile_metrics(pdf, season_pdf)
             render_savant_percentile_section(pctl_metrics, title="Game vs Season Percentiles")
 
-            # 5. Stuff+/Cmd+ Bars
+            # 5. Stuff+/Cmd+ Bars (percentiles vs own history when available)
             if stuff_by_pt:
-                _render_stuff_cmd_bars(stuff_by_pt, cmd_df, key_suffix=f"pit_{slug}")
+                season_stuff_dist, season_cmd_dist = _compute_historical_stuff_cmd_distributions(season_pdf, data)
+                _render_stuff_cmd_bars(
+                    stuff_by_pt, cmd_df, key_suffix=f"pit_{slug}",
+                    season_stuff_by_pt=season_stuff_dist,
+                    season_cmd_by_pt=season_cmd_dist,
+                )
 
             # 6. Radar Chart — smaller, supporting visual
             if not small_sample:
                 _render_radar_chart(grades, key_suffix=f"pit_{slug}")
+
+            # 6b. Pitch Call Grade
+            if n_pitches >= _MIN_PITCHER_PITCHES:
+                try:
+                    _render_call_grade_section(pdf, data, pitcher, key_suffix=f"pit_{slug}")
+                except Exception:
+                    pass
+
+            # 7. Batter-by-Batter Breakdown
+            pa_cols_p = [c for c in ["GameID", "Batter", "Inning", "PAofInning"] if c in pdf.columns]
+            sort_cols_p = [c for c in ["Inning", "PAofInning", "PitchNo"] if c in pdf.columns]
+            if len(pa_cols_p) >= 2:
+                st.markdown("**Batter-by-Batter Breakdown**")
+                pa_groups_p = []
+                for pa_key, ab in pdf.groupby(pa_cols_p[1:]):
+                    ab_sorted = ab.sort_values(sort_cols_p) if sort_cols_p else ab
+                    inn = ab_sorted.iloc[0].get("Inning", "?")
+                    pa_groups_p.append((inn, ab_sorted))
+                pa_groups_p.sort(key=lambda x: (int(x[0]) if pd.notna(x[0]) and str(x[0]).isdigit() else 99))
+                for pa_idx, (inn, ab_sorted) in enumerate(pa_groups_p):
+                    batter_name = display_name(ab_sorted.iloc[0]["Batter"], escape_html=False) if "Batter" in ab_sorted.columns else "?"
+                    n_pitches_pa = len(ab_sorted)
+                    # Determine result from last pitch
+                    last = ab_sorted.iloc[-1]
+                    result_p = "?"
+                    if last.get("KorBB") == "Strikeout":
+                        result_p = "K"
+                    elif last.get("KorBB") == "Walk":
+                        result_p = "BB"
+                    elif last.get("PitchCall") == "HitByPitch":
+                        result_p = "HBP"
+                    elif pd.notna(last.get("PlayResult")) and last.get("PlayResult") not in ("Undefined", ""):
+                        result_p = last["PlayResult"]
+                    elif last.get("PitchCall") == "InPlay":
+                        result_p = "InPlay"
+                    label = f"Inn {inn} vs {batter_name} — {result_p} ({n_pitches_pa}p)"
+                    with st.expander(label):
+                        col_table, col_zone = st.columns([0.6, 0.4])
+                        with col_table:
+                            pitch_rows = _pg_build_pa_pitch_rows(ab_sorted)
+                            if pitch_rows:
+                                st.dataframe(pd.DataFrame(pitch_rows), use_container_width=True, hide_index=True)
+                        with col_zone:
+                            fig = _pg_mini_location_plot(ab_sorted, key_suffix=f"pit_{slug}_pa{pa_idx}")
+                            if fig:
+                                st.plotly_chart(fig, use_container_width=True, key=f"pg_pa_zone_pit_{slug}_{pa_idx}")
+                            else:
+                                st.caption("No location data")
 
             st.markdown("---")
 
@@ -2094,27 +2724,44 @@ def _postgame_grades(gd, data):
             if not small_sample:
                 _render_radar_chart(grades, key_suffix=f"hit_{slug}")
 
-            # 6. At-Bat Grades Table
+            # 5b. Best Zone Heatmap
+            batter_side = bdf["BatterSide"].iloc[0] if "BatterSide" in bdf.columns and len(bdf) > 0 else "Right"
+            if pd.isna(batter_side):
+                batter_side = "Right"
+            try:
+                _render_best_zone_heatmap(
+                    season_bdf if not season_bdf.empty and len(season_bdf) >= 30 else bdf,
+                    bdf, batter_side, key_suffix=f"hit_{slug}")
+            except Exception:
+                pass
+
+            # 6. At-Bat Breakdowns
             sort_cols = [c for c in ["Inning", "PAofInning", "PitchNo"] if c in bdf.columns]
             if len(pa_cols) >= 2:
-                ab_rows = []
+                st.markdown("**At-Bat Breakdowns**")
+                pa_groups = []
                 for pa_key, ab in bdf.groupby(pa_cols[1:]):
                     ab_sorted = ab.sort_values(sort_cols) if sort_cols else ab
-                    score, letter, result = _grade_at_bat(ab_sorted, season_bdf)
                     inn = ab_sorted.iloc[0].get("Inning", "?")
-                    vs_pitcher = display_name(ab_sorted.iloc[0]["Pitcher"]) if "Pitcher" in ab_sorted.columns else "?"
-                    ab_rows.append({
-                        "Inning": inn,
-                        "vs Pitcher": vs_pitcher,
-                        "Pitches": len(ab_sorted),
-                        "Result": result,
-                        "Score": score,
-                        "Grade": letter,
-                    })
-                if ab_rows:
-                    ab_table = pd.DataFrame(ab_rows).sort_values("Inning")
-                    st.markdown("**At-Bat Grades**")
-                    st.dataframe(ab_table, use_container_width=True, hide_index=True)
+                    pa_groups.append((inn, ab_sorted))
+                pa_groups.sort(key=lambda x: (int(x[0]) if pd.notna(x[0]) and str(x[0]).isdigit() else 99))
+                for pa_idx, (inn, ab_sorted) in enumerate(pa_groups):
+                    score, letter, result = _grade_at_bat(ab_sorted, season_bdf)
+                    vs_pitcher = display_name(ab_sorted.iloc[0]["Pitcher"], escape_html=False) if "Pitcher" in ab_sorted.columns else "?"
+                    n_pitches_pa = len(ab_sorted)
+                    label = f"Inn {inn} vs {vs_pitcher} — {result} ({letter}, {n_pitches_pa}p)"
+                    with st.expander(label):
+                        col_table, col_zone = st.columns([0.6, 0.4])
+                        with col_table:
+                            pitch_rows = _pg_build_pa_pitch_rows(ab_sorted)
+                            if pitch_rows:
+                                st.dataframe(pd.DataFrame(pitch_rows), use_container_width=True, hide_index=True)
+                        with col_zone:
+                            fig = _pg_mini_location_plot(ab_sorted, key_suffix=f"hit_{slug}_pa{pa_idx}")
+                            if fig:
+                                st.plotly_chart(fig, use_container_width=True, key=f"pg_pa_zone_hit_{slug}_{pa_idx}")
+                            else:
+                                st.caption("No location data")
 
             st.markdown("---")
 
@@ -2181,6 +2828,17 @@ def page_postgame(data):
             st.download_button(
                 "Download PDF", data=st.session_state.pg_pdf_bytes,
                 file_name=f"postgame_{sel_game}.pdf", mime="application/pdf")
+
+        if st.button("Export AB Review PDF", key="pg_gen_ab_review"):
+            with st.spinner("Building AB Review PDF..."):
+                from generate_ab_review_pdf import generate_ab_review_pdf_bytes
+                st.session_state.pg_ab_review_bytes = generate_ab_review_pdf_bytes(gd, data, pdf_game_label)
+                st.session_state.pg_ab_review_game = sel_game
+
+        if st.session_state.get("pg_ab_review_bytes") and st.session_state.get("pg_ab_review_game") == sel_game:
+            st.download_button(
+                "Download AB Review", data=st.session_state.pg_ab_review_bytes,
+                file_name=f"ab_review_{sel_game}.pdf", mime="application/pdf")
 
     _postgame_summary(gd)
 

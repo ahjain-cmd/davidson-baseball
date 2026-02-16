@@ -35,8 +35,10 @@ from config import (
 )
 from viz.percentiles import savant_color
 from analytics.stuff_plus import _compute_stuff_plus
-from analytics.command_plus import _compute_command_plus
+from analytics.command_plus import _compute_command_plus, _compute_pitch_pair_results
 from analytics.expected import _create_zone_grid_data
+from analytics.zone_vulnerability import compute_zone_swing_metrics
+from analytics.tunnel import _compute_tunnel_score
 
 # Import computation helpers from postgame page (no Streamlit dependency)
 from _pages.postgame import (
@@ -44,16 +46,21 @@ from _pages.postgame import (
     _compute_hitter_grades,
     _compute_pitcher_percentile_metrics,
     _compute_hitter_percentile_metrics,
+    _compute_historical_stuff_cmd_distributions,
     _grade_at_bat,
     _letter_grade,
     _grade_color,
     _pg_estimate_ip,
+    _pg_build_pa_pitch_rows,
     _score_linear,
     _compute_takeaways,
     _tier_label,
     _tier_color,
     _tier_icon,
     _split_feedback,
+    _compute_call_grade,
+    _ZONE_X_EDGES,
+    _ZONE_Y_EDGES,
     _MIN_PITCHER_PITCHES,
     _MIN_HITTER_PAS,
 )
@@ -221,8 +228,13 @@ def _mpl_percentile_bars(ax, metrics):
                 va="center", ha="center", zorder=6)
 
 
-def _mpl_stuff_cmd_bars(ax, stuff_by_pt, cmd_df):
-    """Horizontal grouped bar chart of Stuff+ and Command+ by pitch type."""
+def _mpl_stuff_cmd_bars(ax, stuff_by_pt, cmd_df,
+                        season_stuff_by_pt=None, season_cmd_by_pt=None):
+    """Horizontal grouped bar chart of Stuff+ and Command+ by pitch type.
+
+    When season distributions provided with ≥10 data points, shows percentiles
+    vs own history (0-100 scale, 50th ref line). Otherwise raw scores.
+    """
     pitch_types = sorted(stuff_by_pt.keys())
     cmd_map = {}
     if cmd_df is not None and not cmd_df.empty and "Pitch" in cmd_df.columns and "Command+" in cmd_df.columns:
@@ -236,29 +248,72 @@ def _mpl_stuff_cmd_bars(ax, stuff_by_pt, cmd_df):
     y = np.arange(len(pitch_types))
     bar_h = 0.35
 
-    def _bar_color(v):
+    # Determine if we can use historical percentiles
+    use_pctl = False
+    if season_stuff_by_pt and season_cmd_by_pt:
+        has_stuff = any(len(season_stuff_by_pt.get(pt, [])) >= 10 for pt in pitch_types)
+        has_cmd = any(len(season_cmd_by_pt.get(pt, [])) >= 10 for pt in pitch_types)
+        use_pctl = has_stuff and has_cmd
+
+    if use_pctl:
+        display_stuff = []
+        display_cmd = []
+        for pt, sv, cv in zip(pitch_types, stuff_vals, cmd_vals):
+            hist_s = season_stuff_by_pt.get(pt)
+            hist_c = season_cmd_by_pt.get(pt)
+            if hist_s is not None and len(hist_s) >= 10:
+                display_stuff.append(percentileofscore(hist_s, sv, kind="rank"))
+            else:
+                display_stuff.append(50.0)
+            if hist_c is not None and len(hist_c) >= 10:
+                display_cmd.append(percentileofscore(hist_c, cv, kind="rank"))
+            else:
+                display_cmd.append(50.0)
+        x_lim = (0, 108)
+        ref_line = 50
+        x_label = "Percentile"
+        title_text = "Stuff+ / Command+ (vs Own History)"
+    else:
+        display_stuff = stuff_vals
+        display_cmd = cmd_vals
+        x_lim = (50, max(max(stuff_vals + cmd_vals, default=100) + 15, 130))
+        ref_line = 100
+        x_label = "Score"
+        title_text = "Stuff+ / Command+"
+
+    def _bar_color_pctl(v):
+        if v >= 75:
+            return "#d22d49"
+        if v <= 25:
+            return "#2d7fc1"
+        return "#9e9e9e"
+
+    def _bar_color_raw(v):
         if v > 110:
             return "#d22d49"
         if v < 90:
             return "#2d7fc1"
         return "#9e9e9e"
 
-    ax.barh(y + bar_h / 2, stuff_vals, bar_h, label="Stuff+",
-            color=[_bar_color(v) for v in stuff_vals])
-    ax.barh(y - bar_h / 2, cmd_vals, bar_h, label="Command+",
-            color=[_bar_color(v) for v in cmd_vals], alpha=0.7)
-    ax.axvline(100, color="#aaa", linestyle="--", linewidth=1)
+    _bar_color = _bar_color_pctl if use_pctl else _bar_color_raw
+
+    ax.barh(y + bar_h / 2, display_stuff, bar_h, label="Stuff+",
+            color=[_bar_color(v) for v in display_stuff])
+    ax.barh(y - bar_h / 2, display_cmd, bar_h, label="Command+",
+            color=[_bar_color(v) for v in display_cmd], alpha=0.7)
+    ax.axvline(ref_line, color="#aaa", linestyle="--", linewidth=1)
     ax.set_yticks(y)
     ax.set_yticklabels(pitch_types, fontsize=7)
-    ax.set_xlim(50, max(max(stuff_vals + cmd_vals, default=100) + 15, 130))
-    ax.set_xlabel("Score", fontsize=7)
+    ax.set_xlim(*x_lim)
+    ax.set_xlabel(x_label, fontsize=7)
     ax.legend(fontsize=6, loc="lower right")
     ax.tick_params(axis="x", labelsize=6)
-    for i, (sv, cv) in enumerate(zip(stuff_vals, cmd_vals)):
+    for i, (sv, cv) in enumerate(zip(display_stuff, display_cmd)):
         ax.text(sv + 1, i + bar_h / 2, f"{sv:.0f}", fontsize=6, va="center")
         ax.text(cv + 1, i - bar_h / 2, f"{cv:.0f}", fontsize=6, va="center")
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
+    ax.set_title(title_text, fontsize=8, fontweight="bold", color=_DARK, loc="left", pad=3)
 
 
 def _mpl_grade_header(ax, name, n_pitches, overall, label_extra="", small_sample=False):
@@ -351,6 +406,41 @@ def _mpl_zone_scatter(ax, pdf):
                        edgecolors="white", linewidths=0.3, zorder=10, label=pt)
     ax.legend(fontsize=5, loc="upper right", framealpha=0.7)
     ax.set_title("Pitch Locations", fontsize=8, fontweight="bold", color=_DARK, pad=3)
+
+
+def _mpl_pa_zone_plot(ax, ab_df):
+    """Numbered pitch locations for a single PA, colored by pitch type.
+
+    Pitch numbers match the original PA sequence (1-based), so numbers
+    stay consistent with the pitch table even when some pitches lack location.
+    """
+    # Assign original sequence numbers BEFORE filtering
+    ab_numbered = ab_df.copy()
+    ab_numbered["_OrigPitchNum"] = range(1, len(ab_numbered) + 1)
+    loc = ab_numbered.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
+    ax.set_xlim(-2.2, 2.2)
+    ax.set_ylim(0.5, 4.5)
+    ax.set_aspect("equal")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for sp in ax.spines.values():
+        sp.set_linewidth(0.5)
+        sp.set_color("#ddd")
+    _draw_zone_rect(ax)
+    if loc.empty:
+        ax.text(0.5, 0.5, "No location\ndata", fontsize=8, color="#999",
+                ha="center", va="center", transform=ax.transAxes)
+        return
+    for _, row in loc.iterrows():
+        pnum = int(row["_OrigPitchNum"])
+        pt = row.get("TaggedPitchType", "Other")
+        color = PITCH_COLORS.get(pt, "#aaa")
+        ax.scatter(row["PlateLocSide"], row["PlateLocHeight"],
+                   c=color, s=120, alpha=0.85, edgecolors="white",
+                   linewidths=0.5, zorder=10)
+        ax.text(row["PlateLocSide"], row["PlateLocHeight"], str(pnum),
+                fontsize=6, fontweight="bold", color="white",
+                ha="center", va="center", zorder=11)
 
 
 def _mpl_movement_profile(ax, pdf):
@@ -488,6 +578,146 @@ def _mpl_damage_heatmap(ax, grid, annot, h_labels, v_labels, game_swings_xy=None
                        edgecolors="#333", linewidths=1.5, zorder=10)
     ax.set_title("Damage Zones (Avg EV)", fontsize=7, fontweight="bold",
                  color=_DARK, pad=3)
+
+
+def _mpl_best_zone_heatmap(ax, bdf, bats):
+    """Matplotlib 3x3 best-zone heatmap for PDF hitter pages."""
+    from scipy.stats import percentileofscore as _pctile
+
+    loc_df = bdf.dropna(subset=["PlateLocSide", "PlateLocHeight"])
+    if len(loc_df) < 30:
+        ax.axis("off")
+        ax.text(0.5, 0.5, "Not enough data", fontsize=7, color="#999",
+                ha="center", va="center", transform=ax.transAxes)
+        return
+
+    zone_metrics = compute_zone_swing_metrics(bdf, bats)
+    if zone_metrics is None:
+        ax.axis("off")
+        return
+
+    # Gather raw values for percentile ranking
+    ev_vals, barrel_vals, whiff_vals = [], [], []
+    for yb in range(3):
+        for xb in range(3):
+            m = zone_metrics.get((xb, yb), {})
+            ev_vals.append(m.get("ev_mean", np.nan))
+            barrel_vals.append(m.get("barrel_pct", np.nan))
+            zdf = loc_df[(np.clip(np.digitize(loc_df["PlateLocSide"], _ZONE_X_EDGES) - 1, 0, 2) == xb) &
+                         (np.clip(np.digitize(loc_df["PlateLocHeight"], _ZONE_Y_EDGES) - 1, 0, 2) == yb)]
+            swings = zdf[zdf["PitchCall"].isin(SWING_CALLS)] if "PitchCall" in zdf.columns else pd.DataFrame()
+            whiffs = zdf[zdf["PitchCall"] == "StrikeSwinging"] if "PitchCall" in zdf.columns else pd.DataFrame()
+            whiff_pct = len(whiffs) / max(len(swings), 1) * 100 if len(swings) >= 3 else np.nan
+            whiff_vals.append(whiff_pct)
+
+    ev_arr, barrel_arr, whiff_arr = np.array(ev_vals), np.array(barrel_vals), np.array(whiff_vals)
+
+    def _prank(arr):
+        valid = arr[~np.isnan(arr)]
+        if len(valid) < 2:
+            return np.full_like(arr, 50.0)
+        return np.array([_pctile(valid, v, kind="rank") if not np.isnan(v) else np.nan for v in arr])
+
+    ev_p, barrel_p, whiff_p = _prank(ev_arr), _prank(barrel_arr), _prank(whiff_arr)
+
+    grid = np.full((3, 3), np.nan)
+    idx = 0
+    for yb in range(3):
+        for xb in range(3):
+            parts, total_w = [], 0.0
+            if not np.isnan(ev_p[idx]):
+                parts.append(0.45 * ev_p[idx]); total_w += 0.45
+            if not np.isnan(barrel_p[idx]):
+                parts.append(0.30 * barrel_p[idx]); total_w += 0.30
+            if not np.isnan(whiff_p[idx]):
+                parts.append(0.25 * (100 - whiff_p[idx])); total_w += 0.25
+            grid[2 - yb, xb] = sum(parts) / total_w if total_w > 0 and parts else np.nan
+            idx += 1
+
+    cmap = plt.cm.RdYlGn
+    masked = np.ma.masked_invalid(grid)
+    ax.imshow(masked, cmap=cmap, vmin=0, vmax=100, aspect="auto")
+
+    # Text overlay
+    idx = 0
+    for yb in range(3):
+        for xb in range(3):
+            m = zone_metrics.get((xb, yb), {})
+            r, c = 2 - yb, xb
+            v = grid[r, c]
+            if not np.isnan(v):
+                ev_str = f"{m.get('ev_mean', 0):.0f}" if m.get("n_contact", 0) >= 5 and "ev_mean" in m else ""
+                bp_str = f"{m.get('barrel_pct', 0):.0f}%" if m.get("n_contact", 0) >= 5 and "barrel_pct" in m else ""
+                txt = f"{ev_str}\n{bp_str}" if ev_str and bp_str else ev_str or bp_str
+                brightness = v / 100.0
+                color = "white" if brightness > 0.7 or brightness < 0.15 else "black"
+                ax.text(c, r, txt, ha="center", va="center", fontsize=6,
+                        fontweight="bold", color=color)
+            idx += 1
+
+    # Zone styling
+    for x in [0.5, 1.5]:
+        ax.axvline(x, color="white", lw=1.5, zorder=2)
+    for y in [0.5, 1.5]:
+        ax.axhline(y, color="white", lw=1.5, zorder=2)
+    ax.add_patch(Rectangle((-0.5, -0.5), 3, 3, fill=False,
+                            edgecolor="#555", lw=1.2, ls="--", zorder=3))
+    ax.add_patch(Rectangle((0.17, -0.17), 1.66, 2.0, fill=False,
+                            edgecolor="black", lw=2.5, zorder=4))
+    ax.set_yticks([0, 2])
+    ax.set_yticklabels(["UP", "DOWN"], fontsize=6, fontweight="bold")
+    ax.tick_params(axis="y", length=0, pad=2)
+    b = bats[0].upper() if isinstance(bats, str) and bats else "R"
+    if b == "R":
+        left_lbl, right_lbl = "IN", "AWAY"
+    elif b == "L":
+        left_lbl, right_lbl = "AWAY", "IN"
+    else:
+        left_lbl, right_lbl = "L", "R"
+    ax.set_xticks([0, 2])
+    ax.set_xticklabels([left_lbl, right_lbl], fontsize=5.5, fontweight="bold")
+    ax.tick_params(axis="x", length=0, pad=2)
+    ax.set_title("Best Hitting Zones", fontsize=7, fontweight="bold", color=_DARK, pad=3)
+
+
+def _mpl_call_grade_box(ax, grade_info):
+    """Compact call grade box for PDF pitcher pages."""
+    ax.axis("off")
+    if grade_info is None:
+        ax.text(0.5, 0.5, "N/A", fontsize=8, color="#999",
+                ha="center", va="center", transform=ax.transAxes)
+        return
+
+    # Grade letter
+    gl = grade_info["grade_letter"]
+    gc = _grade_color(gl)
+    ax.text(0.05, 0.92, f"Call Grade: {gl}", fontsize=9, fontweight="bold",
+            color=gc, va="top", ha="left", transform=ax.transAxes)
+    ax.text(0.05, 0.78,
+            f"Seq Util: {grade_info['seq_util_score']:.0f}  |  Loc Exec: {grade_info['loc_exec_score']:.0f}",
+            fontsize=6.5, color=_DARK, va="top", ha="left", transform=ax.transAxes)
+
+    # Top pairs
+    y = 0.65
+    if grade_info["top_pairs"]:
+        ax.text(0.05, y, "Top Pairs:", fontsize=6.5, fontweight="bold",
+                color=_DARK, va="top", ha="left", transform=ax.transAxes)
+        y -= 0.10
+        for p in grade_info["top_pairs"][:2]:
+            whiff = f"{p.get('Whiff%', 0):.0f}%" if pd.notna(p.get("Whiff%")) else "-"
+            ax.text(0.08, y, f"{p.get('Pair','?')}  Whiff:{whiff}",
+                    fontsize=6, color=_DARK, va="top", ha="left", transform=ax.transAxes)
+            y -= 0.09
+
+    # Best locations
+    if grade_info["best_locations"]:
+        ax.text(0.05, y, "Best Loc:", fontsize=6.5, fontweight="bold",
+                color=_DARK, va="top", ha="left", transform=ax.transAxes)
+        y -= 0.09
+        for pt, loc in list(grade_info["best_locations"].items())[:4]:
+            ax.text(0.08, y, f"{pt}: {loc}", fontsize=5.5, color=_DARK,
+                    va="top", ha="left", transform=ax.transAxes)
+            y -= 0.08
 
 
 def _mpl_ab_grades_table(ax, ab_rows):
@@ -987,11 +1217,12 @@ def _render_pitcher_page(pdf, data, pitcher, game_label):
     # Row 3 left: Radar
     _mpl_radar_chart(fig, outer[3, 0], grades)
 
-    # Row 3 right: Stuff+/Cmd+ bars
+    # Row 3 right: Stuff+/Cmd+ bars (percentiles vs own history)
     ax_bars = fig.add_subplot(outer[3, 1])
-    _mpl_stuff_cmd_bars(ax_bars, stuff_by_pt, cmd_df)
-    ax_bars.set_title("Stuff+ / Command+", fontsize=8, fontweight="bold",
-                      color=_DARK, loc="left", pad=3)
+    season_stuff_dist, season_cmd_dist = _compute_historical_stuff_cmd_distributions(season_pdf, data)
+    _mpl_stuff_cmd_bars(ax_bars, stuff_by_pt, cmd_df,
+                        season_stuff_by_pt=season_stuff_dist,
+                        season_cmd_by_pt=season_cmd_dist)
 
     # Row 4 left: Percentile bars
     pctl_metrics = _compute_pitcher_percentile_metrics(pdf, season_pdf)
@@ -1000,8 +1231,24 @@ def _render_pitcher_page(pdf, data, pitcher, game_label):
     ax_pctl.set_title("Game vs Season Percentiles", fontsize=7, fontweight="bold",
                       color=_DARK, loc="left", pad=2)
 
-    # Row 4 right: Feedback
-    ax_fb = fig.add_subplot(outer[4, 1])
+    # Row 4 right: Call grade (top) + feedback (bottom)
+    row4_right = gridspec.GridSpecFromSubplotSpec(
+        2, 1, subplot_spec=outer[4, 1],
+        height_ratios=[0.45, 0.55], hspace=0.12)
+
+    # Call grade box
+    ax_cg = fig.add_subplot(row4_right[0])
+    if n_pitches >= _MIN_PITCHER_PITCHES:
+        try:
+            grade_info = _compute_call_grade(pdf, data, pitcher)
+            _mpl_call_grade_box(ax_cg, grade_info)
+        except Exception:
+            ax_cg.axis("off")
+    else:
+        ax_cg.axis("off")
+
+    # Feedback
+    ax_fb = fig.add_subplot(row4_right[1])
     _mpl_feedback(ax_fb, feedback)
 
     return fig
@@ -1243,33 +1490,38 @@ def _render_hitter_page(bdf, data, batter, game_label):
     # Row 3 left: Radar
     _mpl_radar_chart(fig, outer[3, 0], grades)
 
-    # Row 3 right: Damage heatmap
+    # Row 3 right: Best Zone Heatmap (replaces damage heatmap)
     ax_heat = fig.add_subplot(outer[3, 1])
     batter_side = bdf["BatterSide"].iloc[0] if "BatterSide" in bdf.columns and len(bdf) > 0 else "Right"
     if pd.isna(batter_side):
         batter_side = "Right"
-    season_loc = season_bdf.dropna(subset=["PlateLocSide", "PlateLocHeight"]) if not season_bdf.empty else pd.DataFrame()
-    if len(season_loc) >= 20:
-        grid, annot, h_labels, v_labels = _create_zone_grid_data(
-            season_loc, metric="avg_ev", batter_side=batter_side)
-        # Map game swings to grid coords
-        game_loc = bdf.dropna(subset=["PlateLocSide", "PlateLocHeight"])
-        game_swings = game_loc[game_loc["PitchCall"].isin(SWING_CALLS)]
-        sw_xy = []
-        h_edges = [-2, -0.83, -0.28, 0.28, 0.83, 2]
-        v_edges_map = [0.5, 1.5, 2.17, 2.83, 3.5, 4.5]
-        for _, row in game_swings.iterrows():
-            ps, ph = row["PlateLocSide"], row["PlateLocHeight"]
-            xi = next((i for i in range(5) if h_edges[i] <= ps < h_edges[i + 1]), None)
-            yi = next((i for i in range(5) if v_edges_map[i] <= ph < v_edges_map[i + 1]), None)
-            if xi is not None and yi is not None:
-                sw_xy.append((xi, yi))
-        _mpl_damage_heatmap(ax_heat, grid, annot, h_labels, v_labels, sw_xy)
-    else:
-        ax_heat.axis("off")
-        ax_heat.text(0.5, 0.5, "Not enough season data\nfor damage heatmap",
-                     fontsize=7, color="#999", ha="center", va="center",
-                     transform=ax_heat.transAxes)
+    season_source = season_bdf if not season_bdf.empty and len(season_bdf) >= 30 else bdf
+    try:
+        _mpl_best_zone_heatmap(ax_heat, season_source, batter_side)
+    except Exception:
+        # Fallback to old damage heatmap
+        ax_heat.clear()
+        season_loc = season_bdf.dropna(subset=["PlateLocSide", "PlateLocHeight"]) if not season_bdf.empty else pd.DataFrame()
+        if len(season_loc) >= 20:
+            grid, annot, h_labels, v_labels = _create_zone_grid_data(
+                season_loc, metric="avg_ev", batter_side=batter_side)
+            game_loc = bdf.dropna(subset=["PlateLocSide", "PlateLocHeight"])
+            game_swings = game_loc[game_loc["PitchCall"].isin(SWING_CALLS)]
+            sw_xy = []
+            h_edges = [-2, -0.83, -0.28, 0.28, 0.83, 2]
+            v_edges_map = [0.5, 1.5, 2.17, 2.83, 3.5, 4.5]
+            for _, row in game_swings.iterrows():
+                ps, ph = row["PlateLocSide"], row["PlateLocHeight"]
+                xi = next((i for i in range(5) if h_edges[i] <= ps < h_edges[i + 1]), None)
+                yi = next((i for i in range(5) if v_edges_map[i] <= ph < v_edges_map[i + 1]), None)
+                if xi is not None and yi is not None:
+                    sw_xy.append((xi, yi))
+            _mpl_damage_heatmap(ax_heat, grid, annot, h_labels, v_labels, sw_xy)
+        else:
+            ax_heat.axis("off")
+            ax_heat.text(0.5, 0.5, "Not enough season data\nfor damage heatmap",
+                         fontsize=7, color="#999", ha="center", va="center",
+                         transform=ax_heat.transAxes)
 
     # Row 4 left: Percentile bars
     pctl_metrics = _compute_hitter_percentile_metrics(bdf, season_bdf)
@@ -1308,6 +1560,104 @@ def _render_hitter_page(bdf, data, batter, game_label):
     _mpl_feedback(ax_fb, feedback)
 
     return fig
+
+
+def _render_pa_breakdown_pages(player_df, player_name, game_label, role="pitcher"):
+    """Render PA breakdown pages. ~3 PAs per page.
+
+    Returns: list of Figure objects.
+    """
+    pa_cols = [c for c in ["GameID", "Batter", "Inning", "PAofInning"] if c in player_df.columns]
+    sort_cols = [c for c in ["Inning", "PAofInning", "PitchNo"] if c in player_df.columns]
+
+    if len(pa_cols) < 2:
+        return []
+
+    # Collect PAs sorted by inning
+    pa_list = []
+    for pa_key, ab in player_df.groupby(pa_cols[1:]):
+        ab_sorted = ab.sort_values(sort_cols) if sort_cols else ab
+        inn = ab_sorted.iloc[0].get("Inning", "?")
+        pa_list.append((inn, ab_sorted))
+    pa_list.sort(key=lambda x: (int(x[0]) if pd.notna(x[0]) and str(x[0]).isdigit() else 99))
+
+    if not pa_list:
+        return []
+
+    PAS_PER_PAGE = 3
+    figures = []
+    dname = display_name(player_name, escape_html=False)
+
+    for page_start in range(0, len(pa_list), PAS_PER_PAGE):
+        page_pas = pa_list[page_start:page_start + PAS_PER_PAGE]
+        n_pas = len(page_pas)
+
+        fig = plt.figure(figsize=_FIG_SIZE)
+        fig.patch.set_facecolor("white")
+
+        # Height ratios: header + up to 3 PA rows
+        h_ratios = [0.08] + [0.30] * n_pas
+        # Pad remaining space if fewer than 3 PAs
+        if n_pas < PAS_PER_PAGE:
+            h_ratios.append(1.0 - 0.08 - 0.30 * n_pas)
+
+        outer = gridspec.GridSpec(len(h_ratios), 1, figure=fig,
+            height_ratios=h_ratios, hspace=0.12,
+            top=0.97, bottom=0.03, left=0.04, right=0.96)
+
+        # Header
+        _header_bar(fig, outer[0], f"POSTGAME | {game_label} | {dname} — PA Details")
+
+        for pa_i, (inn, ab_sorted) in enumerate(page_pas):
+            row_gs = gridspec.GridSpecFromSubplotSpec(1, 2, subplot_spec=outer[1 + pa_i],
+                wspace=0.08, width_ratios=[0.6, 0.4])
+
+            # Determine opponent and result
+            if role == "hitter":
+                opponent = display_name(ab_sorted.iloc[0]["Pitcher"], escape_html=False) if "Pitcher" in ab_sorted.columns else "?"
+            else:
+                opponent = display_name(ab_sorted.iloc[0]["Batter"], escape_html=False) if "Batter" in ab_sorted.columns else "?"
+
+            last = ab_sorted.iloc[-1]
+            result = "?"
+            if last.get("KorBB") == "Strikeout":
+                result = "K"
+            elif last.get("KorBB") == "Walk":
+                result = "BB"
+            elif last.get("PitchCall") == "HitByPitch":
+                result = "HBP"
+            elif pd.notna(last.get("PlayResult")) and last.get("PlayResult") not in ("Undefined", ""):
+                result = last["PlayResult"]
+            elif last.get("PitchCall") == "InPlay":
+                result = "InPlay"
+
+            n_pitches_pa = len(ab_sorted)
+            pa_header = f"Inn {inn} vs {opponent} — {result} ({n_pitches_pa}p)"
+
+            # Left: pitch table
+            ax_table = fig.add_subplot(row_gs[0, 0])
+            ax_table.axis("off")
+            ax_table.set_title(pa_header, fontsize=7.5, fontweight="bold",
+                              color=_DARK, loc="left", pad=2)
+
+            pitch_rows = _pg_build_pa_pitch_rows(ab_sorted)
+            if pitch_rows:
+                table_data = [
+                    [str(r["#"]), r["Count"], r["Type"], r["Velo"], r["Call"], r["EV"], r["LA"]]
+                    for r in pitch_rows
+                ]
+                _styled_table(ax_table, table_data,
+                             ["#", "Count", "Type", "Velo", "Call", "EV", "LA"],
+                             [0.06, 0.10, 0.18, 0.12, 0.12, 0.12, 0.10],
+                             fontsize=6.5, row_height=1.3)
+
+            # Right: zone plot
+            ax_zone = fig.add_subplot(row_gs[0, 1])
+            _mpl_pa_zone_plot(ax_zone, ab_sorted)
+
+        figures.append(fig)
+
+    return figures
 
 
 def _render_takeaways_page(gd, data, game_label):
@@ -1393,7 +1743,7 @@ def generate_postgame_pdf_bytes(gd, data, game_label) -> bytes:
         except Exception:
             traceback.print_exc()
 
-        # Pages 4..N: Individual pitchers
+        # Pages 4..N: Individual pitchers + PA breakdowns
         dav_pitching = gd[gd["PitcherTeam"] == DAVIDSON_TEAM_ID].copy()
         if not dav_pitching.empty:
             pitchers = dav_pitching.groupby("Pitcher").size().sort_values(ascending=False).index.tolist()
@@ -1404,6 +1754,12 @@ def generate_postgame_pdf_bytes(gd, data, game_label) -> bytes:
                     if fig:
                         pdf.savefig(fig)
                         plt.close(fig)
+                        pages_saved += 1
+                    # PA breakdown pages for this pitcher
+                    pa_figs = _render_pa_breakdown_pages(pitcher_pdf, pitcher, game_label, role="pitcher")
+                    for pa_fig in pa_figs:
+                        pdf.savefig(pa_fig)
+                        plt.close(pa_fig)
                         pages_saved += 1
                 except Exception:
                     traceback.print_exc()
@@ -1418,7 +1774,7 @@ def generate_postgame_pdf_bytes(gd, data, game_label) -> bytes:
         except Exception:
             traceback.print_exc()
 
-        # Pages N+2..M: Individual hitters
+        # Pages N+2..M: Individual hitters + PA breakdowns
         dav_hitting = gd[gd["BatterTeam"] == DAVIDSON_TEAM_ID].copy()
         if not dav_hitting.empty:
             batters = dav_hitting.groupby("Batter").size().sort_values(ascending=False).index.tolist()
@@ -1429,6 +1785,12 @@ def generate_postgame_pdf_bytes(gd, data, game_label) -> bytes:
                     if fig:
                         pdf.savefig(fig)
                         plt.close(fig)
+                        pages_saved += 1
+                    # PA breakdown pages for this hitter
+                    pa_figs = _render_pa_breakdown_pages(batter_df, batter, game_label, role="hitter")
+                    for pa_fig in pa_figs:
+                        pdf.savefig(pa_fig)
+                        plt.close(pa_fig)
                         pages_saved += 1
                 except Exception:
                     traceback.print_exc()
