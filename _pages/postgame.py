@@ -1288,15 +1288,8 @@ def _compute_pitcher_grades(pdf, data, pitcher):
     else:
         grades["Stuff"] = None
 
-    # Season Stuff+ comparison
-    if not season_pdf.empty:
-        season_stuff = _compute_stuff_plus(season_pdf)
-        if "StuffPlus" in season_stuff.columns:
-            season_avg_stuff = season_stuff["StuffPlus"].mean()
-            diff = avg_stuff - season_avg_stuff
-            if abs(diff) >= 2:
-                direction = "above" if diff > 0 else "below"
-                feedback.append(f"Stuff+ was {abs(diff):.0f} points {direction} season average ({season_avg_stuff:.0f}).")
+    # Season Stuff+ comparison — skip full season computation for speed;
+    # the percentile bars already provide this context.
 
     # --- Command ---
     cmd_df = _compute_command_plus(pdf, data)
@@ -2387,8 +2380,16 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
 
     # --- Sequence Utilization Score (50%) ---
     seq_util_score = 50.0  # default
+    usage_count = 0
+    total_transitions = 1
+    usage_pct = 0.0
+    top_pair_names = []
+    pitch_mix = {}
+    if "TaggedPitchType" in pitcher_pdf.columns:
+        for pt, grp in pitcher_pdf.groupby("TaggedPitchType"):
+            pitch_mix[pt] = len(grp)
+
     if top_pairs:
-        # Count how many times top pairs appeared in game transitions
         game_sorted = pitcher_pdf.sort_values(
             [c for c in ["Inning", "PAofInning", "PitchNo"] if c in pitcher_pdf.columns]
         ).copy()
@@ -2398,10 +2399,10 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
             top_pair_keys = set()
             for p in top_pairs:
                 pair_str = p.get("Pair", "")
+                top_pair_names.append(pair_str)
                 parts = [x.strip() for x in pair_str.split("/")]
                 if len(parts) == 2:
                     top_pair_keys.add(tuple(sorted(parts)))
-            usage_count = 0
             for i in range(len(game_types) - 1):
                 key = tuple(sorted([game_types[i], game_types[i + 1]]))
                 if key in top_pair_keys:
@@ -2414,6 +2415,7 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
     # --- Location Execution Score (50%) ---
     loc_exec_score = 50.0
     best_locations = {}
+    loc_by_pitch = {}  # per-pitch-type location detail
     loc_df = pitcher_pdf.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
     if not loc_df.empty and "TaggedPitchType" in loc_df.columns:
         loc_df["_xb"] = np.clip(np.digitize(loc_df["PlateLocSide"], _ZONE_X_EDGES) - 1, 0, 2)
@@ -2429,7 +2431,6 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
             if len(pt_grp) < 10:
                 continue
             total_count += len(pt_grp)
-            # Compute CSW% per zone for this pitch type
             zone_csw = {}
             for yb in range(3):
                 for xb in range(3):
@@ -2443,8 +2444,15 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
                 best_zone_key, best_zone_csw = sorted_zones[0]
                 desc = _zone_desc(best_zone_key[0], best_zone_key[1], throws)
                 best_locations[pt] = f"{desc} ({best_zone_csw:.0f}% CSW)"
-                # Count pitches in best 2 zones
-                in_best_count += sum(len(pt_grp[(pt_grp["_xb"] == z[0]) & (pt_grp["_yb"] == z[1])]) for z in best_2)
+                pt_in_best = sum(len(pt_grp[(pt_grp["_xb"] == z[0]) & (pt_grp["_yb"] == z[1])]) for z in best_2)
+                in_best_count += pt_in_best
+                loc_by_pitch[pt] = {
+                    "n": len(pt_grp),
+                    "in_best_pct": pt_in_best / len(pt_grp) * 100,
+                    "best_zone": desc,
+                    "best_csw": best_zone_csw,
+                    "worst_zone": _zone_desc(sorted_zones[-1][0][0], sorted_zones[-1][0][1], throws) if len(sorted_zones) > 1 else "",
+                }
 
         if total_count > 0:
             loc_exec_score = in_best_count / total_count * 100
@@ -2509,7 +2517,13 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
         "top_pairs": top_pairs,
         "top_sequences": top_sequences,
         "best_locations": best_locations,
+        "loc_by_pitch": loc_by_pitch,
         "opp_weakness_pct": opp_weakness_pct,
+        "usage_count": usage_count,
+        "total_transitions": total_transitions,
+        "usage_pct": usage_pct,
+        "top_pair_names": top_pair_names,
+        "pitch_mix": pitch_mix,
     }
 
 
@@ -2519,24 +2533,76 @@ def _render_call_grade_section(pitcher_pdf, data, pitcher, key_suffix):
     if grade_info is None:
         return
 
+    gl = grade_info["grade_letter"]
+    gs = grade_info["grade_score"]
+    seq_s = grade_info["seq_util_score"]
+    loc_s = grade_info["loc_exec_score"]
+
     st.markdown("**Game Call Grade**")
 
-    # Grade metric card
-    col_grade, col_detail = st.columns([0.3, 0.7])
+    # ── Row 1: Grade card + explanation ──
+    col_grade, col_explain = st.columns([0.25, 0.75])
     with col_grade:
-        grade_color = _grade_color(grade_info["grade_letter"])
+        gc = _grade_color(gl)
         st.markdown(
-            f'<div style="text-align:center;padding:10px;">'
-            f'<div style="font-size:48px;font-weight:bold;color:{grade_color};">'
-            f'{grade_info["grade_letter"]}</div>'
-            f'<div style="font-size:12px;color:#666;">Call Grade ({grade_info["grade_score"]:.0f})</div>'
+            f'<div style="text-align:center;padding:12px;border:2px solid {gc};border-radius:12px;">'
+            f'<div style="font-size:52px;font-weight:bold;color:{gc};">{gl}</div>'
+            f'<div style="font-size:13px;color:#888;margin-top:4px;">Call Grade ({gs:.0f}/100)</div>'
             f'</div>',
             unsafe_allow_html=True,
         )
-        st.caption(f"Seq Utilization: {grade_info['seq_util_score']:.0f}  |  "
-                   f"Location Exec: {grade_info['loc_exec_score']:.0f}")
+    with col_explain:
+        # Build explanation
+        seq_label = "strong" if seq_s >= 70 else "average" if seq_s >= 40 else "low"
+        loc_label = "strong" if loc_s >= 70 else "average" if loc_s >= 40 else "low"
+        usage_ct = grade_info.get("usage_count", 0)
+        total_tr = grade_info.get("total_transitions", 1)
+        usage_p = grade_info.get("usage_pct", 0)
+        pair_names = grade_info.get("top_pair_names", [])
 
-    with col_detail:
+        expl_parts = []
+        expl_parts.append(
+            f"**Sequence Utilization ({seq_s:.0f}/100):** {seq_label.title()} — "
+            f"used top pairs in **{usage_ct} of {total_tr}** pitch transitions ({usage_p:.0f}%)."
+        )
+        if pair_names:
+            expl_parts[-1] += f" Best pairs: {', '.join(pair_names)}."
+
+        expl_parts.append(
+            f"**Location Execution ({loc_s:.0f}/100):** {loc_label.title()} — "
+            f"pitched to best zones {loc_s:.0f}% of the time."
+        )
+        for line in expl_parts:
+            st.markdown(f'<div style="font-size:13px;padding:3px 0;">{line}</div>', unsafe_allow_html=True)
+
+        # Actionable recommendations
+        recs = []
+        if seq_s < 50 and pair_names:
+            recs.append(f"Increase use of {pair_names[0]} pairing — it had the best tunnel/whiff profile.")
+        if loc_s < 50:
+            loc_by = grade_info.get("loc_by_pitch", {})
+            worst_pt = min(loc_by.items(), key=lambda x: x[1]["in_best_pct"])[0] if loc_by else None
+            if worst_pt and worst_pt in loc_by:
+                info = loc_by[worst_pt]
+                recs.append(f"Target {info['best_zone']} more with the {worst_pt} — only {info['in_best_pct']:.0f}% of {worst_pt}s hit best zones.")
+        if gs >= 70:
+            recs.append("Game was called well. Maintained good pitch selection and location discipline.")
+        if recs:
+            st.markdown("**Recommendations**")
+            for r in recs:
+                st.markdown(f'<div style="font-size:13px;padding:2px 0 2px 10px;">• {r}</div>', unsafe_allow_html=True)
+
+    # ── Row 2: Sequences + Location detail ──
+    col_seq, col_loc = st.columns(2)
+
+    with col_seq:
+        # Pitch Mix
+        mix = grade_info.get("pitch_mix", {})
+        if mix:
+            total = sum(mix.values())
+            mix_text = " | ".join(f"{pt}: {n} ({n/total*100:.0f}%)" for pt, n in sorted(mix.items(), key=lambda x: -x[1]))
+            st.markdown(f"**Pitch Mix:** {mix_text}")
+
         # Top pairs
         if grade_info["top_pairs"]:
             st.markdown("**Best Pitch Pairs**")
@@ -2544,6 +2610,7 @@ def _render_call_grade_section(pitcher_pdf, data, pitcher, key_suffix):
             for p in grade_info["top_pairs"]:
                 pair_rows.append({
                     "Pair": p.get("Pair", "?"),
+                    "Count": p.get("N", "-"),
                     "Whiff%": f"{p.get('Whiff%', 0):.1f}" if pd.notna(p.get("Whiff%")) else "-",
                     "CSW%": f"{p.get('K%', 0):.1f}" if pd.notna(p.get("K%")) else "-",
                     "Tunnel": f"{p.get('Tunnel', 0):.0f}" if pd.notna(p.get("Tunnel")) else "-",
@@ -2557,19 +2624,37 @@ def _render_call_grade_section(pitcher_pdf, data, pitcher, key_suffix):
             for s in grade_info["top_sequences"]:
                 seq_rows.append({
                     "Sequence": s.get("Seq", "?"),
+                    "Count": s.get("N", "-"),
                     "Whiff%": f"{s.get('Whiff%', 0):.1f}" if pd.notna(s.get("Whiff%")) else "-",
                     "K%": f"{s.get('K%', 0):.1f}" if pd.notna(s.get("K%")) else "-",
                 })
             st.dataframe(pd.DataFrame(seq_rows), use_container_width=True, hide_index=True)
 
-        # Best location per pitch type
-        if grade_info["best_locations"]:
-            loc_parts = [f"{pt} → {loc}" for pt, loc in grade_info["best_locations"].items()]
-            st.markdown("**Best Location by Pitch**  \n" + "  |  ".join(loc_parts))
+    with col_loc:
+        # Per-pitch-type location execution detail
+        loc_by = grade_info.get("loc_by_pitch", {})
+        if loc_by:
+            st.markdown("**Location Execution by Pitch**")
+            loc_rows = []
+            for pt, info in sorted(loc_by.items(), key=lambda x: -x[1]["in_best_pct"]):
+                bar_pct = min(info["in_best_pct"], 100)
+                bar_color = "#2e7d32" if bar_pct >= 50 else "#f9a825" if bar_pct >= 30 else "#c62828"
+                loc_rows.append({
+                    "Pitch": pt,
+                    "N": info["n"],
+                    "In Best Zones": f"{info['in_best_pct']:.0f}%",
+                    "Best Zone": f"{info['best_zone']} ({info['best_csw']:.0f}% CSW)",
+                })
+            st.dataframe(pd.DataFrame(loc_rows), use_container_width=True, hide_index=True)
 
-        # Opponent weakness info
-        if grade_info.get("opp_weakness_pct") is not None:
-            st.caption(f"Attacked opponent holes {grade_info['opp_weakness_pct']:.0f}% of 2-strike pitches")
+        # Best location summary
+        if grade_info["best_locations"]:
+            loc_parts = [f"**{pt}** → {loc}" for pt, loc in grade_info["best_locations"].items()]
+            st.markdown("**Target Zones:** " + "  |  ".join(loc_parts))
+
+    # Opponent weakness info
+    if grade_info.get("opp_weakness_pct") is not None:
+        st.caption(f"Attacked opponent holes {grade_info['opp_weakness_pct']:.0f}% of 2-strike pitches")
 
 
 # ── Grades & Feedback ──
@@ -2625,13 +2710,18 @@ def _postgame_grades(gd, data):
             pctl_metrics = _compute_pitcher_percentile_metrics(pdf, season_pdf)
             render_savant_percentile_section(pctl_metrics, title="Game vs Season Percentiles")
 
-            # 5. Stuff+/Cmd+ Bars (percentiles vs own history when available)
+            # 5. Stuff+/Cmd+ Bars (game values; season comparison on-demand)
             if stuff_by_pt:
-                season_stuff_dist, season_cmd_dist = _compute_historical_stuff_cmd_distributions(season_pdf, data, pitcher_name=pitcher)
+                _season_stuff = None
+                _season_cmd = None
+                if st.checkbox("Compare to season history", key=f"pg_hist_chk_{slug}", value=False):
+                    with st.spinner("Computing season distributions..."):
+                        _season_stuff, _season_cmd = _compute_historical_stuff_cmd_distributions(
+                            season_pdf, data, pitcher_name=pitcher)
                 _render_stuff_cmd_bars(
                     stuff_by_pt, cmd_df, key_suffix=f"pit_{slug}",
-                    season_stuff_by_pt=season_stuff_dist,
-                    season_cmd_by_pt=season_cmd_dist,
+                    season_stuff_by_pt=_season_stuff,
+                    season_cmd_by_pt=_season_cmd,
                 )
 
             # 6. Radar Chart — smaller, supporting visual
