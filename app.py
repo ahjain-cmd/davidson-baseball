@@ -7,23 +7,6 @@ from config import _APP_DIR, ROSTER_2026
 from data.loader import load_davidson_data, get_sidebar_stats
 from viz.layout import GLOBAL_CSS
 
-from _pages.team import page_team
-from _pages.hitting import page_hitting
-from _pages.pitching import page_pitching
-from _pages.catcher import page_catcher
-from _pages.development import page_development
-from _pages.defense import page_defensive_positioning
-from _pages.scouting import page_scouting
-from _pages.postgame import page_postgame
-from _pages.series import page_series
-from _pages.data_quality import page_data_quality
-try:
-    from _pages.decision_engine import page_decision_engine
-    _HAS_DECISION_ENGINE = True
-except ImportError:
-    _HAS_DECISION_ENGINE = False
-from _pages.bryant import page_bryant
-
 
 st.set_page_config(page_title="Davidson Baseball Analytics", layout="wide")
 pio.templates.default = "plotly_white"
@@ -89,29 +72,45 @@ def main():
         unsafe_allow_html=True,
     )
 
+    # Lazy imports — only load the selected page module to speed up startup
     if page == "Team Overview":
+        from _pages.team import page_team
         page_team(data)
     elif page == "Hitting":
+        from _pages.hitting import page_hitting
         page_hitting(data)
     elif page == "Pitching":
+        from _pages.pitching import page_pitching
         page_pitching(data)
     elif page == "Catcher Analytics":
+        from _pages.catcher import page_catcher
         page_catcher(data)
     elif page == "Player Development":
+        from _pages.development import page_development
         page_development(data)
     elif page == "Defensive Positioning":
+        from _pages.defense import page_defensive_positioning
         page_defensive_positioning(data)
     elif page == "Opponent Scouting":
+        from _pages.scouting import page_scouting
         page_scouting(data)
     elif page == "Bryant Scouting":
+        from _pages.bryant import page_bryant
         page_bryant(data)
-    elif page == "In-Game Decision Engine" and _HAS_DECISION_ENGINE:
-        page_decision_engine(data)
+    elif page == "In-Game Decision Engine":
+        try:
+            from _pages.decision_engine import page_decision_engine
+            page_decision_engine(data)
+        except ImportError:
+            st.error("Decision Engine not available.")
     elif page == "Postgame Report":
+        from _pages.postgame import page_postgame
         page_postgame(data)
     elif page == "Series Report":
+        from _pages.series import page_series
         page_series(data)
     elif page == "Data Quality":
+        from _pages.data_quality import page_data_quality
         page_data_quality()
 
 

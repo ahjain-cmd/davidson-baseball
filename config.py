@@ -146,6 +146,67 @@ BRYANT_POSITION = {
     "Clifford, Sean": "RHP",
 }
 
+# ── UNCG (UNC Greensboro) 2026 Roster ────────
+UNCG_TEAM_NAME = "UNC Greensboro"
+UNCG_COMBINED_TEAM_ID = "UNCG_COMBINED_2026"
+
+# Transfers: "Last, First" -> previous school search name.
+# Players NOT in this dict are assumed to have been at UNCG for 2024-2025.
+UNCG_TRANSFERS = {
+    "Ruocco, Anthony": "Florida Southwestern",
+    "Mueller, Jake": "Florida Southwestern",
+    "Barbour, Jake": "Queens University",
+    "Gardner, Brody": "Greensboro College",
+    "Weaver, JT": "Shippensburg University",
+    "Holland, Tucker": "Gaston College",
+    "Horton, John": "Virginia Beach",  # Grad student
+}
+
+UNCG_ROSTER_2026 = {
+    "Ruocco, Anthony", "Truitt, Brantley", "Budzik, Jacob", "Parsons, JJ",
+    "Aycock, Grant", "Brittain, Ethan", "Dilley, Jacob", "Williams, Ian",
+    "Jenkins, Luke", "Berry, Tanner", "Wight, Parker", "Mueller, Jake",
+    "Dear, Mayson", "Rogers, Eddie", "Gardner, Brody", "Polk, Landon",
+    "Bush, Wyatt", "Lee, Cannon", "Barbour, Jake", "Chapman, Noah",
+    "Hester, Thomas", "Shuey, Hunter", "Miles, Isaac", "Holland, Luke",
+    "Hudson, Brandon", "Thomas, Luke", "West, Ayden", "Nobles, Ethan",
+    "Horton, John", "Winfield, Nolan", "Watson, Parker", "Weaver, JT",
+    "Smith, Dylan", "Lancaster, Hazen", "Colucci, Jake", "Barnes, Cole",
+    "Holland, Tucker",
+}
+
+UNCG_JERSEY = {
+    "Ruocco, Anthony": 2, "Truitt, Brantley": 3, "Budzik, Jacob": 4,
+    "Parsons, JJ": 5, "Aycock, Grant": 6, "Brittain, Ethan": 7,
+    "Dilley, Jacob": 8, "Williams, Ian": 9, "Jenkins, Luke": 10,
+    "Berry, Tanner": 11, "Wight, Parker": 12, "Mueller, Jake": 13,
+    "Dear, Mayson": 14, "Rogers, Eddie": 15, "Gardner, Brody": 16,
+    "Polk, Landon": 17, "Bush, Wyatt": 18, "Lee, Cannon": 19,
+    "Barbour, Jake": 20, "Chapman, Noah": 21, "Hester, Thomas": 22,
+    "Shuey, Hunter": 23, "Miles, Isaac": 24, "Holland, Luke": 25,
+    "Hudson, Brandon": 26, "Thomas, Luke": 27, "West, Ayden": 29,
+    "Nobles, Ethan": 30, "Horton, John": 31, "Winfield, Nolan": 32,
+    "Watson, Parker": 34, "Weaver, JT": 35, "Smith, Dylan": 36,
+    "Lancaster, Hazen": 37, "Colucci, Jake": 39, "Barnes, Cole": 40,
+    "Holland, Tucker": 44,
+}
+
+UNCG_POSITION = {
+    "Ruocco, Anthony": "IF", "Truitt, Brantley": "IF/OF", "Budzik, Jacob": "IF",
+    "Parsons, JJ": "C", "Aycock, Grant": "IF/RHP", "Brittain, Ethan": "IF",
+    "Dilley, Jacob": "C/OF", "Williams, Ian": "UTIL", "Jenkins, Luke": "UTIL",
+    "Berry, Tanner": "C", "Wight, Parker": "IF", "Mueller, Jake": "IF",
+    "Dear, Mayson": "RHP/C", "Rogers, Eddie": "RHP", "Gardner, Brody": "OF",
+    "Polk, Landon": "OF", "Bush, Wyatt": "UTIL", "Lee, Cannon": "RHP",
+    "Barbour, Jake": "IF", "Chapman, Noah": "LHP", "Hester, Thomas": "LHP",
+    "Shuey, Hunter": "RHP", "Miles, Isaac": "RHP", "Holland, Luke": "OF",
+    "Hudson, Brandon": "RHP", "Thomas, Luke": "RHP", "West, Ayden": "RHP",
+    "Nobles, Ethan": "RHP", "Horton, John": "RHP", "Winfield, Nolan": "RHP",
+    "Watson, Parker": "IF", "Weaver, JT": "RHP", "Smith, Dylan": "RHP",
+    "Lancaster, Hazen": "LHP", "Colucci, Jake": "RHP", "Barnes, Cole": "RHP",
+    "Holland, Tucker": "LHP",
+}
+
 NAME_MAP = {
     "Laughlin, Theo": "Loughlin, Theo",
     "Laughlin , Theo": "Loughlin, Theo",
@@ -370,3 +431,31 @@ def get_percentile(value, series):
     if pd.isna(value) or series.dropna().empty:
         return np.nan
     return percentileofscore(series.dropna(), value, kind='rank')
+
+
+# ── Team Name Mapping ────────────────────────────
+TEAM_NAMES = {
+    "DAV_WIL": "Davidson", "BRY_BUL": "Bryant", "DUK_BLU": "Duke",
+    "CLE_TIG": "Clemson", "VCU_RAM": "VCU", "RIC_SPI": "Richmond",
+    "FOR_RAM": "Fordham", "DAY_FLY": "Dayton", "SIE_SAI": "Siena",
+    "STJ_HAW": "Saint Joseph's", "STB_BON": "St. Bonaventure",
+    "LAF_LEP": "Lafayette", "GEO_PAT": "George Mason",
+    "GEO_COL": "Georgetown", "RHO_RAM": "Rhode Island",
+    "SLU_BILL": "Saint Louis", "VIL_WIL": "Villanova",
+    "PEN_NIT": "Penn State", "UMA_AMH": "UMass",
+    "BRO_BEA": "Brown", "HIG_PAN": "High Point",
+    "GAR_RUN": "Gardner-Webb", "WOF_TER": "Wofford",
+    "WIN_EAG": "Winthrop", "CHA_FOR": "Charleston",
+    "MOR_EAG": "Morehead St.", "NOR_AGG": "NC A&T",
+    "BUC_BIS": "Bucknell", "ERS_COL": "Erskine",
+    "SOU_GAM": "South Carolina", "QUN_RYL": "Quinnipiac",
+    "IND_SPI8": "Indiana St.", "ONT_BLU": "Ontario",
+    "202_ONT1": "Ontario",
+}
+
+
+def _friendly_team_name(team_id):
+    """Map Trackman team ID to a readable name."""
+    if not team_id or pd.isna(team_id):
+        return "?"
+    return TEAM_NAMES.get(str(team_id), str(team_id))
