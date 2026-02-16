@@ -1419,20 +1419,17 @@ def _compute_pitcher_grades(pdf, data, pitcher):
     return grades, feedback, stuff_by_pt, cmd_df
 
 
-def _compute_historical_stuff_cmd_distributions(season_pdf, data):
-    """Per-pitch-type game-level Stuff+ and Command+ distributions for a single pitcher.
-
-    Returns (season_stuff_by_pt, season_cmd_by_pt) — dicts of {pitch_type: np.array}
-    containing per-game average values. Minimum 3 games with that pitch type to include.
-    """
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_historical_stuff_cmd(pitcher_name, n_pitches, game_ids_hash, _season_pdf, _data):
+    """Cached wrapper — keyed on pitcher name + data fingerprint."""
     season_stuff_by_pt = {}
     season_cmd_by_pt = {}
 
-    if season_pdf is None or season_pdf.empty or "GameID" not in season_pdf.columns:
+    if _season_pdf is None or _season_pdf.empty or "GameID" not in _season_pdf.columns:
         return season_stuff_by_pt, season_cmd_by_pt
 
     # --- Stuff+ per game per pitch type ---
-    stuff_df = _compute_stuff_plus(season_pdf)
+    stuff_df = _compute_stuff_plus(_season_pdf)
     if "StuffPlus" in stuff_df.columns and "TaggedPitchType" in stuff_df.columns:
         for pt, pt_df in stuff_df.groupby("TaggedPitchType"):
             game_means = pt_df.groupby("GameID")["StuffPlus"].mean().dropna().values
@@ -1440,9 +1437,9 @@ def _compute_historical_stuff_cmd_distributions(season_pdf, data):
                 season_stuff_by_pt[pt] = game_means
 
     # --- Command+ per game per pitch type ---
-    for game_id, game_df in season_pdf.groupby("GameID"):
+    for game_id, game_df in _season_pdf.groupby("GameID"):
         try:
-            cmd_df = _compute_command_plus(game_df, data)
+            cmd_df = _compute_command_plus(game_df, _data)
             if cmd_df.empty or "Pitch" not in cmd_df.columns or "Command+" not in cmd_df.columns:
                 continue
             for _, row in cmd_df.iterrows():
@@ -1459,6 +1456,19 @@ def _compute_historical_stuff_cmd_distributions(season_pdf, data):
     }
 
     return season_stuff_by_pt, season_cmd_by_pt
+
+
+def _compute_historical_stuff_cmd_distributions(season_pdf, data, pitcher_name="unknown"):
+    """Per-pitch-type game-level Stuff+ and Command+ distributions for a single pitcher.
+
+    Returns (season_stuff_by_pt, season_cmd_by_pt) — dicts of {pitch_type: np.array}
+    containing per-game average values. Minimum 3 games with that pitch type to include.
+    """
+    if season_pdf is None or season_pdf.empty:
+        return {}, {}
+    n = len(season_pdf)
+    game_ids = tuple(sorted(season_pdf["GameID"].unique())) if "GameID" in season_pdf.columns else ()
+    return _cached_historical_stuff_cmd(pitcher_name, n, hash(game_ids), season_pdf, data)
 
 
 def _compute_pitcher_percentile_metrics(pdf, season_pdf):
@@ -2617,7 +2627,7 @@ def _postgame_grades(gd, data):
 
             # 5. Stuff+/Cmd+ Bars (percentiles vs own history when available)
             if stuff_by_pt:
-                season_stuff_dist, season_cmd_dist = _compute_historical_stuff_cmd_distributions(season_pdf, data)
+                season_stuff_dist, season_cmd_dist = _compute_historical_stuff_cmd_distributions(season_pdf, data, pitcher_name=pitcher)
                 _render_stuff_cmd_bars(
                     stuff_by_pt, cmd_df, key_suffix=f"pit_{slug}",
                     season_stuff_by_pt=season_stuff_dist,
@@ -2848,20 +2858,16 @@ def page_postgame(data):
 
     _postgame_summary(gd)
 
-    tab_ump, tab_pit, tab_hit, tab_grades = st.tabs(
-        ["Umpire Report", "Pitcher Report", "Hitter Report", "Grades & Feedback"])
-    with tab_ump:
+    _tab_options = ["Umpire Report", "Pitcher Report", "Hitter Report", "Grades & Feedback"]
+    _active_tab = st.radio(
+        "Section", _tab_options, horizontal=True, key="pg_tab_select",
+        label_visibility="collapsed")
+
+    if _active_tab == "Umpire Report":
         _postgame_umpire(gd)
-    with tab_pit:
+    elif _active_tab == "Pitcher Report":
         _postgame_pitchers(gd, data)
-    with tab_hit:
+    elif _active_tab == "Hitter Report":
         _postgame_hitters(gd, data)
-    with tab_grades:
-        _grades_key = f"pg_grades_loaded_{sel_game}"
-        if st.session_state.get(_grades_key):
-            _postgame_grades(gd, data)
-        else:
-            st.info("Grades require additional computation. Click below to load.")
-            if st.button("Load Grades & Feedback", key="pg_load_grades_btn"):
-                st.session_state[_grades_key] = True
-                st.rerun()
+    elif _active_tab == "Grades & Feedback":
+        _postgame_grades(gd, data)

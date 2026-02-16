@@ -525,15 +525,17 @@ def page_series(data):
                 "Download PDF", data=st.session_state.ser_pdf_bytes,
                 file_name="series_report.pdf", mime="application/pdf")
 
-    # Tabs
-    tab_overview, tab_pitching, tab_hitting, tab_abs = st.tabs(
-        ["Series Overview", "Pitching Staff", "Hitting Lineup", "All At-Bats"])
+    # Section selector — only renders the active section (performance)
+    _ser_tabs = ["Series Overview", "Pitching Staff", "Hitting Lineup", "All At-Bats"]
+    _active_ser = st.radio(
+        "Section", _ser_tabs, horizontal=True, key="ser_tab_select",
+        label_visibility="collapsed")
 
-    with tab_overview:
+    if _active_ser == "Series Overview":
         _render_series_overview(combined_gd, selected_games, data)
-    with tab_pitching:
+    elif _active_ser == "Pitching Staff":
         _render_pitching_staff(combined_gd, data)
-    with tab_hitting:
+    elif _active_ser == "Hitting Lineup":
         _render_hitting_lineup(combined_gd, data)
-    with tab_abs:
+    elif _active_ser == "All At-Bats":
         _render_all_at_bats(combined_gd, data)
