@@ -572,33 +572,33 @@ def _feedback_block(ax, feedback):
     ax.set_xlim(0, 1); ax.set_ylim(0, 1)
     ax.axis("off")
     if not feedback:
-        ax.text(0.02, 0.85, "No specific notes.", fontsize=6, color="#999",
+        ax.text(0.02, 0.90, "No specific notes.", fontsize=5.5, color="#999",
                 va="top", ha="left", transform=ax.transAxes)
         return
     fb_str, fb_area = _split_feedback(feedback, {})
-    y = 0.95
+    y = 0.97
     if fb_str:
-        ax.text(0.02, y, "Strengths", fontsize=7, fontweight="bold",
+        ax.text(0.02, y, "Strengths", fontsize=6.5, fontweight="bold",
                 color="#2e7d32", va="top", ha="left", transform=ax.transAxes)
-        y -= 0.08
+        y -= 0.12
         for fb in fb_str[:3]:
-            ax.text(0.04, y, f"+ {fb}", fontsize=5.5, va="top", ha="left",
-                    color=_DARK, transform=ax.transAxes, wrap=True)
-            y -= 0.11
+            ax.text(0.04, y, f"+ {fb}", fontsize=5, va="top", ha="left",
+                    color=_DARK, transform=ax.transAxes)
+            y -= 0.12
     if fb_area:
-        ax.text(0.02, y, "Areas to Improve", fontsize=7, fontweight="bold",
+        ax.text(0.02, y, "Areas to Improve", fontsize=6.5, fontweight="bold",
                 color="#c62828", va="top", ha="left", transform=ax.transAxes)
-        y -= 0.08
-        for fb in fb_area[:3]:
-            ax.text(0.04, y, f"- {fb}", fontsize=5.5, va="top", ha="left",
-                    color=_DARK, transform=ax.transAxes, wrap=True)
-            y -= 0.11
+        y -= 0.12
+        for fb in fb_area[:2]:
+            ax.text(0.04, y, f"- {fb}", fontsize=5, va="top", ha="left",
+                    color=_DARK, transform=ax.transAxes)
+            y -= 0.12
     if not fb_str and not fb_area:
-        text = "\n".join(f"~ {fb}" for fb in feedback[:6])
-        ax.text(0.02, 0.92, "Feedback", fontsize=7, fontweight="bold",
+        text = "\n".join(f"~ {fb}" for fb in feedback[:4])
+        ax.text(0.02, 0.95, "Feedback", fontsize=6.5, fontweight="bold",
                 color=_DARK, va="top", ha="left", transform=ax.transAxes)
-        ax.text(0.02, 0.78, text, fontsize=6, va="top", ha="left",
-                color=_DARK, transform=ax.transAxes, linespacing=1.5, wrap=True)
+        ax.text(0.02, 0.80, text, fontsize=5, va="top", ha="left",
+                color=_DARK, transform=ax.transAxes, linespacing=1.5)
 
 
 # ── Season Delta Text ────────────────────────────────────────────────────────
@@ -740,6 +740,9 @@ def _render_cover(combined_gd, game_ids, series_label, data=None):
             result = "L"
         game_scores.append((date_str, innings, dav_r, opp_r, result))
 
+    # Sort games chronologically
+    game_scores.sort(key=lambda x: x[0])
+
     ax_record.text(0.5, 0.70, f"DAVIDSON  {dav_wins}  -  {dav_losses}  {opp_name.upper()}",
                    fontsize=28, fontweight="900", color=_DARK,
                    va="center", ha="center", transform=ax_record.transAxes)
@@ -846,28 +849,32 @@ def _render_takeaways_page(combined_gd, data, series_label):
     # Pitching takeaways
     ax_pit = fig.add_subplot(outer[1])
     ax_pit.axis("off")
-    ax_pit.set_title("PITCHING", fontsize=10, fontweight="bold",
-                     color=_DARK, loc="left", pad=4)
+    ax_pit.set_title("PITCHING", fontsize=11, fontweight="bold",
+                     color=_DARK, loc="left", pad=6)
     if pitching_bullets:
-        text = "\n".join(f"  - {b}" for b in pitching_bullets)
+        y = 0.88
+        for b in pitching_bullets:
+            ax_pit.text(0.04, y, f"- {b}", fontsize=9.5, va="top", ha="left",
+                        color=_DARK, transform=ax_pit.transAxes, fontfamily="sans-serif")
+            y -= 0.14
     else:
-        text = "  No pitching takeaways available."
-    ax_pit.text(0.03, 0.85, text, fontsize=9, va="top", ha="left",
-                color=_DARK, transform=ax_pit.transAxes,
-                linespacing=1.8, fontfamily="sans-serif")
+        ax_pit.text(0.04, 0.85, "No pitching takeaways available.", fontsize=9,
+                    color="#999", va="top", ha="left", transform=ax_pit.transAxes)
 
     # Hitting takeaways
     ax_hit = fig.add_subplot(outer[2])
     ax_hit.axis("off")
-    ax_hit.set_title("HITTING", fontsize=10, fontweight="bold",
-                     color=_DARK, loc="left", pad=4)
+    ax_hit.set_title("HITTING", fontsize=11, fontweight="bold",
+                     color=_DARK, loc="left", pad=6)
     if hitting_bullets:
-        text = "\n".join(f"  - {b}" for b in hitting_bullets)
+        y = 0.88
+        for b in hitting_bullets:
+            ax_hit.text(0.04, y, f"- {b}", fontsize=9.5, va="top", ha="left",
+                        color=_DARK, transform=ax_hit.transAxes, fontfamily="sans-serif")
+            y -= 0.14
     else:
-        text = "  No hitting takeaways available."
-    ax_hit.text(0.03, 0.85, text, fontsize=9, va="top", ha="left",
-                color=_DARK, transform=ax_hit.transAxes,
-                linespacing=1.8, fontfamily="sans-serif")
+        ax_hit.text(0.04, 0.85, "No hitting takeaways available.", fontsize=9,
+                    color="#999", va="top", ha="left", transform=ax_hit.transAxes)
 
     _add_page_number(fig)
     return fig
@@ -985,9 +992,10 @@ def _render_hitter_page(bdf, data, batter, series_label, game_ids=None):
                 "Pitches": len(ab_sorted), "Result": result, "Score": score,
             })
 
-    # Show ALL at-bats (no cap)
-    ab_display = ab_rows
-    ab_overflow = 0
+    # Cap at-bats for PDF layout (Streamlit shows all)
+    _MAX_AB_PDF = 8
+    ab_display = ab_rows[:_MAX_AB_PDF]
+    ab_overflow = max(0, len(ab_rows) - _MAX_AB_PDF)
 
     fig = plt.figure(figsize=_FIG_SIZE)
     fig.patch.set_facecolor("white")
@@ -1057,7 +1065,7 @@ def _render_hitter_page(bdf, data, batter, series_label, game_ids=None):
 
     # Row 3 right: AB grades + feedback + season delta (3 sub-rows)
     r3_right = gridspec.GridSpecFromSubplotSpec(3, 1, subplot_spec=outer[3, 1],
-        height_ratios=[0.45, 0.30, 0.25], hspace=0.08)
+        height_ratios=[0.50, 0.28, 0.22], hspace=0.12)
     ax_ab = fig.add_subplot(r3_right[0])
     if ab_display:
         _ab_grades_table(ax_ab, ab_display)
