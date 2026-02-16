@@ -27,8 +27,18 @@ def add_view_badge(fig, view="Catcher"):
     return fig
 
 
-def add_strike_zone(fig, label=True):
+def add_strike_zone(fig, label=True, grid=False):
     fig.add_shape(strike_zone_rect())
+    if grid:
+        third_x = ZONE_SIDE / 3
+        third_y = (ZONE_HEIGHT_TOP - ZONE_HEIGHT_BOT) / 3
+        for x in [-third_x, third_x]:
+            fig.add_shape(type="line", x0=x, y0=ZONE_HEIGHT_BOT, x1=x, y1=ZONE_HEIGHT_TOP,
+                         line=dict(color="#ccc", width=0.5, dash="dot"))
+        for i in [1, 2]:
+            y = ZONE_HEIGHT_BOT + third_y * i
+            fig.add_shape(type="line", x0=-ZONE_SIDE, y0=y, x1=ZONE_SIDE, y1=y,
+                         line=dict(color="#ccc", width=0.5, dash="dot"))
     if label:
         add_view_badge(fig, "Catcher")
     return fig

@@ -1807,3 +1807,21 @@ def generate_postgame_pdf_bytes(gd, data, game_label) -> bytes:
 
     buf.seek(0)
     return buf.read()
+
+
+def generate_umpire_pdf_bytes(gd, game_label) -> bytes:
+    """Generate a standalone umpire report PDF in memory.
+
+    Returns raw bytes suitable for st.download_button.
+    """
+    buf = io.BytesIO()
+    with PdfPages(buf) as pdf:
+        try:
+            fig = _render_umpire_page(gd, game_label)
+            if fig:
+                pdf.savefig(fig)
+                plt.close(fig)
+        except Exception:
+            traceback.print_exc()
+    buf.seek(0)
+    return buf.read()

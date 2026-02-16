@@ -188,8 +188,19 @@ def _pg_build_pa_pitch_rows(ab_df):
     return rows
 
 
+_CALL_BORDER_COLORS = {
+    "BallCalled": "#2ca02c",
+    "StrikeCalled": "#d62728",
+    "StrikeSwinging": "#ff7f0e",
+    "FoulBall": "#f7c631",
+    "FoulBallNotFieldable": "#f7c631",
+    "FoulBallFieldable": "#f7c631",
+    "InPlay": "#1f77b4",
+}
+
+
 def _pg_mini_location_plot(ab_df, key_suffix=""):
-    """Create a small location scatter for a single at-bat with numbered pitches.
+    """Create a location scatter for a single at-bat with numbered pitches.
 
     Pitch numbers match the original PA sequence (1-based), so numbers
     stay consistent with the pitch table even when some pitches lack location.
@@ -204,20 +215,33 @@ def _pg_mini_location_plot(ab_df, key_suffix=""):
     for _, row in loc.iterrows():
         pnum = int(row["_OrigPitchNum"])
         pt = row.get("TaggedPitchType", "Other")
+        call = row.get("PitchCall", "")
         color = PITCH_COLORS.get(pt, "#aaa")
+        border_color = _CALL_BORDER_COLORS.get(call, "white")
+        velo = row.get("RelSpeed", np.nan)
+        ev = row.get("ExitSpeed", np.nan)
+        la = row.get("Angle", np.nan)
+        velo_str = f" {velo:.0f}mph" if pd.notna(velo) else ""
+        ev_str = f"EV: {ev:.0f}mph" if pd.notna(ev) else ""
+        la_str = f"LA: {la:.0f}°" if pd.notna(la) else ""
+        extra_line = " ".join(filter(None, [ev_str, la_str]))
+        hover_parts = [f"#{pnum} {pt}{velo_str}", call]
+        if extra_line:
+            hover_parts.append(extra_line)
+        hover = "<br>".join(hover_parts)
         fig.add_trace(go.Scatter(
             x=[row["PlateLocSide"]], y=[row["PlateLocHeight"]],
             mode="markers+text", text=[str(pnum)],
-            textposition="top center", textfont=dict(size=9, color="#000000"),
-            marker=dict(size=10, color=color, line=dict(width=1, color="white")),
+            textposition="top center", textfont=dict(size=10, color="#000000"),
+            marker=dict(size=14, color=color, line=dict(width=2, color=border_color)),
             showlegend=False,
-            hovertemplate=f"#{pnum} {pt}<br>{row.get('PitchCall','')}<extra></extra>",
+            hovertemplate=f"{hover}<extra></extra>",
         ))
-    add_strike_zone(fig)
+    add_strike_zone(fig, grid=True)
     fig.update_layout(
-        xaxis=dict(range=[-2.5, 2.5], showgrid=False, zeroline=False, showticklabels=False, fixedrange=True, scaleanchor="y"),
-        yaxis=dict(range=[0, 5], showgrid=False, zeroline=False, showticklabels=False, fixedrange=True),
-        height=280, margin=dict(l=5, r=5, t=5, b=5),
+        xaxis=dict(range=[-2.0, 2.0], showgrid=False, zeroline=False, showticklabels=False, fixedrange=True, scaleanchor="y"),
+        yaxis=dict(range=[0.5, 4.5], showgrid=False, zeroline=False, showticklabels=False, fixedrange=True),
+        height=380, margin=dict(l=5, r=5, t=5, b=5),
         plot_bgcolor="white", paper_bgcolor="white",
     )
     return fig
@@ -1007,14 +1031,14 @@ def _pg_hitter_detail(bdf, data, batter):
                                                         line=dict(width=1, color="white")),
                             name="Swung", showlegend=False,
                         ))
-                    add_strike_zone(fig_pt)
+                    add_strike_zone(fig_pt, grid=True)
                     fig_pt.update_layout(
                         title=dict(text=f"{pt} ({len(pt_locs)})", font=dict(size=12)),
-                        xaxis=dict(range=[-2.5, 2.5], showgrid=False, zeroline=False,
+                        xaxis=dict(range=[-2.0, 2.0], showgrid=False, zeroline=False,
                                    showticklabels=False, fixedrange=True, scaleanchor="y"),
-                        yaxis=dict(range=[0, 5], showgrid=False, zeroline=False,
+                        yaxis=dict(range=[0.5, 4.5], showgrid=False, zeroline=False,
                                    showticklabels=False, fixedrange=True),
-                        height=260, plot_bgcolor="white", paper_bgcolor="white",
+                        height=320, plot_bgcolor="white", paper_bgcolor="white",
                         margin=dict(l=5, r=5, t=30, b=5),
                     )
                     st.plotly_chart(fig_pt, use_container_width=True, key=f"pg_hit_ploc_{slug}_{pt}")
@@ -1022,50 +1046,64 @@ def _pg_hitter_detail(bdf, data, batter):
     else:
         st.caption("No pitch location data available.")
 
-    # Full width — Key at-bats
-    section_header("Key At-Bats")
+    # Full width — All At-Bats
+    section_header("All At-Bats")
     pa_cols = [c for c in ["GameID", "Batter", "Inning", "PAofInning"] if c in bdf.columns]
     sort_cols = [c for c in ["Inning", "PAofInning", "PitchNo"] if c in bdf.columns]
+    season_bdf = data[data["Batter"] == batter] if data is not None and not data.empty else pd.DataFrame()
     if len(pa_cols) >= 2:
-        # Identify key ABs: HR, XBH, K, BB, long PAs (6+ pitches)
         pa_groups = []
-        for pa_key, ab in bdf.groupby(pa_cols[1:]):  # group within game
-            if not isinstance(pa_key, tuple):
-                pa_key = (pa_key,)
+        for pa_key, ab in bdf.groupby(pa_cols[1:]):
             ab_sorted = ab.sort_values(sort_cols) if sort_cols else ab
-            is_key = False
-            result_label = ""
-            if "PlayResult" in ab.columns:
-                if ab["PlayResult"].eq("HomeRun").any():
-                    is_key, result_label = True, "HR"
-                elif ab["PlayResult"].isin(["Double", "Triple"]).any():
-                    is_key, result_label = True, ab[ab["PlayResult"].isin(["Double", "Triple"])]["PlayResult"].iloc[0]
-            if "KorBB" in ab.columns:
-                if ab["KorBB"].eq("Strikeout").any():
-                    is_key, result_label = True, result_label or "K"
-                elif ab["KorBB"].eq("Walk").any():
-                    is_key, result_label = True, result_label or "BB"
-            if len(ab) >= 6:
-                is_key = True
-                result_label = result_label or f"{len(ab)}-pitch PA"
-            if is_key:
-                pa_groups.append((ab_sorted, result_label))
+            inn = ab_sorted.iloc[0].get("Inning", "?")
+            pa_groups.append((inn, ab_sorted))
+        pa_groups.sort(key=lambda x: (int(x[0]) if pd.notna(x[0]) and str(x[0]).isdigit() else 99))
 
         if pa_groups:
-            for ab, result_label in pa_groups:
-                inn = ab.iloc[0].get("Inning", "?")
-                pitcher_name = display_name(ab.iloc[0]["Pitcher"]) if "Pitcher" in ab.columns else "?"
-                st.markdown(f"**Inn {inn}** vs {pitcher_name} — **{result_label}** ({len(ab)} pitches)")
-                ab_c1, ab_c2 = st.columns([1, 2])
-                with ab_c1:
-                    fig_ab = _pg_mini_location_plot(ab)
-                    if fig_ab:
-                        ab_key = f"pg_hit_kab_{slug}_{inn}_{_pg_slug(str(ab.iloc[0].get('Pitcher','')))}"
-                        st.plotly_chart(fig_ab, use_container_width=True, key=ab_key)
-                with ab_c2:
-                    st.caption(_pg_pitch_sequence_text(ab))
+            for pa_idx, (inn, ab_sorted) in enumerate(pa_groups):
+                score, letter, result = _grade_at_bat(ab_sorted, season_bdf)
+                vs_pitcher = display_name(ab_sorted.iloc[0]["Pitcher"], escape_html=False) if "Pitcher" in ab_sorted.columns else "?"
+                n_pitches_pa = len(ab_sorted)
+                grade_color = _grade_color(letter)
+                label = f"Inn {inn} vs {vs_pitcher} — {result} ({n_pitches_pa}p) [{letter}]"
+                with st.expander(label):
+                    col_table, col_zone = st.columns([0.5, 0.5])
+                    with col_table:
+                        pitch_rows = _pg_build_pa_pitch_rows(ab_sorted)
+                        if pitch_rows:
+                            st.dataframe(pd.DataFrame(pitch_rows), use_container_width=True, hide_index=True)
+                    with col_zone:
+                        fig_ab = _pg_mini_location_plot(ab_sorted, key_suffix=f"hit_{slug}_ab{pa_idx}")
+                        if fig_ab:
+                            st.plotly_chart(fig_ab, use_container_width=True, key=f"pg_hit_ab_{slug}_{pa_idx}")
+                        else:
+                            st.caption("No location data")
+                    # Pitch sequence text
+                    st.caption(_pg_pitch_sequence_text(ab_sorted))
+                    # Swing decision annotation
+                    loc = ab_sorted.dropna(subset=["PlateLocSide", "PlateLocHeight"])
+                    if not loc.empty:
+                        iz = in_zone_mask(loc)
+                        oz_pitches = loc[~iz]
+                        oz_swings = oz_pitches[oz_pitches["PitchCall"].isin(SWING_CALLS)]
+                        iz_pitches = loc[iz]
+                        iz_takes = iz_pitches[~iz_pitches["PitchCall"].isin(SWING_CALLS)]
+                        notes = []
+                        if len(oz_swings) > 0:
+                            notes.append(f"Chased {len(oz_swings)}x outside zone")
+                        if len(iz_pitches) > 0 and len(iz_takes) > 0:
+                            take_pct = len(iz_takes) / len(iz_pitches) * 100
+                            if take_pct > 50:
+                                notes.append(f"Took {take_pct:.0f}% of in-zone pitches")
+                        ip = ab_sorted[ab_sorted["PitchCall"] == "InPlay"]
+                        if "ExitSpeed" in ip.columns and not ip.empty:
+                            ev = ip["ExitSpeed"].dropna()
+                            if not ev.empty:
+                                notes.append(f"Exit Velo: {ev.iloc[0]:.0f} mph")
+                        if notes:
+                            st.caption(" | ".join(notes))
         else:
-            st.caption("No notable at-bats (HR, XBH, K, BB, or 6+ pitch PA).")
+            st.caption("No plate appearances found.")
     else:
         st.caption("PA identification columns not available.")
 
@@ -2953,6 +2991,17 @@ def page_postgame(data):
             st.download_button(
                 "Download AB Review", data=st.session_state.pg_ab_review_bytes,
                 file_name=f"ab_review_{sel_game}.pdf", mime="application/pdf")
+
+        if st.button("Export Umpire PDF", key="pg_gen_ump_pdf"):
+            with st.spinner("Building Umpire PDF..."):
+                from generate_postgame_report_pdf import generate_umpire_pdf_bytes
+                st.session_state.pg_ump_pdf_bytes = generate_umpire_pdf_bytes(gd, pdf_game_label)
+                st.session_state.pg_ump_pdf_game = sel_game
+
+        if st.session_state.get("pg_ump_pdf_bytes") and st.session_state.get("pg_ump_pdf_game") == sel_game:
+            st.download_button(
+                "Download Umpire PDF", data=st.session_state.pg_ump_pdf_bytes,
+                file_name=f"umpire_{sel_game}.pdf", mime="application/pdf")
 
     _postgame_summary(gd)
 

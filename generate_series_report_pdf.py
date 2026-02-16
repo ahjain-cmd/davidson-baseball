@@ -55,6 +55,7 @@ from _pages.postgame import (
     _letter_grade,
     _grade_color,
     _pg_estimate_ip,
+    _pg_build_pa_pitch_rows,
     _score_linear,
     _compute_takeaways,
     _tier_label,
@@ -1222,6 +1223,170 @@ def _render_hitting_summary(combined_gd, series_label):
     return fig
 
 
+# ── Per-Hitter AB Review Pages ───────────────────────────────────────────────
+
+def _mpl_pa_zone_plot(ax, ab_df):
+    """Numbered pitch locations for a single PA, colored by pitch type."""
+    ab_numbered = ab_df.copy()
+    ab_numbered["_OrigPitchNum"] = range(1, len(ab_numbered) + 1)
+    loc = ab_numbered.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
+    ax.set_xlim(-2.0, 2.0)
+    ax.set_ylim(0.5, 4.5)
+    ax.set_aspect("equal")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for sp in ax.spines.values():
+        sp.set_linewidth(0.5)
+        sp.set_color("#ddd")
+    _draw_zone_rect(ax)
+    # 3x3 grid lines
+    third_x = ZONE_SIDE / 3
+    third_y = (ZONE_HEIGHT_TOP - ZONE_HEIGHT_BOT) / 3
+    for x in [-third_x, third_x]:
+        ax.plot([x, x], [ZONE_HEIGHT_BOT, ZONE_HEIGHT_TOP],
+                color="#ccc", linewidth=0.5, linestyle=":", zorder=4)
+    for i in [1, 2]:
+        y = ZONE_HEIGHT_BOT + third_y * i
+        ax.plot([-ZONE_SIDE, ZONE_SIDE], [y, y],
+                color="#ccc", linewidth=0.5, linestyle=":", zorder=4)
+    if loc.empty:
+        ax.text(0.5, 0.5, "No location\ndata", fontsize=8, color="#999",
+                ha="center", va="center", transform=ax.transAxes)
+        return
+    for _, row in loc.iterrows():
+        pnum = int(row["_OrigPitchNum"])
+        pt = row.get("TaggedPitchType", "Other")
+        color = PITCH_COLORS.get(pt, "#aaa")
+        ax.scatter(row["PlateLocSide"], row["PlateLocHeight"],
+                   c=color, s=120, alpha=0.85, edgecolors="white",
+                   linewidths=0.5, zorder=10)
+        ax.text(row["PlateLocSide"], row["PlateLocHeight"], str(pnum),
+                fontsize=6, fontweight="bold", color="white",
+                ha="center", va="center", zorder=11)
+
+
+def _render_hitter_ab_pages(bdf, data, batter, series_label, game_ids):
+    """Per-AB review pages for a hitter across a series. ~3 ABs per page.
+    Returns list of Figure objects."""
+    pa_cols = [c for c in ["GameID", "Batter", "Inning", "PAofInning"] if c in bdf.columns]
+    sort_cols = [c for c in ["Inning", "PAofInning", "PitchNo"] if c in bdf.columns]
+    if len(pa_cols) < 2:
+        return []
+
+    season_bdf = data[data["Batter"] == batter] if data is not None and not data.empty else pd.DataFrame()
+
+    pa_list = []
+    for pa_key, ab in bdf.groupby(pa_cols[1:]):
+        ab_sorted = ab.sort_values(sort_cols) if sort_cols else ab
+        inn = ab_sorted.iloc[0].get("Inning", "?")
+        game_id = ab_sorted.iloc[0].get("GameID", "")
+        game_date_str = ""
+        if "Date" in ab_sorted.columns:
+            d = ab_sorted.iloc[0].get("Date")
+            if pd.notna(d):
+                game_date_str = pd.Timestamp(d).strftime("%m/%d")
+        pa_list.append((inn, ab_sorted, game_date_str))
+    pa_list.sort(key=lambda x: (x[2], int(x[0]) if pd.notna(x[0]) and str(x[0]).isdigit() else 99))
+
+    if not pa_list:
+        return []
+
+    dname = display_name(batter, escape_html=False)
+    figures = []
+    PAS_PER_PAGE = 3
+
+    for page_start in range(0, len(pa_list), PAS_PER_PAGE):
+        page_pas = pa_list[page_start:page_start + PAS_PER_PAGE]
+        n_pas_page = len(page_pas)
+
+        fig = plt.figure(figsize=_FIG_SIZE)
+        fig.patch.set_facecolor("white")
+
+        h_ratios = [0.08] + [0.28] * n_pas_page
+        remaining = 1.0 - sum(h_ratios)
+        if remaining > 0.01:
+            h_ratios.append(remaining)
+        n_rows = len(h_ratios)
+
+        page_outer = gridspec.GridSpec(n_rows, 1, figure=fig,
+            height_ratios=h_ratios, hspace=0.10,
+            top=0.97, bottom=0.03, left=0.04, right=0.96)
+
+        _header_bar(fig, page_outer[0],
+                    f"SERIES AB REVIEW  |  {dname}  |  {series_label}")
+
+        for pa_i, (inn, ab_sorted, game_date_str) in enumerate(page_pas):
+            row_gs = gridspec.GridSpecFromSubplotSpec(1, 2,
+                subplot_spec=page_outer[1 + pa_i],
+                wspace=0.08, width_ratios=[0.6, 0.4])
+
+            vs_pitcher = display_name(ab_sorted.iloc[0]["Pitcher"], escape_html=False) if "Pitcher" in ab_sorted.columns else "?"
+            last = ab_sorted.iloc[-1]
+            result = "?"
+            if last.get("KorBB") == "Strikeout":
+                result = "K"
+            elif last.get("KorBB") == "Walk":
+                result = "BB"
+            elif last.get("PitchCall") == "HitByPitch":
+                result = "HBP"
+            elif pd.notna(last.get("PlayResult")) and last.get("PlayResult") not in ("Undefined", ""):
+                result = last["PlayResult"]
+
+            score, letter, _ = _grade_at_bat(ab_sorted, season_bdf)
+            date_prefix = f"[{game_date_str}] " if game_date_str else ""
+            pa_header = f"{date_prefix}Inn {inn} vs {vs_pitcher} — {result} ({len(ab_sorted)}p) [{letter}]"
+
+            # Left: pitch table
+            ax_table = fig.add_subplot(row_gs[0, 0])
+            ax_table.axis("off")
+            ax_table.set_title(pa_header, fontsize=7.5, fontweight="bold",
+                              color=_DARK, loc="left", pad=2)
+
+            pitch_rows = _pg_build_pa_pitch_rows(ab_sorted)
+            if pitch_rows:
+                table_data = [
+                    [str(r["#"]), r["Count"], r["Type"], r["Velo"], r["Call"], r["EV"], r["LA"]]
+                    for r in pitch_rows
+                ]
+                _styled_table(ax_table, table_data,
+                             ["#", "Count", "Type", "Velo", "Call", "EV", "LA"],
+                             [0.06, 0.10, 0.18, 0.12, 0.12, 0.12, 0.10],
+                             fontsize=6.5, row_height=1.3)
+
+            # Swing decision annotation below the table
+            loc = ab_sorted.dropna(subset=["PlateLocSide", "PlateLocHeight"])
+            notes = []
+            if not loc.empty:
+                iz = in_zone_mask(loc)
+                oz_swings = loc[~iz & loc["PitchCall"].isin(SWING_CALLS)]
+                iz_pitches = loc[iz]
+                iz_takes = iz_pitches[~iz_pitches["PitchCall"].isin(SWING_CALLS)]
+                if len(oz_swings) > 0:
+                    notes.append(f"Chased {len(oz_swings)}x outside zone")
+                if len(iz_pitches) > 0 and len(iz_takes) > 0:
+                    take_pct = len(iz_takes) / len(iz_pitches) * 100
+                    if take_pct > 50:
+                        notes.append(f"Took {take_pct:.0f}% in-zone")
+            ip = ab_sorted[ab_sorted["PitchCall"] == "InPlay"]
+            if "ExitSpeed" in ip.columns and not ip.empty:
+                ev = ip["ExitSpeed"].dropna()
+                if not ev.empty:
+                    notes.append(f"EV: {ev.iloc[0]:.0f} mph")
+            if notes:
+                ax_table.text(0.02, 0.02, " | ".join(notes),
+                             fontsize=5.5, color="#666", va="bottom", ha="left",
+                             transform=ax_table.transAxes)
+
+            # Right: zone plot
+            ax_zone = fig.add_subplot(row_gs[0, 1])
+            _mpl_pa_zone_plot(ax_zone, ab_sorted)
+
+        _add_page_number(fig)
+        figures.append(fig)
+
+    return figures
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # PUBLIC API
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1298,16 +1463,21 @@ def generate_series_pdf_bytes(game_ids, data, series_label) -> bytes:
         except Exception:
             traceback.print_exc()
 
-        # 6. Individual Hitter pages (5+ PAs only)
+        # 6. Individual Hitter pages + AB review pages
         dav_hitting = combined_gd[combined_gd["BatterTeam"] == DAVIDSON_TEAM_ID].copy()
         if not dav_hitting.empty:
             batters = dav_hitting.groupby("Batter").size().sort_values(ascending=False).index.tolist()
             for batter in batters:
                 try:
                     batter_df = dav_hitting[dav_hitting["Batter"] == batter].copy()
+                    # Summary page
                     fig = _render_hitter_page(batter_df, data, batter, series_label, game_ids)
                     if fig:
                         pdf.savefig(fig); plt.close(fig)
+                    # AB review pages
+                    ab_figs = _render_hitter_ab_pages(batter_df, data, batter, series_label, game_ids)
+                    for ab_fig in ab_figs:
+                        pdf.savefig(ab_fig); plt.close(ab_fig)
                 except Exception:
                     traceback.print_exc()
 
