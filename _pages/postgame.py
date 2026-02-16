@@ -2379,7 +2379,9 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
     top_sequences = _pit_rank_sequences_from_pdf(game_pdf, pitch_metrics, tunnel_df, top_n=2, min_n=3)
 
     # --- Sequence Utilization Score (50%) ---
-    seq_util_score = 50.0  # default
+    # Measures how often the pitcher used their most effective pitch pairings.
+    # Default 65 (neutral C+) when pairs can't be computed from small samples.
+    seq_util_score = 65.0
     usage_count = 0
     total_transitions = 1
     usage_pct = 0.0
@@ -2408,9 +2410,10 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
                 if key in top_pair_keys:
                     usage_count += 1
             usage_pct = usage_count / total_transitions * 100
-            n_pitch_types = len(set(game_types))
-            expected_pct = max(20.0, 100.0 / max(n_pitch_types, 1))
-            seq_util_score = min(usage_pct / expected_pct, 1.0) * 100
+            # Scale: 0% usage → 30, 15% → 55, 30% → 80, 50%+ → 100
+            # This recognizes that using top pairs in 25-30% of transitions is good
+            # (pitchers need variety — top 2 of ~6-10 possible pairs)
+            seq_util_score = min(100, max(0, 30 + usage_pct * 1.4))
 
     # --- Location Execution Score (50%) ---
     loc_exec_score = 50.0
@@ -2455,7 +2458,12 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
                 }
 
         if total_count > 0:
-            loc_exec_score = in_best_count / total_count * 100
+            in_best_pct = in_best_count / total_count * 100
+            # Rescale: random baseline is 22% (2 of 9 zones).
+            # 15% → 0, 25% → 40, 35% → 65, 45% → 85, 55%+ → 100
+            # Recognizes that pitchers need zone variety — hitting best zones
+            # 35-45% of the time is genuinely good command.
+            loc_exec_score = min(100, max(0, (in_best_pct - 15) / 0.45))
 
     # Combined grade
     combined = 0.50 * seq_util_score + 0.50 * loc_exec_score
