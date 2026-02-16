@@ -3,11 +3,13 @@ import streamlit as st
 
 GLOBAL_CSS = """<style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
-    /* Hide garbled Material Symbols icon text in expander toggles (Docker font issue) */
-    .material-symbols-outlined {
-        font-size: 0 !important;
-        width: 0 !important;
-        overflow: hidden !important;
+    /* Override Streamlit's broken Material Symbols font (Tornado fails to serve .woff2) */
+    @font-face {
+        font-family: 'Material Symbols Rounded';
+        font-style: normal;
+        font-weight: 400;
+        font-display: block;
+        src: url('https://fonts.gstatic.com/s/materialsymbolsrounded/v316/syl0-zNym6YjUruM-QrEh7-nyTnjDwKNJ_190FjpZIvDmUSVOK7BDB_Qb9vUSzq3wzLK-P0J-V_Zs-QtQth3-jOcbTCVpeRL2w5rwZu2rIelXxI.ttf') format('truetype');
     }
 
     /* Force light backgrounds everywhere */
