@@ -556,20 +556,27 @@ def _stuff_cmd_bars(ax, stuff_by_pt, cmd_df, stuff_pop=None):
 
 # ── Best Swing Zones Heatmap ─────────────────────────────────────────────────
 
-def _mpl_best_zone_heatmap(ax, bdf, bats):
-    """Matplotlib 3x3 best-zone heatmap for PDF hitter pages."""
+def _mpl_best_zone_heatmap(ax_heat, ax_key, bdf, bats):
+    """Matplotlib 3x3 best-zone heatmap with description key for PDF hitter pages.
+
+    ax_heat: axes for the 3x3 heatmap grid
+    ax_key:  axes for the color key / description below the heatmap
+    """
     from scipy.stats import percentileofscore as _pctile
 
     loc_df = bdf.dropna(subset=["PlateLocSide", "PlateLocHeight"])
     if len(loc_df) < 30:
-        ax.axis("off")
-        ax.text(0.5, 0.5, "Not enough data", fontsize=7, color="#999",
-                ha="center", va="center", transform=ax.transAxes)
+        ax_heat.axis("off")
+        ax_heat.text(0.5, 0.5, "Not enough data\n(need 30+ pitches)",
+                     fontsize=7, color="#999",
+                     ha="center", va="center", transform=ax_heat.transAxes)
+        ax_key.axis("off")
         return
 
     zone_metrics = compute_zone_swing_metrics(bdf, bats)
     if zone_metrics is None:
-        ax.axis("off")
+        ax_heat.axis("off")
+        ax_key.axis("off")
         return
 
     # Gather raw values for percentile ranking
@@ -612,9 +619,9 @@ def _mpl_best_zone_heatmap(ax, bdf, bats):
 
     cmap = plt.cm.RdYlGn
     masked = np.ma.masked_invalid(grid)
-    ax.imshow(masked, cmap=cmap, vmin=0, vmax=100, aspect="auto")
+    ax_heat.imshow(masked, cmap=cmap, vmin=0, vmax=100, aspect="auto")
 
-    # Text overlay
+    # Text overlay — labeled EV and Brl%
     idx = 0
     for yb in range(3):
         for xb in range(3):
@@ -622,27 +629,28 @@ def _mpl_best_zone_heatmap(ax, bdf, bats):
             r, c = 2 - yb, xb
             v = grid[r, c]
             if not np.isnan(v):
-                ev_str = f"{m.get('ev_mean', 0):.0f}" if m.get("n_contact", 0) >= 5 and "ev_mean" in m else ""
-                bp_str = f"{m.get('barrel_pct', 0):.0f}%" if m.get("n_contact", 0) >= 5 and "barrel_pct" in m else ""
+                has_stats = m.get("n_contact", 0) >= 5
+                ev_str = f"EV {m.get('ev_mean', 0):.0f}" if has_stats and "ev_mean" in m else ""
+                bp_str = f"Brl {m.get('barrel_pct', 0):.0f}%" if has_stats and "barrel_pct" in m else ""
                 txt = f"{ev_str}\n{bp_str}" if ev_str and bp_str else ev_str or bp_str
                 brightness = v / 100.0
                 color = "white" if brightness > 0.7 or brightness < 0.15 else "black"
-                ax.text(c, r, txt, ha="center", va="center", fontsize=6,
-                        fontweight="bold", color=color)
+                ax_heat.text(c, r, txt, ha="center", va="center", fontsize=5.5,
+                             fontweight="bold", color=color)
             idx += 1
 
     # Zone styling
     for x in [0.5, 1.5]:
-        ax.axvline(x, color="white", lw=1.5, zorder=2)
+        ax_heat.axvline(x, color="white", lw=1.5, zorder=2)
     for y in [0.5, 1.5]:
-        ax.axhline(y, color="white", lw=1.5, zorder=2)
-    ax.add_patch(Rectangle((-0.5, -0.5), 3, 3, fill=False,
-                            edgecolor="#555", lw=1.2, ls="--", zorder=3))
-    ax.add_patch(Rectangle((0.17, -0.17), 1.66, 2.0, fill=False,
-                            edgecolor="black", lw=2.5, zorder=4))
-    ax.set_yticks([0, 2])
-    ax.set_yticklabels(["UP", "DOWN"], fontsize=6, fontweight="bold")
-    ax.tick_params(axis="y", length=0, pad=2)
+        ax_heat.axhline(y, color="white", lw=1.5, zorder=2)
+    ax_heat.add_patch(Rectangle((-0.5, -0.5), 3, 3, fill=False,
+                                edgecolor="#555", lw=1.2, ls="--", zorder=3))
+    ax_heat.add_patch(Rectangle((0.17, -0.17), 1.66, 2.0, fill=False,
+                                edgecolor="black", lw=2.5, zorder=4))
+    ax_heat.set_yticks([0, 2])
+    ax_heat.set_yticklabels(["UP", "DOWN"], fontsize=6, fontweight="bold")
+    ax_heat.tick_params(axis="y", length=0, pad=2)
     b = bats[0].upper() if isinstance(bats, str) and bats else "R"
     if b == "R":
         left_lbl, right_lbl = "IN", "AWAY"
@@ -650,10 +658,32 @@ def _mpl_best_zone_heatmap(ax, bdf, bats):
         left_lbl, right_lbl = "AWAY", "IN"
     else:
         left_lbl, right_lbl = "L", "R"
-    ax.set_xticks([0, 2])
-    ax.set_xticklabels([left_lbl, right_lbl], fontsize=5.5, fontweight="bold")
-    ax.tick_params(axis="x", length=0, pad=2)
-    ax.set_title("Best Hitting Zones", fontsize=7, fontweight="bold", color=_DARK, pad=3)
+    ax_heat.set_xticks([0, 2])
+    ax_heat.set_xticklabels([left_lbl, right_lbl], fontsize=5.5, fontweight="bold")
+    ax_heat.tick_params(axis="x", length=0, pad=2)
+    ax_heat.set_title("Best Hitting Zones  (Season)", fontsize=7,
+                      fontweight="bold", color=_DARK, pad=3)
+
+    # ── Key / description below the heatmap ──
+    ax_key.set_xlim(0, 1); ax_key.set_ylim(0, 1)
+    ax_key.axis("off")
+
+    # Color gradient bar
+    gradient = np.linspace(0, 100, 256).reshape(1, -1)
+    ax_key.imshow(gradient, cmap=cmap, aspect="auto",
+                  extent=[0.10, 0.90, 0.72, 0.92], zorder=5)
+    ax_key.text(0.10, 0.62, "Cold", fontsize=5, color="#c62828",
+                fontweight="bold", va="top", ha="left", transform=ax_key.transAxes)
+    ax_key.text(0.90, 0.62, "Hot", fontsize=5, color="#2e7d32",
+                fontweight="bold", va="top", ha="right", transform=ax_key.transAxes)
+
+    # Description lines
+    n_bbe = sum(m.get("n_contact", 0) for m in zone_metrics.values())
+    ax_key.text(0.50, 0.42, f"Season data  |  {len(loc_df)} pitches  |  {n_bbe} batted balls",
+                fontsize=4.5, color="#666", va="top", ha="center", transform=ax_key.transAxes)
+    ax_key.text(0.50, 0.22,
+                "Score = 45% Exit Velo + 30% Barrel% + 25% Contact%",
+                fontsize=4.5, color="#888", va="top", ha="center", transform=ax_key.transAxes)
 
 
 # ── Feedback ─────────────────────────────────────────────────────────────────
@@ -1133,10 +1163,13 @@ def _render_hitter_page(bdf, data, batter, series_label, game_ids=None):
     ax_fb = fig.add_subplot(r1_left[1])
     _feedback_block(ax_fb, feedback)
 
-    # Center: Best Swing Zones (season-long data)
-    ax_zones = fig.add_subplot(r1[1])
+    # Center: Best Swing Zones (season-long data) — heatmap + key
+    r1_center = gridspec.GridSpecFromSubplotSpec(2, 1, subplot_spec=r1[1],
+        height_ratios=[0.78, 0.22], hspace=0.05)
+    ax_zones = fig.add_subplot(r1_center[0])
+    ax_zones_key = fig.add_subplot(r1_center[1])
     bats = season_bdf["BatterSide"].iloc[0] if "BatterSide" in season_bdf.columns and len(season_bdf) > 0 else "Right"
-    _mpl_best_zone_heatmap(ax_zones, season_bdf, bats)
+    _mpl_best_zone_heatmap(ax_zones, ax_zones_key, season_bdf, bats)
 
     # Right: Spray chart
     ax_spray = fig.add_subplot(r1[2])
