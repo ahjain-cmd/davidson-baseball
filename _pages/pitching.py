@@ -56,9 +56,9 @@ def _score_csw(csw):
     return _score_linear(csw, 0, 50)
 
 
-def _score_slg(slg):
-    # Lower SLG is better for pitcher. Map .100-.900 → 100-0.
-    return _score_linear(slg, 0.1, 0.9, invert=True)
+def _score_chase(chase):
+    # Higher chase% = better for pitcher. Map 0-60 → 0-100.
+    return _score_linear(chase, 0, 60)
 
 
 def _score_stuff(stuff):
@@ -113,7 +113,7 @@ def _pair_stats(pair_df, a, b):
         "k": _wavg("K%"),
         "csw": _wavg("CSW%"),
         "ev": _wavg("Avg EV"),
-        "slg": _wavg("SLG"),
+        "chase": _wavg("Chase%"),
         "putaway": _wavg("Putaway%"),
         "count": float(w.sum()),
         "count_ab": count_ab,
@@ -155,7 +155,7 @@ def _rank_pairs(tunnel_df, pair_df, pitch_metrics, top_n=2):
         whiff = ps.get("whiff", np.nan)
         csw = ps.get("csw", np.nan)
         ev = ps.get("ev", np.nan)
-        slg = ps.get("slg", np.nan)
+        chase = ps.get("chase", np.nan)
         count_ab = ps.get("count_ab", 0)
         count_ba = ps.get("count_ba", 0)
         # Skip pairs with no outcome data — tunnel-only pairs belong in the
@@ -165,9 +165,9 @@ def _rank_pairs(tunnel_df, pair_df, pitch_metrics, top_n=2):
             continue
         # Always present pairs as unordered to avoid duplication
         label_a, label_b = sorted([a, b])
-        # V9 scoring: CSW% (35%), Avg EV (30%), SLG (35%).
+        # V10 scoring: CSW% (35%), Avg EV (30%), Chase% (35%).
         score = _weighted_score(
-            [_score_csw(csw), _score_ev(ev), _score_slg(slg)],
+            [_score_csw(csw), _score_ev(ev), _score_chase(chase)],
             [0.35, 0.30, 0.35],
         )
         row = {
@@ -176,7 +176,7 @@ def _rank_pairs(tunnel_df, pair_df, pitch_metrics, top_n=2):
             "Whiff%": whiff,
             "CSW%": csw,
             "Avg EV": ev,
-            "SLG": slg,
+            "Chase%": chase,
             "Stuff+": stuff_avg,
             "Cmd+": cmd_avg,
             "Score": score,
@@ -265,8 +265,6 @@ def _rank_sequences_from_pdf(pdf, pitch_metrics, tunnel_df=None, length=3, top_n
         val = tunnel_map.get(tuple(sorted([a, b])), np.nan)
         return 50.0 if pd.isna(val) else float(val)
 
-    _TB_MAP = {"Single": 1, "Double": 2, "Triple": 3, "HomeRun": 4}
-
     # Aggregate sequence outcomes based on final pitch in sequence
     seq_stats = {}
     for _, g in pdf_s.groupby(group_cols):
@@ -274,13 +272,19 @@ def _rank_sequences_from_pdf(pdf, pitch_metrics, tunnel_df=None, length=3, top_n
             continue
         pitches = g["TaggedPitchType"].tolist()
         rows = list(g.itertuples(index=False))
+        # Pre-compute zone mask for chase% on final pitches
+        g_iz = in_zone_mask(g)
+        iz_list = g_iz.tolist()
+        idx_list = list(g.index)
+        iz_map = dict(zip(idx_list, iz_list))
         for i in range(len(pitches) - length + 1):
             seq = tuple(pitches[i:i + length])
             last = rows[i + length - 1]
+            last_idx = idx_list[i + length - 1]
             stats = seq_stats.setdefault(seq, {
                 "n": 0, "sw": 0, "wh": 0, "csw": 0,
                 "ev_sum": 0.0, "ev_n": 0,
-                "tb": 0.0, "ip_n": 0,
+                "ooz": 0, "ooz_sw": 0,
             })
             stats["n"] += 1
             pitch_call = getattr(last, "PitchCall", None)
@@ -297,11 +301,11 @@ def _rank_sequences_from_pdf(pdf, pitch_metrics, tunnel_df=None, length=3, top_n
                 if ev is not None and pd.notna(ev):
                     stats["ev_sum"] += float(ev)
                     stats["ev_n"] += 1
-                # SLG: total bases from InPlay events
-                play_result = getattr(last, "PlayResult", None)
-                stats["ip_n"] += 1
-                if play_result and play_result in _TB_MAP:
-                    stats["tb"] += _TB_MAP[play_result]
+            # Chase%: out-of-zone swings on final pitch
+            if not iz_map.get(last_idx, True):
+                stats["ooz"] += 1
+                if pitch_call in SWING_CALLS:
+                    stats["ooz_sw"] += 1
 
     results = []
     for seq, s in seq_stats.items():
@@ -310,7 +314,7 @@ def _rank_sequences_from_pdf(pdf, pitch_metrics, tunnel_df=None, length=3, top_n
         whiff = s["wh"] / s["sw"] * 100 if s["sw"] > 0 else np.nan
         csw = s["csw"] / s["n"] * 100 if s["n"] > 0 else np.nan
         ev = s["ev_sum"] / s["ev_n"] if s["ev_n"] else np.nan
-        slg = s["tb"] / s["ip_n"] if s["ip_n"] > 0 else np.nan
+        chase = s["ooz_sw"] / s["ooz"] * 100 if s["ooz"] > 0 else np.nan
 
         # Tunnel = average across consecutive pairs (kept for detail display)
         tunnels = []
@@ -320,9 +324,9 @@ def _rank_sequences_from_pdf(pdf, pitch_metrics, tunnel_df=None, length=3, top_n
 
         stuff_avg = np.nanmean([pitch_metrics.get(p, {}).get("stuff", np.nan) for p in seq])
         cmd_avg = np.nanmean([pitch_metrics.get(p, {}).get("cmd", np.nan) for p in seq])
-        # V9 scoring: CSW% (35%), Avg EV (30%), SLG (35%).
+        # V10 scoring: CSW% (35%), Avg EV (30%), Chase% (35%).
         score = _weighted_score(
-            [_score_csw(csw), _score_ev(ev), _score_slg(slg)],
+            [_score_csw(csw), _score_ev(ev), _score_chase(chase)],
             [0.35, 0.30, 0.35],
         )
         results.append({
@@ -331,7 +335,7 @@ def _rank_sequences_from_pdf(pdf, pitch_metrics, tunnel_df=None, length=3, top_n
             "Whiff%": whiff,
             "CSW%": csw,
             "Avg EV": ev,
-            "SLG": slg,
+            "Chase%": chase,
             "Stuff+": stuff_avg,
             "Cmd+": cmd_avg,
             "Score": score,
@@ -392,7 +396,7 @@ def _assign_tactical_tags(rows):
         return rows
     csws = [r.get("CSW%") for r in rows]
     evs = [r.get("Avg EV") for r in rows]
-    slgs = [r.get("SLG") for r in rows]
+    chases = [r.get("Chase%") for r in rows]
 
     def _best_idx(vals, func=max):
         vals_clean = [v for v in vals if pd.notna(v)]
@@ -406,10 +410,10 @@ def _assign_tactical_tags(rows):
 
     idx_csw = _best_idx(csws, max)
     idx_ev = _best_idx(evs, min)
-    idx_slg = _best_idx(slgs, min)  # Lower SLG = better
+    idx_chase = _best_idx(chases, max)  # Higher chase = better
 
     tags = {}
-    for idx, label in [(idx_csw, "Best putaway"), (idx_ev, "Best weak‑contact"), (idx_slg, "Lowest SLG")]:
+    for idx, label in [(idx_csw, "Best putaway"), (idx_ev, "Best weak‑contact"), (idx_chase, "Best chase")]:
         if idx is not None and idx not in tags:
             tags[idx] = label
     for i in range(len(rows)):
@@ -1089,9 +1093,9 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
         )
 
         st.caption(
-            "Scored by CSW% (35%), Avg EV (30%), and SLG against (35%). "
+            "Scored by CSW% (35%), Avg EV (30%), and Chase% (35%). "
             "Sequences are ranked from actual in-game sequences; outcomes use the final pitch. "
-            "SLG = total bases / batted ball events. "
+            "Chase% = swings on pitches outside the zone. "
             "Pairs are unordered (FB/SL = SL/FB). Details in checkbox."
         )
 
@@ -1105,7 +1109,7 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
                     "Score": f"{r['Score']:.1f}" if pd.notna(r["Score"]) else "-",
                     "CSW%": f"{r['CSW%']:.1f}" if pd.notna(r["CSW%"]) else "-",
                     "Avg EV": f"{r['Avg EV']:.1f}" if pd.notna(r["Avg EV"]) else "-",
-                    "SLG": f"{r['SLG']:.3f}" if pd.notna(r.get("SLG")) else "-",
+                    "Chase%": f"{r['Chase%']:.1f}" if pd.notna(r.get("Chase%")) else "-",
                     "Tag": r.get("Tag", ""),
                 })
                 detail.append({
@@ -1137,7 +1141,7 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
                     "Score": f"{r['Score']:.1f}" if pd.notna(r["Score"]) else "-",
                     "CSW%": f"{r['CSW%']:.1f}" if pd.notna(r["CSW%"]) else "-",
                     "Avg EV": f"{r['Avg EV']:.1f}" if pd.notna(r["Avg EV"]) else "-",
-                    "SLG": f"{r['SLG']:.3f}" if pd.notna(r.get("SLG")) else "-",
+                    "Chase%": f"{r['Chase%']:.1f}" if pd.notna(r.get("Chase%")) else "-",
                     "Tag": r.get("Tag", ""),
                 })
                 detail.append({
@@ -1169,7 +1173,7 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
                     "Score": f"{r['Score']:.1f}" if pd.notna(r["Score"]) else "-",
                     "CSW%": f"{r['CSW%']:.1f}" if pd.notna(r["CSW%"]) else "-",
                     "Avg EV": f"{r['Avg EV']:.1f}" if pd.notna(r["Avg EV"]) else "-",
-                    "SLG": f"{r['SLG']:.3f}" if pd.notna(r.get("SLG")) else "-",
+                    "Chase%": f"{r['Chase%']:.1f}" if pd.notna(r.get("Chase%")) else "-",
                     "Tag": r.get("Tag", ""),
                 })
                 detail.append({
@@ -1577,9 +1581,9 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
     # ═══════════════════════════════════════════
     section_header("Best Pairs & Sequences (Composite)")
     st.caption(
-        "Scored by CSW% (35%), Avg EV (30%), and SLG against (35%). "
+        "Scored by CSW% (35%), Avg EV (30%), and Chase% (35%). "
         "Sequences are ranked from actual in-game sequences; outcomes use the final pitch. "
-        "SLG = total bases / batted ball events. "
+        "Chase% = swings on pitches outside the zone. "
         "Pairs are unordered (FB/SL = SL/FB). Details in checkbox."
     )
     top_pairs = _rank_pairs(tunnel_df, pair_df, pitch_metrics, top_n=2)
@@ -1602,7 +1606,7 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
                 "Score": f"{r['Score']:.1f}" if pd.notna(r["Score"]) else "-",
                 "CSW%": f"{r['CSW%']:.1f}" if pd.notna(r["CSW%"]) else "-",
                 "Avg EV": f"{r['Avg EV']:.1f}" if pd.notna(r["Avg EV"]) else "-",
-                "SLG": f"{r['SLG']:.3f}" if pd.notna(r.get("SLG")) else "-",
+                "Chase%": f"{r['Chase%']:.1f}" if pd.notna(r.get("Chase%")) else "-",
                 "Tag": r.get("Tag", ""),
             })
             detail.append({
@@ -1634,7 +1638,7 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
                 "Score": f"{r['Score']:.1f}" if pd.notna(r["Score"]) else "-",
                 "CSW%": f"{r['CSW%']:.1f}" if pd.notna(r["CSW%"]) else "-",
                 "Avg EV": f"{r['Avg EV']:.1f}" if pd.notna(r["Avg EV"]) else "-",
-                "SLG": f"{r['SLG']:.3f}" if pd.notna(r.get("SLG")) else "-",
+                "Chase%": f"{r['Chase%']:.1f}" if pd.notna(r.get("Chase%")) else "-",
                 "Tag": r.get("Tag", ""),
             })
             detail.append({
@@ -1666,7 +1670,7 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
                 "Score": f"{r['Score']:.1f}" if pd.notna(r["Score"]) else "-",
                 "CSW%": f"{r['CSW%']:.1f}" if pd.notna(r["CSW%"]) else "-",
                 "Avg EV": f"{r['Avg EV']:.1f}" if pd.notna(r["Avg EV"]) else "-",
-                "SLG": f"{r['SLG']:.3f}" if pd.notna(r.get("SLG")) else "-",
+                "Chase%": f"{r['Chase%']:.1f}" if pd.notna(r.get("Chase%")) else "-",
                 "Tag": r.get("Tag", ""),
             })
             detail.append({

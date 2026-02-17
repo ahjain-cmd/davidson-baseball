@@ -158,15 +158,15 @@ def _render_sp_call_grade_page(pitcher_pdf, data, pitcher, game_label):
         for p in grade_info["top_pairs"]:
             csw = f"{p.get('CSW%', 0):.1f}" if pd.notna(p.get("CSW%")) else "-"
             avg_ev = f"{p.get('Avg EV', 0):.1f}" if pd.notna(p.get("Avg EV")) else "-"
-            slg = f"{p.get('SLG', 0):.3f}" if pd.notna(p.get("SLG")) else "-"
-            pair_rows.append([p.get("Pair", "?"), csw, avg_ev, slg])
+            chase = f"{p.get('Chase%', 0):.1f}" if pd.notna(p.get("Chase%")) else "-"
+            pair_rows.append([p.get("Pair", "?"), csw, avg_ev, chase])
         if grade_info["top_sequences"]:
             for s in grade_info["top_sequences"]:
                 csw = f"{s.get('CSW%', 0):.1f}" if pd.notna(s.get("CSW%")) else "-"
-                slg = f"{s.get('SLG', 0):.3f}" if pd.notna(s.get("SLG")) else "-"
-                pair_rows.append([s.get("Seq", "?"), csw, "-", slg])
+                chase = f"{s.get('Chase%', 0):.1f}" if pd.notna(s.get("Chase%")) else "-"
+                pair_rows.append([s.get("Seq", "?"), csw, "-", chase])
         _styled_table(ax_pairs, pair_rows,
-                      ["Pair / Sequence", "CSW%", "Avg EV", "SLG"],
+                      ["Pair / Sequence", "CSW%", "Avg EV", "Chase%"],
                       [0.40, 0.15, 0.15, 0.15],
                       fontsize=7.5, row_height=1.5)
     else:

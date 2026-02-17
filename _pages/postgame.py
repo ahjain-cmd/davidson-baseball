@@ -2625,7 +2625,7 @@ def _render_call_grade_section(pitcher_pdf, data, pitcher, key_suffix):
                     "Count": p.get("N", "-"),
                     "CSW%": f"{p.get('CSW%', 0):.1f}" if pd.notna(p.get("CSW%")) else "-",
                     "Avg EV": f"{p.get('Avg EV', 0):.1f}" if pd.notna(p.get("Avg EV")) else "-",
-                    "SLG": f"{p.get('SLG', 0):.3f}" if pd.notna(p.get("SLG")) else "-",
+                    "Chase%": f"{p.get('Chase%', 0):.1f}" if pd.notna(p.get("Chase%")) else "-",
                 })
             st.dataframe(pd.DataFrame(pair_rows), use_container_width=True, hide_index=True)
 
@@ -2638,7 +2638,7 @@ def _render_call_grade_section(pitcher_pdf, data, pitcher, key_suffix):
                     "Sequence": s.get("Seq", "?"),
                     "Count": s.get("N", "-"),
                     "CSW%": f"{s.get('CSW%', 0):.1f}" if pd.notna(s.get("CSW%")) else "-",
-                    "SLG": f"{s.get('SLG', 0):.3f}" if pd.notna(s.get("SLG")) else "-",
+                    "Chase%": f"{s.get('Chase%', 0):.1f}" if pd.notna(s.get("Chase%")) else "-",
                 })
             st.dataframe(pd.DataFrame(seq_rows), use_container_width=True, hide_index=True)
 

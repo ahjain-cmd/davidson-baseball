@@ -7,7 +7,7 @@ from scipy.stats import percentileofscore
 
 from config import (
     in_zone_mask, SWING_CALLS, filter_minor_pitches,
-    MIN_PITCH_USAGE_PCT, PLATE_SIDE_MAX, PLATE_HEIGHT_MIN, PLATE_HEIGHT_MAX,
+    MIN_TUNNEL_SEQ_PCT, PLATE_SIDE_MAX, PLATE_HEIGHT_MIN, PLATE_HEIGHT_MAX,
 )
 from data.loader import query_population
 
@@ -167,7 +167,7 @@ def _compute_pitch_pair_results(pdf, data, tunnel_df=None):
     """Compute effectiveness when pitch B follows pitch A in an at-bat."""
     if pdf.empty:
         return pd.DataFrame()
-    pdf = filter_minor_pitches(pdf, min_pct=MIN_PITCH_USAGE_PCT)
+    pdf = filter_minor_pitches(pdf, min_pct=MIN_TUNNEL_SEQ_PCT)
     if pdf.empty:
         return pd.DataFrame()
 
