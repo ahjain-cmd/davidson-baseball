@@ -153,14 +153,16 @@ def _rank_pairs(tunnel_df, pair_df, pitch_metrics, top_n=2):
         count_ba = ps.get("count_ba", 0)
         # Skip pairs with no outcome data — tunnel-only pairs belong in the
         # "Best Tunnel Pair" section, not the composite ranking.
-        has_outcome = any(pd.notna(v) for v in [whiff, csw, ev])
+        has_outcome = any(pd.notna(v) for v in [csw, ev])
         if not has_outcome:
             continue
         # Always present pairs as unordered to avoid duplication
         label_a, label_b = sorted([a, b])
+        # V8 scoring: CSW% (35%), Avg EV (30%), Tunnel (35%).
+        # Whiff% removed — already captured inside CSW%.
         score = _weighted_score(
-            [_score_whiff(whiff), _score_csw(csw), _score_ev(ev), tunnel],
-            [0.35, 0.25, 0.25, 0.15],
+            [_score_csw(csw), _score_ev(ev), tunnel],
+            [0.35, 0.30, 0.35],
         )
         row = {
             "Pair": f"{label_a} / {label_b}",
@@ -302,9 +304,11 @@ def _rank_sequences_from_pdf(pdf, pitch_metrics, tunnel_df=None, length=3, top_n
 
         stuff_avg = np.nanmean([pitch_metrics.get(p, {}).get("stuff", np.nan) for p in seq])
         cmd_avg = np.nanmean([pitch_metrics.get(p, {}).get("cmd", np.nan) for p in seq])
+        # V8 scoring: CSW% (35%), Avg EV (30%), Tunnel (35%).
+        # Whiff% removed — already captured inside CSW%.
         score = _weighted_score(
-            [_score_whiff(whiff), _score_csw(csw), _score_ev(ev), tunnel_avg],
-            [0.35, 0.25, 0.25, 0.15],
+            [_score_csw(csw), _score_ev(ev), tunnel_avg],
+            [0.35, 0.30, 0.35],
         )
         results.append({
             "Seq": " → ".join(seq),
@@ -370,9 +374,9 @@ def _deception_flag(tunnel):
 def _assign_tactical_tags(rows):
     if not rows:
         return rows
-    whiffs = [r.get("Whiff%") for r in rows]
     csws = [r.get("CSW%") for r in rows]
     evs = [r.get("Avg EV") for r in rows]
+    tunnels = [r.get("Tunnel") for r in rows]
 
     def _best_idx(vals, func=max):
         vals_clean = [v for v in vals if pd.notna(v)]
@@ -384,12 +388,12 @@ def _assign_tactical_tags(rows):
                 return i
         return None
 
-    idx_put = _best_idx(csws, max)
+    idx_csw = _best_idx(csws, max)
     idx_ev = _best_idx(evs, min)
-    idx_wh = _best_idx(whiffs, max)
+    idx_tun = _best_idx(tunnels, max)
 
     tags = {}
-    for idx, label in [(idx_put, "Best putaway"), (idx_ev, "Best weak‑contact"), (idx_wh, "Best whiff")]:
+    for idx, label in [(idx_csw, "Best putaway"), (idx_ev, "Best weak‑contact"), (idx_tun, "Best tunnel")]:
         if idx is not None and idx not in tags:
             tags[idx] = label
     for i in range(len(rows)):
@@ -1069,7 +1073,7 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
         )
 
         st.caption(
-            "Outcomes-first (Whiff, CSW, EV) with Tunnel as a secondary signal. "
+            "Scored by CSW% (35%), Avg EV (30%), and Tunnel (35%)."
             "Sequences are ranked from actual in-game sequences; outcomes use the final pitch. "
             "Tunnel score = same-pair D1 percentile using commit separation (55%), plate separation (19%), "
             "release consistency (10%), release angle similarity (8%), movement divergence (8%). "
@@ -1555,7 +1559,7 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
     # ═══════════════════════════════════════════
     section_header("Best Pairs & Sequences (Composite)")
     st.caption(
-        "Outcomes-first (Whiff, CSW, EV) with Tunnel as a secondary signal. "
+        "Scored by CSW% (35%), Avg EV (30%), and Tunnel (35%)."
         "Sequences are ranked from actual in-game sequences; outcomes use the final pitch. "
         "Tunnel score = same-pair D1 percentile using commit separation (55%), plate separation (19%), "
         "release consistency (10%), release angle similarity (8%), movement divergence (8%). "

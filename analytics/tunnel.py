@@ -285,17 +285,22 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
     """Compute tunnel scores using Euler-integrated flight paths and
     data-driven percentile grading.
 
-    V7 — Physics-audited weights:
-      1. Commit point at 280ms before plate (research-backed decision window).
-      2. Percentile grading relative to SAME PAIR TYPE.
-      3. Weighted composite (velo removed after physics audit showed it
-         contributes <1.5" commit sep for 10 mph gaps vs 4-5" from break):
-           commit_sep  55%  (lower → more whiffs — induces bad swings)
+    V8 — Average-based, break-driven tunnel scoring:
+      1. Commit separation from pitch-type AVERAGES via IVB/HB model
+         (not pitch-by-pitch), so break profiles drive the score, not
+         command scatter or velocity.  Physics audit showed IVB/HB
+         contributes 4-5" commit sep vs <1.5" from 10 mph velo gap.
+      2. ABSOLUTE scoring (not per-pair-type percentile).  Lower commit
+         sep = better tunnel regardless of pair type — a 3" FB/SL is more
+         deceptive than 5" CB/SL, period.
+      3. Weighted composite:
+           commit_sep  55%  (lower → more deceptive — hitter can't distinguish)
            plate_sep   19%  (higher → more whiffs given swing — late break)
            rel_sep     10%  (lower → better — consistent arm slot)
            rel_angle    8%  (lower → better — similar launch angles)
-           move_div     8%  (break profiles are dominant driver of deception)
-      4. Release-point variance penalty, pitch-by-pitch pairing unchanged.
+           move_div     8%  (higher → better — pitches diverge at plate)
+      4. Release-point variance penalty on rel_sep factor.
+      5. Pitch-by-pitch pairing used only for whiff% outcome boost.
     """
     # Minimum columns: need pitch type, release point, plate location, and velo.
     # IVB/HB are preferred but we can fall back to 9-param or gravity-only.
@@ -580,51 +585,64 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
             a, b = agg.loc[types[i]], agg.loc[types[j]]
             pair_key = tuple(sorted([types[i], types[j]]))
 
-            # Try pitch-by-pitch pairing first (#4)
+            # Compute tunnel metrics from pitch-type AVERAGES.
+            # Prefer IVB/HB model so break profiles (not velocity or
+            # command scatter) drive the commit separation.
+            ivb_ok = (pd.notna(a.ivb) and pd.notna(a.hb)
+                      and pd.notna(b.ivb) and pd.notna(b.hb))
+            if ivb_ok:
+                result_a = _commit_plate_ivb(
+                    a.rel_h, a.rel_s, a.loc_h, a.loc_s,
+                    a.ivb, a.hb, a.velo, a.ext)
+                result_b = _commit_plate_ivb(
+                    b.rel_h, b.rel_s, b.loc_h, b.loc_s,
+                    b.ivb, b.hb, b.velo, b.ext)
+            else:
+                result_a = _compute_commit_plate(a)
+                result_b = _compute_commit_plate(b)
+            if result_a is None or result_b is None:
+                continue
+            (cax, cay), (pax, pay), _ = result_a
+            (cbx, cby), (pbx, pby), _ = result_b
+
+            commit_sep = np.sqrt((cay - cby)**2 + (cax - cbx)**2) * 12
+            plate_sep = np.sqrt((pay - pby)**2 + (pax - pbx)**2) * 12
+            rel_sep = np.sqrt((a.rel_h - b.rel_h)**2
+                              + (a.rel_s - b.rel_s)**2) * 12
+
+            _ivb_a = 0 if pd.isna(a.ivb) else a.ivb
+            _hb_a = 0 if pd.isna(a.hb) else a.hb
+            _ivb_b = 0 if pd.isna(b.ivb) else b.ivb
+            _hb_b = 0 if pd.isna(b.hb) else b.hb
+            move_div = np.sqrt((_ivb_a - _ivb_b)**2 + (_hb_a - _hb_b)**2)
+            velo_gap = abs(a.velo - b.velo)
+
+            vra_a = getattr(a, 'vert_rel_angle', np.nan)
+            hra_a = getattr(a, 'horz_rel_angle', np.nan)
+            vra_b = getattr(b, 'vert_rel_angle', np.nan)
+            hra_b = getattr(b, 'horz_rel_angle', np.nan)
+            if (pd.notna(vra_a) and pd.notna(vra_b)
+                    and pd.notna(hra_a) and pd.notna(hra_b)):
+                rel_angle_sep = np.sqrt((vra_a - vra_b)**2
+                                        + (hra_a - hra_b)**2)
+            else:
+                rel_angle_sep = np.nan
+
+            # Track pitch-by-pitch whiff% for outcome boost only
             pbp_pairs = pair_scores.get(pair_key, [])
-            if len(pbp_pairs) >= 8:
-                # Aggregate per-pair metrics
-                metrics = []
+            n_pairs_used = len(pbp_pairs)
+            pair_whiff = np.nan
+            if len(pbp_pairs) >= WHIFF_MIN_PAIRS:
                 swing_count = 0
                 whiff_count = 0
                 for prow, crow in pbp_pairs:
-                    try:
-                        m = _score_single_pair_from_rows(prow, crow)
-                        if m is not None:
-                            metrics.append(m)
-                            pitch_call = crow.get("PitchCall")
-                            # Track swings (all swing types) and whiffs for proper whiff%
-                            if pitch_call in SWING_CALLS:
-                                swing_count += 1
-                                if pitch_call == "StrikeSwinging":
-                                    whiff_count += 1
-                    except Exception:
-                        continue
-                if len(metrics) >= 5:
-                    arr = np.array(metrics)
-                    commit_sep = float(np.median(arr[:, 0]))
-                    rel_sep = float(np.median(arr[:, 1]))
-                    plate_sep = float(np.median(arr[:, 2]))
-                    move_div = float(np.median(arr[:, 3]))
-                    velo_gap = float(np.median(arr[:, 4]))
-                    rel_angle_sep = float(np.nanmedian(arr[:, 5]))
-                    # Whiff% = StrikeSwinging / Swings (not per all pitches)
-                    pair_whiff = float(whiff_count / swing_count * 100) if swing_count >= 5 else np.nan
-                    n_pairs_used = len(metrics)
-                else:
-                    result = _score_single_pair_from_rows(a, b)
-                    if result is None:
-                        continue
-                    commit_sep, rel_sep, plate_sep, move_div, velo_gap, rel_angle_sep = result
-                    pair_whiff = np.nan
-                    n_pairs_used = 0
-            else:
-                result = _score_single_pair_from_rows(a, b)
-                if result is None:
-                    continue
-                commit_sep, rel_sep, plate_sep, move_div, velo_gap, rel_angle_sep = result
-                pair_whiff = np.nan
-                n_pairs_used = 0
+                    pitch_call = crow.get("PitchCall")
+                    if pitch_call in SWING_CALLS:
+                        swing_count += 1
+                        if pitch_call == "StrikeSwinging":
+                            whiff_count += 1
+                pair_whiff = (float(whiff_count / swing_count * 100)
+                              if swing_count >= 5 else np.nan)
 
             # Release-point variance penalty (#2)
             combined_rel_std = np.sqrt(
@@ -633,38 +651,19 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
             ) * 12  # inches
             effective_rel_sep = rel_sep + 0.5 * combined_rel_std
 
-    # DATA-FIT TUNNEL SCORE (v6)
-    # Percentile grading vs same pair type, regression-weighted composite.
-    # Weights are fit on actual consecutive pairs in the parquet and cached.
+    # TUNNEL SCORE (v8) — absolute, average-based, break-driven.
 
-            # Look up pair-type benchmark for percentile context
             type_a_norm = types[i]; type_b_norm = types[j]
             pair_label = '/'.join(sorted([type_a_norm, type_b_norm]))
+            # Pair benchmarks still loaded for diagnostics only
             bm = PAIR_BENCHMARKS.get(pair_label, DEFAULT_BENCHMARK)
             bm_p10, bm_p25, bm_p50, bm_p75, bm_p90, bm_mean, bm_std = bm
 
-            # 1. COMMIT PERCENTILE (55% weight)
-            # Lower commit_sep → higher percentile (better tunnel)
-            # Empirical percentile mapping using actual p10/p25/p50/p75/p90
-            # benchmarks — avoids Gaussian compression from large stds.
-            _anchors = [
-                (bm_p90, 10), (bm_p75, 25), (bm_p50, 50),
-                (bm_p25, 75), (bm_p10, 90),
-            ]  # lower commit_sep → higher percentile (reversed)
-            if commit_sep >= bm_p90:
-                commit_pct = max(0, 10 * (1 - (commit_sep - bm_p90) / max(bm_p90, 1)))
-            elif commit_sep <= bm_p10:
-                commit_pct = min(100, 90 + 10 * (bm_p10 - commit_sep) / max(bm_p10, 1))
-            else:
-                # Linear interpolation between anchors
-                commit_pct = 50.0
-                for k in range(len(_anchors) - 1):
-                    sep_hi, pct_lo = _anchors[k]      # worse end
-                    sep_lo, pct_hi = _anchors[k + 1]   # better end
-                    if sep_lo <= commit_sep <= sep_hi:
-                        frac = (sep_hi - commit_sep) / (sep_hi - sep_lo) if sep_hi != sep_lo else 0.5
-                        commit_pct = pct_lo + frac * (pct_hi - pct_lo)
-                        break
+            # 1. COMMIT SEPARATION (55% weight)
+            # Absolute scale: lower commit_sep → higher score.
+            # Uses pitch-type averages so IVB/HB break profiles dominate.
+            # Typical avg-vs-avg range: 1-8" (elite ~1-3", poor ~6+).
+            commit_pct = max(0, min(100, 100 - commit_sep * 10))
 
             # 2. PLATE SEPARATION (19% weight)
             # Higher plate_sep → better (more divergence at plate)
@@ -695,23 +694,16 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
             # separation is already captured by the physics model in Factor 1.
             # Velo gap is still reported in diagnostics.
 
-            # Weighted composite (regression-derived weights, velo removed v7)
-            w_blob = _load_tunnel_weights() or {}
-            w_global = w_blob.get("global") or {
-                "commit": 0.55,
-                "plate": 0.19,
-                "rel": 0.10,
-                "rel_angle": 0.08,
-                "move": 0.08,
-            }
-            w_pair = w_blob.get("pairs", {}).get(pair_label)
-            weights = w_pair or w_global
+            # V8 hardcoded weights — break-driven, physics-audited.
+            # Cached regression weights (tunnel_weights.json) are ignored:
+            # they were fit on old pitch-by-pitch scoring and distort the
+            # new average-based, absolute model.
             raw_tunnel = round(
-                commit_pct * weights.get("commit", 0.55) +
-                plate_pct * weights.get("plate", 0.19) +
-                rel_pct * weights.get("rel", 0.10) +
-                rel_angle_pct * weights.get("rel_angle", 0.08) +
-                move_pct * weights.get("move", 0.08), 2)
+                commit_pct * 0.55 +
+                plate_pct * 0.19 +
+                rel_pct * 0.10 +
+                rel_angle_pct * 0.08 +
+                move_pct * 0.08, 2)
 
             # Outcome boost: small, sample-size gated, shrunk to league baseline
             outcome_boost = 0.0
@@ -724,21 +716,19 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
                                                   -WHIFF_BOOST_MAX, WHIFF_BOOST_MAX))
                     raw_tunnel = round(raw_tunnel + outcome_boost, 2)
 
-            # Percentile grading vs all pitchers in the database
-            if tunnel_pop is not None and pair_label in tunnel_pop:
-                tunnel = round(percentileofscore(tunnel_pop[pair_label], raw_tunnel, kind='rank'), 1)
-            else:
-                # No population data — return raw composite (used during population building)
-                tunnel = round(raw_tunnel, 1)
+            # V8: use raw composite directly — absolute scale, not population
+            # percentile.  The composite is already 0-100 with clear meaning:
+            #   ≥65 elite, ≥55 good, ≥45 avg, ≥35 below avg, <35 poor.
+            tunnel = round(raw_tunnel, 1)
 
-            # Letter grades based on percentile rank among all college tunnels
-            if tunnel >= 80:
+            # Letter grades on absolute composite
+            if tunnel >= 65:
                 grade = "A"
-            elif tunnel >= 60:
+            elif tunnel >= 55:
                 grade = "B"
-            elif tunnel >= 40:
+            elif tunnel >= 45:
                 grade = "C"
-            elif tunnel >= 20:
+            elif tunnel >= 35:
                 grade = "D"
             else:
                 grade = "F"
