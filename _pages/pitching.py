@@ -52,8 +52,8 @@ def _score_whiff(wh):
     return _score_linear(wh, 0, 50)
 
 
-def _score_k(k):
-    return _score_linear(k, 0, 35)
+def _score_csw(csw):
+    return _score_linear(csw, 0, 50)
 
 
 def _score_stuff(stuff):
@@ -106,6 +106,7 @@ def _pair_stats(pair_df, a, b):
     return {
         "whiff": _wavg("Whiff%"),
         "k": _wavg("K%"),
+        "csw": _wavg("CSW%"),
         "ev": _wavg("Avg EV"),
         "putaway": _wavg("Putaway%"),
         "count": float(w.sum()),
@@ -146,28 +147,26 @@ def _rank_pairs(tunnel_df, pair_df, pitch_metrics, top_n=2):
         cmd_avg = np.nanmean([pm_a.get("cmd", np.nan), pm_b.get("cmd", np.nan)])
         tunnel = tunnel_map.get(tuple(sorted([a, b])), np.nan)
         whiff = ps.get("whiff", np.nan)
-        k_pct = ps.get("k", np.nan)
-        if pd.isna(k_pct):
-            k_pct = ps.get("putaway", np.nan)
+        csw = ps.get("csw", np.nan)
         ev = ps.get("ev", np.nan)
         count_ab = ps.get("count_ab", 0)
         count_ba = ps.get("count_ba", 0)
         # Skip pairs with no outcome data — tunnel-only pairs belong in the
         # "Best Tunnel Pair" section, not the composite ranking.
-        has_outcome = any(pd.notna(v) for v in [whiff, k_pct, ev])
+        has_outcome = any(pd.notna(v) for v in [whiff, csw, ev])
         if not has_outcome:
             continue
         # Always present pairs as unordered to avoid duplication
         label_a, label_b = sorted([a, b])
         score = _weighted_score(
-            [_score_whiff(whiff), _score_k(k_pct), _score_ev(ev), tunnel],
+            [_score_whiff(whiff), _score_csw(csw), _score_ev(ev), tunnel],
             [0.35, 0.25, 0.25, 0.15],
         )
         row = {
             "Pair": f"{label_a} / {label_b}",
             "Tunnel": tunnel,
             "Whiff%": whiff,
-            "K%": k_pct,
+            "CSW%": csw,
             "Avg EV": ev,
             "Stuff+": stuff_avg,
             "Cmd+": cmd_avg,
@@ -268,8 +267,7 @@ def _rank_sequences_from_pdf(pdf, pitch_metrics, tunnel_df=None, length=3, top_n
             seq = tuple(pitches[i:i + length])
             last = rows[i + length - 1]
             stats = seq_stats.setdefault(seq, {
-                "n": 0, "sw": 0, "wh": 0, "k": 0,
-                "two_strike": 0, "putaway": 0,
+                "n": 0, "sw": 0, "wh": 0, "csw": 0,
                 "ev_sum": 0.0, "ev_n": 0,
             })
             stats["n"] += 1
@@ -278,20 +276,9 @@ def _rank_sequences_from_pdf(pdf, pitch_metrics, tunnel_df=None, length=3, top_n
                 stats["sw"] += 1
                 if pitch_call == "StrikeSwinging":
                     stats["wh"] += 1
-            # K%: use KorBB if available, else PlayResult
-            korbb = getattr(last, "KorBB", None)
-            if korbb in ("Strikeout", "K"):
-                stats["k"] += 1
-            else:
-                play = getattr(last, "PlayResult", None)
-                if play in ("Strikeout", "K"):
-                    stats["k"] += 1
-            # Putaway: 2-strike pitch resulting in called/swinging strike
-            strikes = getattr(last, "Strikes", None)
-            if strikes == 2:
-                stats["two_strike"] += 1
-                if pitch_call in ("StrikeSwinging", "StrikeCalled"):
-                    stats["putaway"] += 1
+            # CSW: called strike or swinging strike on final pitch
+            if pitch_call in ("StrikeCalled", "StrikeSwinging"):
+                stats["csw"] += 1
             # Avg EV from in-play on final pitch
             if pitch_call == "InPlay":
                 ev = getattr(last, "ExitSpeed", None)
@@ -304,10 +291,8 @@ def _rank_sequences_from_pdf(pdf, pitch_metrics, tunnel_df=None, length=3, top_n
         if s["n"] < min_n:
             continue
         whiff = s["wh"] / s["sw"] * 100 if s["sw"] > 0 else np.nan
-        k_pct = s["k"] / max(s["n"], 1) * 100
-        putaway = s["putaway"] / max(s["two_strike"], 1) * 100 if s["two_strike"] else np.nan
+        csw = s["csw"] / s["n"] * 100 if s["n"] > 0 else np.nan
         ev = s["ev_sum"] / s["ev_n"] if s["ev_n"] else np.nan
-        k_use = k_pct if pd.notna(k_pct) else putaway
 
         # Tunnel = average across consecutive pairs (neutral 50 if missing)
         tunnels = []
@@ -318,14 +303,14 @@ def _rank_sequences_from_pdf(pdf, pitch_metrics, tunnel_df=None, length=3, top_n
         stuff_avg = np.nanmean([pitch_metrics.get(p, {}).get("stuff", np.nan) for p in seq])
         cmd_avg = np.nanmean([pitch_metrics.get(p, {}).get("cmd", np.nan) for p in seq])
         score = _weighted_score(
-            [_score_whiff(whiff), _score_k(k_use), _score_ev(ev), tunnel_avg],
+            [_score_whiff(whiff), _score_csw(csw), _score_ev(ev), tunnel_avg],
             [0.35, 0.25, 0.25, 0.15],
         )
         results.append({
             "Seq": " → ".join(seq),
             "Tunnel": tunnel_avg,
             "Whiff%": whiff,
-            "K%": k_use,
+            "CSW%": csw,
             "Avg EV": ev,
             "Stuff+": stuff_avg,
             "Cmd+": cmd_avg,
@@ -386,7 +371,7 @@ def _assign_tactical_tags(rows):
     if not rows:
         return rows
     whiffs = [r.get("Whiff%") for r in rows]
-    ks = [r.get("K%") for r in rows]
+    csws = [r.get("CSW%") for r in rows]
     evs = [r.get("Avg EV") for r in rows]
 
     def _best_idx(vals, func=max):
@@ -399,7 +384,7 @@ def _assign_tactical_tags(rows):
                 return i
         return None
 
-    idx_put = _best_idx(ks, max)
+    idx_put = _best_idx(csws, max)
     idx_ev = _best_idx(evs, min)
     idx_wh = _best_idx(whiffs, max)
 
@@ -1084,7 +1069,7 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
         )
 
         st.caption(
-            "Outcomes-first (Whiff, K/Putaway, EV) with Tunnel as a secondary signal. "
+            "Outcomes-first (Whiff, CSW, EV) with Tunnel as a secondary signal. "
             "Sequences are ranked from actual in-game sequences; outcomes use the final pitch. "
             "Tunnel score = same-pair D1 percentile using commit separation (55%), plate separation (19%), "
             "release consistency (10%), release angle similarity (8%), movement divergence (6%), velo gap (2%). "
@@ -1100,7 +1085,7 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
                     "Pair": r["Pair"],
                     "Score": f"{r['Score']:.1f}" if pd.notna(r["Score"]) else "-",
                     "Whiff%": f"{r['Whiff%']:.1f}" if pd.notna(r["Whiff%"]) else "-",
-                    "K/Putaway%": f"{r['K%']:.1f}" if pd.notna(r["K%"]) else "-",
+                    "CSW%": f"{r['CSW%']:.1f}" if pd.notna(r["CSW%"]) else "-",
                     "Avg EV": f"{r['Avg EV']:.1f}" if pd.notna(r["Avg EV"]) else "-",
                     "Tag": r.get("Tag", ""),
                 })
@@ -1131,7 +1116,7 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
                     "Sequence": r["Seq"],
                     "Score": f"{r['Score']:.1f}" if pd.notna(r["Score"]) else "-",
                     "Whiff%": f"{r['Whiff%']:.1f}" if pd.notna(r["Whiff%"]) else "-",
-                    "K/Putaway%": f"{r['K%']:.1f}" if pd.notna(r["K%"]) else "-",
+                    "CSW%": f"{r['CSW%']:.1f}" if pd.notna(r["CSW%"]) else "-",
                     "Avg EV": f"{r['Avg EV']:.1f}" if pd.notna(r["Avg EV"]) else "-",
                     "Tag": r.get("Tag", ""),
                 })
@@ -1162,7 +1147,7 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
                     "Sequence": r["Seq"],
                     "Score": f"{r['Score']:.1f}" if pd.notna(r["Score"]) else "-",
                     "Whiff%": f"{r['Whiff%']:.1f}" if pd.notna(r["Whiff%"]) else "-",
-                    "K/Putaway%": f"{r['K%']:.1f}" if pd.notna(r["K%"]) else "-",
+                    "CSW%": f"{r['CSW%']:.1f}" if pd.notna(r["CSW%"]) else "-",
                     "Avg EV": f"{r['Avg EV']:.1f}" if pd.notna(r["Avg EV"]) else "-",
                     "Tag": r.get("Tag", ""),
                 })
@@ -1577,7 +1562,7 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
     # ═══════════════════════════════════════════
     section_header("Best Pairs & Sequences (Composite)")
     st.caption(
-        "Outcomes-first (Whiff, K/Putaway, EV) with Tunnel as a secondary signal. "
+        "Outcomes-first (Whiff, CSW, EV) with Tunnel as a secondary signal. "
         "Sequences are ranked from actual in-game sequences; outcomes use the final pitch. "
         "Tunnel score = same-pair D1 percentile using commit separation (55%), plate separation (19%), "
         "release consistency (10%), release angle similarity (8%), movement divergence (6%), velo gap (2%). "
@@ -1602,7 +1587,7 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
                 "Pair": r["Pair"],
                 "Score": f"{r['Score']:.1f}" if pd.notna(r["Score"]) else "-",
                 "Whiff%": f"{r['Whiff%']:.1f}" if pd.notna(r["Whiff%"]) else "-",
-                "K/Putaway%": f"{r['K%']:.1f}" if pd.notna(r["K%"]) else "-",
+                "CSW%": f"{r['CSW%']:.1f}" if pd.notna(r["CSW%"]) else "-",
                 "Avg EV": f"{r['Avg EV']:.1f}" if pd.notna(r["Avg EV"]) else "-",
                 "Tag": r.get("Tag", ""),
             })
@@ -1633,7 +1618,7 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
                 "Sequence": r["Seq"],
                 "Score": f"{r['Score']:.1f}" if pd.notna(r["Score"]) else "-",
                 "Whiff%": f"{r['Whiff%']:.1f}" if pd.notna(r["Whiff%"]) else "-",
-                "K/Putaway%": f"{r['K%']:.1f}" if pd.notna(r["K%"]) else "-",
+                "CSW%": f"{r['CSW%']:.1f}" if pd.notna(r["CSW%"]) else "-",
                 "Avg EV": f"{r['Avg EV']:.1f}" if pd.notna(r["Avg EV"]) else "-",
                 "Tag": r.get("Tag", ""),
             })
@@ -1664,7 +1649,7 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
                 "Sequence": r["Seq"],
                 "Score": f"{r['Score']:.1f}" if pd.notna(r["Score"]) else "-",
                 "Whiff%": f"{r['Whiff%']:.1f}" if pd.notna(r["Whiff%"]) else "-",
-                "K/Putaway%": f"{r['K%']:.1f}" if pd.notna(r["K%"]) else "-",
+                "CSW%": f"{r['CSW%']:.1f}" if pd.notna(r["CSW%"]) else "-",
                 "Avg EV": f"{r['Avg EV']:.1f}" if pd.notna(r["Avg EV"]) else "-",
                 "Tag": r.get("Tag", ""),
             })
