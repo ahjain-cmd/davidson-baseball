@@ -184,6 +184,8 @@ def _compute_pitch_pair_results(pdf, data, tunnel_df=None):
     is_swing = pdf_s["PitchCall"].isin(SWING_CALLS)
     is_csw = pdf_s["PitchCall"].isin(["StrikeCalled", "StrikeSwinging"])
 
+    _TB_MAP = {"Single": 1, "Double": 2, "Triple": 3, "HomeRun": 4}
+
     rows = []
     for (prev, curr), grp in pdf_s.groupby(["PrevPitch", "TaggedPitchType"]):
         n = len(grp)
@@ -193,6 +195,13 @@ def _compute_pitch_pair_results(pdf, data, tunnel_df=None):
         whiffs = grp[is_whiff.reindex(grp.index, fill_value=False)]
         csws = grp[is_csw.reindex(grp.index, fill_value=False)]
         batted = grp[(grp["PitchCall"] == "InPlay") & grp["ExitSpeed"].notna()]
+        # SLG on batted ball events
+        inplay = grp[grp["PitchCall"] == "InPlay"]
+        if len(inplay) > 0 and "PlayResult" in grp.columns:
+            total_bases = inplay["PlayResult"].map(_TB_MAP).fillna(0).sum()
+            slg = round(total_bases / len(inplay), 3)
+        else:
+            slg = np.nan
         # Putaway% proxy: 2-strike pitches resulting in swinging/called strike
         if "Strikes" in grp.columns:
             two_strike = grp[grp["Strikes"] == 2]
@@ -224,6 +233,7 @@ def _compute_pitch_pair_results(pdf, data, tunnel_df=None):
             "Whiff%": round(len(whiffs) / max(len(swings), 1) * 100, 1),
             "CSW%": round(len(csws) / n * 100, 1),
             "Avg EV": round(batted["ExitSpeed"].mean(), 1) if len(batted) > 0 else np.nan,
+            "SLG": slg,
             "Putaway%": round(putaway_pct, 1) if not pd.isna(putaway_pct) else np.nan,
             "K%": round(k_pct, 1) if not pd.isna(k_pct) else np.nan,
             "Chase%": round(

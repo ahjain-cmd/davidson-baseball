@@ -2623,9 +2623,9 @@ def _render_call_grade_section(pitcher_pdf, data, pitcher, key_suffix):
                 pair_rows.append({
                     "Pair": p.get("Pair", "?"),
                     "Count": p.get("N", "-"),
-                    "Whiff%": f"{p.get('Whiff%', 0):.1f}" if pd.notna(p.get("Whiff%")) else "-",
-                    "CSW%": f"{p.get('K%', 0):.1f}" if pd.notna(p.get("K%")) else "-",
-                    "Tunnel": f"{p.get('Tunnel', 0):.0f}" if pd.notna(p.get("Tunnel")) else "-",
+                    "CSW%": f"{p.get('CSW%', 0):.1f}" if pd.notna(p.get("CSW%")) else "-",
+                    "Avg EV": f"{p.get('Avg EV', 0):.1f}" if pd.notna(p.get("Avg EV")) else "-",
+                    "SLG": f"{p.get('SLG', 0):.3f}" if pd.notna(p.get("SLG")) else "-",
                 })
             st.dataframe(pd.DataFrame(pair_rows), use_container_width=True, hide_index=True)
 
@@ -2637,8 +2637,8 @@ def _render_call_grade_section(pitcher_pdf, data, pitcher, key_suffix):
                 seq_rows.append({
                     "Sequence": s.get("Seq", "?"),
                     "Count": s.get("N", "-"),
-                    "Whiff%": f"{s.get('Whiff%', 0):.1f}" if pd.notna(s.get("Whiff%")) else "-",
-                    "K%": f"{s.get('K%', 0):.1f}" if pd.notna(s.get("K%")) else "-",
+                    "CSW%": f"{s.get('CSW%', 0):.1f}" if pd.notna(s.get("CSW%")) else "-",
+                    "SLG": f"{s.get('SLG', 0):.3f}" if pd.notna(s.get("SLG")) else "-",
                 })
             st.dataframe(pd.DataFrame(seq_rows), use_container_width=True, hide_index=True)
 

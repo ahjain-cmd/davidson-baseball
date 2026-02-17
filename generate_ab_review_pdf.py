@@ -156,18 +156,18 @@ def _render_sp_call_grade_page(pitcher_pdf, data, pitcher, game_label):
                            color=_DARK, loc="left", pad=4)
         pair_rows = []
         for p in grade_info["top_pairs"]:
-            whiff = f"{p.get('Whiff%', 0):.1f}" if pd.notna(p.get("Whiff%")) else "-"
-            k_pct = f"{p.get('K%', 0):.1f}" if pd.notna(p.get("K%")) else "-"
-            tunnel = f"{p.get('Tunnel', 0):.0f}" if pd.notna(p.get("Tunnel")) else "-"
-            pair_rows.append([p.get("Pair", "?"), whiff, k_pct, tunnel])
+            csw = f"{p.get('CSW%', 0):.1f}" if pd.notna(p.get("CSW%")) else "-"
+            avg_ev = f"{p.get('Avg EV', 0):.1f}" if pd.notna(p.get("Avg EV")) else "-"
+            slg = f"{p.get('SLG', 0):.3f}" if pd.notna(p.get("SLG")) else "-"
+            pair_rows.append([p.get("Pair", "?"), csw, avg_ev, slg])
         if grade_info["top_sequences"]:
             for s in grade_info["top_sequences"]:
-                whiff = f"{s.get('Whiff%', 0):.1f}" if pd.notna(s.get("Whiff%")) else "-"
-                k_pct = f"{s.get('K%', 0):.1f}" if pd.notna(s.get("K%")) else "-"
-                pair_rows.append([s.get("Seq", "?"), whiff, k_pct, "-"])
+                csw = f"{s.get('CSW%', 0):.1f}" if pd.notna(s.get("CSW%")) else "-"
+                slg = f"{s.get('SLG', 0):.3f}" if pd.notna(s.get("SLG")) else "-"
+                pair_rows.append([s.get("Seq", "?"), csw, "-", slg])
         _styled_table(ax_pairs, pair_rows,
-                      ["Pair / Sequence", "Whiff%", "K%", "Tunnel"],
-                      [0.45, 0.15, 0.15, 0.15],
+                      ["Pair / Sequence", "CSW%", "Avg EV", "SLG"],
+                      [0.40, 0.15, 0.15, 0.15],
                       fontsize=7.5, row_height=1.5)
     else:
         ax_pairs.text(0.5, 0.5, "Insufficient data for pair analysis",

@@ -56,6 +56,11 @@ def _score_csw(csw):
     return _score_linear(csw, 0, 50)
 
 
+def _score_slg(slg):
+    # Lower SLG is better for pitcher. Map .100-.900 → 100-0.
+    return _score_linear(slg, 0.1, 0.9, invert=True)
+
+
 def _score_stuff(stuff):
     return _score_linear(stuff, 70, 130)
 
@@ -108,6 +113,7 @@ def _pair_stats(pair_df, a, b):
         "k": _wavg("K%"),
         "csw": _wavg("CSW%"),
         "ev": _wavg("Avg EV"),
+        "slg": _wavg("SLG"),
         "putaway": _wavg("Putaway%"),
         "count": float(w.sum()),
         "count_ab": count_ab,
@@ -149,6 +155,7 @@ def _rank_pairs(tunnel_df, pair_df, pitch_metrics, top_n=2):
         whiff = ps.get("whiff", np.nan)
         csw = ps.get("csw", np.nan)
         ev = ps.get("ev", np.nan)
+        slg = ps.get("slg", np.nan)
         count_ab = ps.get("count_ab", 0)
         count_ba = ps.get("count_ba", 0)
         # Skip pairs with no outcome data — tunnel-only pairs belong in the
@@ -158,10 +165,9 @@ def _rank_pairs(tunnel_df, pair_df, pitch_metrics, top_n=2):
             continue
         # Always present pairs as unordered to avoid duplication
         label_a, label_b = sorted([a, b])
-        # V8 scoring: CSW% (35%), Avg EV (30%), Tunnel (35%).
-        # Whiff% removed — already captured inside CSW%.
+        # V9 scoring: CSW% (35%), Avg EV (30%), SLG (35%).
         score = _weighted_score(
-            [_score_csw(csw), _score_ev(ev), tunnel],
+            [_score_csw(csw), _score_ev(ev), _score_slg(slg)],
             [0.35, 0.30, 0.35],
         )
         row = {
@@ -170,6 +176,7 @@ def _rank_pairs(tunnel_df, pair_df, pitch_metrics, top_n=2):
             "Whiff%": whiff,
             "CSW%": csw,
             "Avg EV": ev,
+            "SLG": slg,
             "Stuff+": stuff_avg,
             "Cmd+": cmd_avg,
             "Score": score,
@@ -258,6 +265,8 @@ def _rank_sequences_from_pdf(pdf, pitch_metrics, tunnel_df=None, length=3, top_n
         val = tunnel_map.get(tuple(sorted([a, b])), np.nan)
         return 50.0 if pd.isna(val) else float(val)
 
+    _TB_MAP = {"Single": 1, "Double": 2, "Triple": 3, "HomeRun": 4}
+
     # Aggregate sequence outcomes based on final pitch in sequence
     seq_stats = {}
     for _, g in pdf_s.groupby(group_cols):
@@ -271,6 +280,7 @@ def _rank_sequences_from_pdf(pdf, pitch_metrics, tunnel_df=None, length=3, top_n
             stats = seq_stats.setdefault(seq, {
                 "n": 0, "sw": 0, "wh": 0, "csw": 0,
                 "ev_sum": 0.0, "ev_n": 0,
+                "tb": 0.0, "ip_n": 0,
             })
             stats["n"] += 1
             pitch_call = getattr(last, "PitchCall", None)
@@ -287,6 +297,11 @@ def _rank_sequences_from_pdf(pdf, pitch_metrics, tunnel_df=None, length=3, top_n
                 if ev is not None and pd.notna(ev):
                     stats["ev_sum"] += float(ev)
                     stats["ev_n"] += 1
+                # SLG: total bases from InPlay events
+                play_result = getattr(last, "PlayResult", None)
+                stats["ip_n"] += 1
+                if play_result and play_result in _TB_MAP:
+                    stats["tb"] += _TB_MAP[play_result]
 
     results = []
     for seq, s in seq_stats.items():
@@ -295,8 +310,9 @@ def _rank_sequences_from_pdf(pdf, pitch_metrics, tunnel_df=None, length=3, top_n
         whiff = s["wh"] / s["sw"] * 100 if s["sw"] > 0 else np.nan
         csw = s["csw"] / s["n"] * 100 if s["n"] > 0 else np.nan
         ev = s["ev_sum"] / s["ev_n"] if s["ev_n"] else np.nan
+        slg = s["tb"] / s["ip_n"] if s["ip_n"] > 0 else np.nan
 
-        # Tunnel = average across consecutive pairs (neutral 50 if missing)
+        # Tunnel = average across consecutive pairs (kept for detail display)
         tunnels = []
         for a, b in zip(seq[:-1], seq[1:]):
             tunnels.append(_pair_tunnel(a, b))
@@ -304,10 +320,9 @@ def _rank_sequences_from_pdf(pdf, pitch_metrics, tunnel_df=None, length=3, top_n
 
         stuff_avg = np.nanmean([pitch_metrics.get(p, {}).get("stuff", np.nan) for p in seq])
         cmd_avg = np.nanmean([pitch_metrics.get(p, {}).get("cmd", np.nan) for p in seq])
-        # V8 scoring: CSW% (35%), Avg EV (30%), Tunnel (35%).
-        # Whiff% removed — already captured inside CSW%.
+        # V9 scoring: CSW% (35%), Avg EV (30%), SLG (35%).
         score = _weighted_score(
-            [_score_csw(csw), _score_ev(ev), tunnel_avg],
+            [_score_csw(csw), _score_ev(ev), _score_slg(slg)],
             [0.35, 0.30, 0.35],
         )
         results.append({
@@ -316,6 +331,7 @@ def _rank_sequences_from_pdf(pdf, pitch_metrics, tunnel_df=None, length=3, top_n
             "Whiff%": whiff,
             "CSW%": csw,
             "Avg EV": ev,
+            "SLG": slg,
             "Stuff+": stuff_avg,
             "Cmd+": cmd_avg,
             "Score": score,
@@ -376,7 +392,7 @@ def _assign_tactical_tags(rows):
         return rows
     csws = [r.get("CSW%") for r in rows]
     evs = [r.get("Avg EV") for r in rows]
-    tunnels = [r.get("Tunnel") for r in rows]
+    slgs = [r.get("SLG") for r in rows]
 
     def _best_idx(vals, func=max):
         vals_clean = [v for v in vals if pd.notna(v)]
@@ -390,10 +406,10 @@ def _assign_tactical_tags(rows):
 
     idx_csw = _best_idx(csws, max)
     idx_ev = _best_idx(evs, min)
-    idx_tun = _best_idx(tunnels, max)
+    idx_slg = _best_idx(slgs, min)  # Lower SLG = better
 
     tags = {}
-    for idx, label in [(idx_csw, "Best putaway"), (idx_ev, "Best weak‑contact"), (idx_tun, "Best tunnel")]:
+    for idx, label in [(idx_csw, "Best putaway"), (idx_ev, "Best weak‑contact"), (idx_slg, "Lowest SLG")]:
         if idx is not None and idx not in tags:
             tags[idx] = label
     for i in range(len(rows)):
@@ -1073,10 +1089,9 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
         )
 
         st.caption(
-            "Scored by CSW% (35%), Avg EV (30%), and Tunnel (35%)."
+            "Scored by CSW% (35%), Avg EV (30%), and SLG against (35%). "
             "Sequences are ranked from actual in-game sequences; outcomes use the final pitch. "
-            "Tunnel score = same-pair D1 percentile using commit separation (55%), plate separation (19%), "
-            "release consistency (10%), release angle similarity (8%), movement divergence (8%). "
+            "SLG = total bases / batted ball events. "
             "Pairs are unordered (FB/SL = SL/FB). Details in checkbox."
         )
 
@@ -1088,13 +1103,14 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
                 rows.append({
                     "Pair": r["Pair"],
                     "Score": f"{r['Score']:.1f}" if pd.notna(r["Score"]) else "-",
-                    "Whiff%": f"{r['Whiff%']:.1f}" if pd.notna(r["Whiff%"]) else "-",
                     "CSW%": f"{r['CSW%']:.1f}" if pd.notna(r["CSW%"]) else "-",
                     "Avg EV": f"{r['Avg EV']:.1f}" if pd.notna(r["Avg EV"]) else "-",
+                    "SLG": f"{r['SLG']:.3f}" if pd.notna(r.get("SLG")) else "-",
                     "Tag": r.get("Tag", ""),
                 })
                 detail.append({
                     "Pair": r["Pair"],
+                    "Whiff%": f"{r['Whiff%']:.1f}" if pd.notna(r["Whiff%"]) else "-",
                     "Tunnel": f"{r['Tunnel']:.1f}" if pd.notna(r["Tunnel"]) else "-",
                     "Stuff+": f"{r['Stuff+']:.0f}" if pd.notna(r["Stuff+"]) else "-",
                     "Cmd+": f"{r['Cmd+']:.0f}" if pd.notna(r["Cmd+"]) else "-",
@@ -1103,7 +1119,7 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
             st.markdown("**Top 2 Pitch Pairs**")
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
             show_details = st.checkbox(
-                "Show details (Tunnel / Stuff+ / Command+ / Sample size)",
+                "Show details (Whiff% / Tunnel / Stuff+ / Command+ / Sample size)",
                 key=f"pc_pairs_detail_{pitcher}",
             )
             if show_details:
@@ -1119,13 +1135,14 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
                 rows.append({
                     "Sequence": r["Seq"],
                     "Score": f"{r['Score']:.1f}" if pd.notna(r["Score"]) else "-",
-                    "Whiff%": f"{r['Whiff%']:.1f}" if pd.notna(r["Whiff%"]) else "-",
                     "CSW%": f"{r['CSW%']:.1f}" if pd.notna(r["CSW%"]) else "-",
                     "Avg EV": f"{r['Avg EV']:.1f}" if pd.notna(r["Avg EV"]) else "-",
+                    "SLG": f"{r['SLG']:.3f}" if pd.notna(r.get("SLG")) else "-",
                     "Tag": r.get("Tag", ""),
                 })
                 detail.append({
                     "Sequence": r["Seq"],
+                    "Whiff%": f"{r['Whiff%']:.1f}" if pd.notna(r["Whiff%"]) else "-",
                     "Tunnel": f"{r['Tunnel']:.1f}" if pd.notna(r["Tunnel"]) else "-",
                     "Stuff+": f"{r['Stuff+']:.0f}" if pd.notna(r["Stuff+"]) else "-",
                     "Cmd+": f"{r['Cmd+']:.0f}" if pd.notna(r["Cmd+"]) else "-",
@@ -1134,7 +1151,7 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
             st.markdown("**Top 3‑Pitch Sequences**")
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
             show_details = st.checkbox(
-                "Show details (Tunnel / Stuff+ / Command+ / Sample size)",
+                "Show details (Whiff% / Tunnel / Stuff+ / Command+ / Sample size)",
                 key=f"pc_seq3_detail_{pitcher}",
             )
             if show_details:
@@ -1150,13 +1167,14 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
                 rows.append({
                     "Sequence": r["Seq"],
                     "Score": f"{r['Score']:.1f}" if pd.notna(r["Score"]) else "-",
-                    "Whiff%": f"{r['Whiff%']:.1f}" if pd.notna(r["Whiff%"]) else "-",
                     "CSW%": f"{r['CSW%']:.1f}" if pd.notna(r["CSW%"]) else "-",
                     "Avg EV": f"{r['Avg EV']:.1f}" if pd.notna(r["Avg EV"]) else "-",
+                    "SLG": f"{r['SLG']:.3f}" if pd.notna(r.get("SLG")) else "-",
                     "Tag": r.get("Tag", ""),
                 })
                 detail.append({
                     "Sequence": r["Seq"],
+                    "Whiff%": f"{r['Whiff%']:.1f}" if pd.notna(r["Whiff%"]) else "-",
                     "Tunnel": f"{r['Tunnel']:.1f}" if pd.notna(r["Tunnel"]) else "-",
                     "Stuff+": f"{r['Stuff+']:.0f}" if pd.notna(r["Stuff+"]) else "-",
                     "Cmd+": f"{r['Cmd+']:.0f}" if pd.notna(r["Cmd+"]) else "-",
@@ -1165,7 +1183,7 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
             st.markdown("**Top 4‑Pitch Sequences**")
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
             show_details = st.checkbox(
-                "Show details (Tunnel / Stuff+ / Command+ / Sample size)",
+                "Show details (Whiff% / Tunnel / Stuff+ / Command+ / Sample size)",
                 key=f"pc_seq4_detail_{pitcher}",
             )
             if show_details:
@@ -1559,10 +1577,9 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
     # ═══════════════════════════════════════════
     section_header("Best Pairs & Sequences (Composite)")
     st.caption(
-        "Scored by CSW% (35%), Avg EV (30%), and Tunnel (35%)."
+        "Scored by CSW% (35%), Avg EV (30%), and SLG against (35%). "
         "Sequences are ranked from actual in-game sequences; outcomes use the final pitch. "
-        "Tunnel score = same-pair D1 percentile using commit separation (55%), plate separation (19%), "
-        "release consistency (10%), release angle similarity (8%), movement divergence (8%). "
+        "SLG = total bases / batted ball events. "
         "Pairs are unordered (FB/SL = SL/FB). Details in checkbox."
     )
     top_pairs = _rank_pairs(tunnel_df, pair_df, pitch_metrics, top_n=2)
@@ -1583,13 +1600,14 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
             rows.append({
                 "Pair": r["Pair"],
                 "Score": f"{r['Score']:.1f}" if pd.notna(r["Score"]) else "-",
-                "Whiff%": f"{r['Whiff%']:.1f}" if pd.notna(r["Whiff%"]) else "-",
                 "CSW%": f"{r['CSW%']:.1f}" if pd.notna(r["CSW%"]) else "-",
                 "Avg EV": f"{r['Avg EV']:.1f}" if pd.notna(r["Avg EV"]) else "-",
+                "SLG": f"{r['SLG']:.3f}" if pd.notna(r.get("SLG")) else "-",
                 "Tag": r.get("Tag", ""),
             })
             detail.append({
                 "Pair": r["Pair"],
+                "Whiff%": f"{r['Whiff%']:.1f}" if pd.notna(r["Whiff%"]) else "-",
                 "Tunnel": f"{r['Tunnel']:.1f}" if pd.notna(r["Tunnel"]) else "-",
                 "Stuff+": f"{r['Stuff+']:.0f}" if pd.notna(r["Stuff+"]) else "-",
                 "Cmd+": f"{r['Cmd+']:.0f}" if pd.notna(r["Cmd+"]) else "-",
@@ -1598,7 +1616,7 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
         st.markdown("**Top 2 Pitch Pairs**")
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
         show_details = st.checkbox(
-            "Show details (Tunnel / Stuff+ / Command+ / Sample size)",
+            "Show details (Whiff% / Tunnel / Stuff+ / Command+ / Sample size)",
             key=f"pl_pairs_detail_{pitcher}",
         )
         if show_details:
@@ -1614,13 +1632,14 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
             rows.append({
                 "Sequence": r["Seq"],
                 "Score": f"{r['Score']:.1f}" if pd.notna(r["Score"]) else "-",
-                "Whiff%": f"{r['Whiff%']:.1f}" if pd.notna(r["Whiff%"]) else "-",
                 "CSW%": f"{r['CSW%']:.1f}" if pd.notna(r["CSW%"]) else "-",
                 "Avg EV": f"{r['Avg EV']:.1f}" if pd.notna(r["Avg EV"]) else "-",
+                "SLG": f"{r['SLG']:.3f}" if pd.notna(r.get("SLG")) else "-",
                 "Tag": r.get("Tag", ""),
             })
             detail.append({
                 "Sequence": r["Seq"],
+                "Whiff%": f"{r['Whiff%']:.1f}" if pd.notna(r["Whiff%"]) else "-",
                 "Tunnel": f"{r['Tunnel']:.1f}" if pd.notna(r["Tunnel"]) else "-",
                 "Stuff+": f"{r['Stuff+']:.0f}" if pd.notna(r["Stuff+"]) else "-",
                 "Cmd+": f"{r['Cmd+']:.0f}" if pd.notna(r["Cmd+"]) else "-",
@@ -1629,7 +1648,7 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
         st.markdown("**Top 3‑Pitch Sequences**")
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
         show_details = st.checkbox(
-            "Show details (Tunnel / Stuff+ / Command+ / Sample size)",
+            "Show details (Whiff% / Tunnel / Stuff+ / Command+ / Sample size)",
             key=f"pl_seq3_detail_{pitcher}",
         )
         if show_details:
@@ -1645,13 +1664,14 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
             rows.append({
                 "Sequence": r["Seq"],
                 "Score": f"{r['Score']:.1f}" if pd.notna(r["Score"]) else "-",
-                "Whiff%": f"{r['Whiff%']:.1f}" if pd.notna(r["Whiff%"]) else "-",
                 "CSW%": f"{r['CSW%']:.1f}" if pd.notna(r["CSW%"]) else "-",
                 "Avg EV": f"{r['Avg EV']:.1f}" if pd.notna(r["Avg EV"]) else "-",
+                "SLG": f"{r['SLG']:.3f}" if pd.notna(r.get("SLG")) else "-",
                 "Tag": r.get("Tag", ""),
             })
             detail.append({
                 "Sequence": r["Seq"],
+                "Whiff%": f"{r['Whiff%']:.1f}" if pd.notna(r["Whiff%"]) else "-",
                 "Tunnel": f"{r['Tunnel']:.1f}" if pd.notna(r["Tunnel"]) else "-",
                 "Stuff+": f"{r['Stuff+']:.0f}" if pd.notna(r["Stuff+"]) else "-",
                 "Cmd+": f"{r['Cmd+']:.0f}" if pd.notna(r["Cmd+"]) else "-",
