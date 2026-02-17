@@ -99,7 +99,10 @@ def _pair_stats(pair_df, a, b):
         vals = pd.to_numeric(sub.get(col), errors="coerce")
         if vals is None or vals.dropna().empty:
             return np.nan
-        return float(np.average(vals.fillna(0), weights=w))
+        mask = vals.notna()
+        if not mask.any():
+            return np.nan
+        return float(np.average(vals[mask], weights=w[mask]))
     return {
         "whiff": _wavg("Whiff%"),
         "k": _wavg("K%"),
@@ -300,7 +303,7 @@ def _rank_sequences_from_pdf(pdf, pitch_metrics, tunnel_df=None, length=3, top_n
     for seq, s in seq_stats.items():
         if s["n"] < min_n:
             continue
-        whiff = s["wh"] / max(s["sw"], 1) * 100
+        whiff = s["wh"] / s["sw"] * 100 if s["sw"] > 0 else np.nan
         k_pct = s["k"] / max(s["n"], 1) * 100
         putaway = s["putaway"] / max(s["two_strike"], 1) * 100 if s["two_strike"] else np.nan
         ev = s["ev_sum"] / s["ev_n"] if s["ev_n"] else np.nan
