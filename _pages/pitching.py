@@ -149,6 +149,11 @@ def _rank_pairs(tunnel_df, pair_df, pitch_metrics, top_n=2):
         ev = ps.get("ev", np.nan)
         count_ab = ps.get("count_ab", 0)
         count_ba = ps.get("count_ba", 0)
+        # Skip pairs with no outcome data — tunnel-only pairs belong in the
+        # "Best Tunnel Pair" section, not the composite ranking.
+        has_outcome = any(pd.notna(v) for v in [whiff, k_pct, ev])
+        if not has_outcome:
+            continue
         # Always present pairs as unordered to avoid duplication
         label_a, label_b = sorted([a, b])
         score = _weighted_score(
