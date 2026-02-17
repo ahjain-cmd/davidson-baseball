@@ -9,7 +9,7 @@ from scipy.stats import percentileofscore
 from config import (
     DAVIDSON_TEAM_ID, ROSTER_2026, JERSEY, POSITION, PITCH_COLORS,
     SWING_CALLS, CONTACT_CALLS, ZONE_SIDE, ZONE_HEIGHT_BOT, ZONE_HEIGHT_TOP,
-    PLATE_SIDE_MAX, PLATE_HEIGHT_MIN, PLATE_HEIGHT_MAX, MIN_PITCH_USAGE_PCT,
+    PLATE_SIDE_MAX, PLATE_HEIGHT_MIN, PLATE_HEIGHT_MAX, MIN_PITCH_USAGE_PCT, MIN_TUNNEL_SEQ_PCT,
     filter_davidson, filter_minor_pitches, normalize_pitch_types,
     in_zone_mask, is_barrel_mask, display_name, get_percentile,
 )
@@ -233,7 +233,7 @@ def _rank_sequences_from_pdf(pdf, pitch_metrics, tunnel_df=None, length=3, top_n
     """
     if not isinstance(pdf, pd.DataFrame) or pdf.empty:
         return []
-    pdf = filter_minor_pitches(pdf, min_pct=MIN_PITCH_USAGE_PCT)
+    pdf = filter_minor_pitches(pdf, min_pct=MIN_TUNNEL_SEQ_PCT)
     if pdf.empty:
         return []
 
@@ -1173,7 +1173,7 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
             tunnel_sorted = tunnel_df.sort_values("Tunnel Score", ascending=False).head(1)
             # Only show section if there's at least one pair with a passing grade (C or better = score >= 40)
             best_score = tunnel_sorted["Tunnel Score"].max() if not tunnel_sorted.empty else 0
-            if best_score >= 40:
+            if best_score > 0:
                 st.markdown("---")
                 st.markdown("**Best Tunnel Pair (Deception Only)**")
                 st.caption(
@@ -1195,13 +1195,6 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
                     })
                 if tunnel_rows:
                     st.dataframe(pd.DataFrame(tunnel_rows), use_container_width=True, hide_index=True)
-            elif best_score > 0:
-                # Show a note that tunneling is below average but don't display the section
-                st.markdown("---")
-                st.caption(
-                    f"**Tunneling Note**: All pitch pair tunnels are below D1 average (best: {best_score:.0f}th percentile). "
-                    "Consider working on release point consistency to improve deception."
-                )
 
         # Transition matrix mini-heatmap
         sort_cols_tm = [c for c in ["GameID", "Batter", "PAofInning", "PitchNo"] if c in pdf.columns]
@@ -2101,7 +2094,7 @@ def _pitching_lab_content(data, pitcher, season_filter, pdf, stuff_df,
         return
 
     # Pre-compute tunnel/sequence data with <5% usage removed
-    pdf_tunnel = filter_minor_pitches(pdf, min_pct=MIN_PITCH_USAGE_PCT)
+    pdf_tunnel = filter_minor_pitches(pdf, min_pct=MIN_TUNNEL_SEQ_PCT)
     if pdf_tunnel.empty:
         pdf_tunnel = pdf
     pitch_types = tuple(sorted(pdf["TaggedPitchType"].dropna().unique()))

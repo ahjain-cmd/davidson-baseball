@@ -12,7 +12,7 @@ from scipy.stats import percentileofscore
 from config import (
     PARQUET_PATH, CACHE_DIR, TUNNEL_BENCH_PATH, TUNNEL_WEIGHTS_PATH,
     PLATE_SIDE_MAX, PLATE_HEIGHT_MIN, PLATE_HEIGHT_MAX,
-    MIN_PITCH_USAGE_PCT, filter_minor_pitches, SWING_CALLS,
+    MIN_TUNNEL_SEQ_PCT, filter_minor_pitches, SWING_CALLS,
 )
 from data.loader import (
     _precompute_table_exists,
@@ -309,7 +309,7 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
         pdf["PlateLocSide"].between(-PLATE_SIDE_MAX, PLATE_SIDE_MAX) &
         pdf["PlateLocHeight"].between(PLATE_HEIGHT_MIN, PLATE_HEIGHT_MAX)
     ].copy()
-    pdf = filter_minor_pitches(pdf, min_pct=MIN_PITCH_USAGE_PCT)
+    pdf = filter_minor_pitches(pdf, min_pct=MIN_TUNNEL_SEQ_PCT)
     if pdf.empty:
         return pd.DataFrame()
 

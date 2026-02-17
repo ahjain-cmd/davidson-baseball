@@ -257,7 +257,8 @@ MIN_CALLED_STRIKES_FOR_ADAPTIVE_ZONE = 20
 PLATE_SIDE_MAX = 2.5
 PLATE_HEIGHT_MIN = 0.0
 PLATE_HEIGHT_MAX = 5.5
-MIN_PITCH_USAGE_PCT = 10.0
+MIN_PITCH_USAGE_PCT = 5.0
+MIN_TUNNEL_SEQ_PCT = 10.0
 
 # ── Swing / contact call lists ─────────────────
 SWING_CALLS = ["StrikeSwinging", "FoulBall", "FoulBallNotFieldable", "FoulBallFieldable", "InPlay"]
@@ -372,7 +373,7 @@ def normalize_pitch_types(df):
     return df
 
 
-def filter_minor_pitches(df, min_pct=10.0):
+def filter_minor_pitches(df, min_pct=5.0):
     """Remove pitch types that make up less than min_pct% of a pitcher's arsenal."""
     if df.empty or "TaggedPitchType" not in df.columns:
         return df
