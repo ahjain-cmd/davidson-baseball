@@ -1072,7 +1072,7 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
             "Outcomes-first (Whiff, CSW, EV) with Tunnel as a secondary signal. "
             "Sequences are ranked from actual in-game sequences; outcomes use the final pitch. "
             "Tunnel score = same-pair D1 percentile using commit separation (55%), plate separation (19%), "
-            "release consistency (10%), release angle similarity (8%), movement divergence (6%), velo gap (2%). "
+            "release consistency (10%), release angle similarity (8%), movement divergence (8%). "
             "Pairs are unordered (FB/SL = SL/FB). Details in checkbox."
         )
 
@@ -1181,7 +1181,7 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
                     "Tunnel score measures: (1) **Commit separation** at 280ms before plate — how far apart "
                     "pitches are when hitter must decide to swing (55% weight); (2) **Plate separation** — "
                     "how much pitches diverge at the plate (19%); (3) **Release point consistency** (10%); "
-                    "(4) **Release angle similarity** (8%); (5) **Movement divergence** (6%); (6) **Velo gap** (2%). "
+                    "(4) **Release angle similarity** (8%); (5) **Movement divergence** (8%). "
                     "Percentile vs all D1 pitchers throwing the same pitch pair."
                 )
                 tunnel_rows = []
@@ -1565,7 +1565,7 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
         "Outcomes-first (Whiff, CSW, EV) with Tunnel as a secondary signal. "
         "Sequences are ranked from actual in-game sequences; outcomes use the final pitch. "
         "Tunnel score = same-pair D1 percentile using commit separation (55%), plate separation (19%), "
-        "release consistency (10%), release angle similarity (8%), movement divergence (6%), velo gap (2%). "
+        "release consistency (10%), release angle similarity (8%), movement divergence (8%). "
         "Pairs are unordered (FB/SL = SL/FB). Details in checkbox."
     )
     top_pairs = _rank_pairs(tunnel_df, pair_df, pitch_metrics, top_n=2)

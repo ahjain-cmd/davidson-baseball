@@ -285,19 +285,16 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
     """Compute tunnel scores using Euler-integrated flight paths and
     data-driven percentile grading.
 
-    V5 — Backtest-calibrated rebuild:
-      1. Commit point at 280ms before plate (research-backed decision window),
-         not 167ms.  Produces realistic commit separations (median ~3.3").
-      2. Percentile grading relative to SAME PAIR TYPE — a Sinker/Slider pair
-         is compared to other Sinker/Slider tunnels, not to Fastball/Changeup.
-      3. Regression-weighted composite score from 46,934 actual consecutive
-         pitch pairs.  Weights derived from logistic regression on whiff:
+    V7 — Physics-audited weights:
+      1. Commit point at 280ms before plate (research-backed decision window).
+      2. Percentile grading relative to SAME PAIR TYPE.
+      3. Weighted composite (velo removed after physics audit showed it
+         contributes <1.5" commit sep for 10 mph gaps vs 4-5" from break):
            commit_sep  55%  (lower → more whiffs — induces bad swings)
            plate_sep   19%  (higher → more whiffs given swing — late break)
            rel_sep     10%  (lower → better — consistent arm slot)
            rel_angle    8%  (lower → better — similar launch angles)
-           move_div     6%  (minor — captured by plate_sep)
-           velo_gap     2%  (negligible)
+           move_div     8%  (break profiles are dominant driver of deception)
       4. Release-point variance penalty, pitch-by-pitch pairing unchanged.
     """
     # Minimum columns: need pitch type, release point, plate location, and velo.
@@ -688,32 +685,33 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
             else:
                 rel_angle_pct = 50
 
-            # 5. MOVEMENT DIVERGENCE (6% weight)
-            # Higher move_div → better
+            # 5. MOVEMENT DIVERGENCE (8% weight)
+            # Higher move_div → better.  Break profiles are the dominant driver
+            # of commit separation (audit: 4-5" from break vs 1.4" from 10 mph
+            # velo gap), so movement divergence gets the weight formerly on velo.
             move_pct = min(100, move_div / 30.0 * 100)
 
-            # 6. VELO GAP (2% weight) — slight bonus for speed differential
-            velo_pct = min(100, velo_gap / 15.0 * 100)
+            # Velo gap removed from scoring — velocity's small effect on commit
+            # separation is already captured by the physics model in Factor 1.
+            # Velo gap is still reported in diagnostics.
 
-            # Weighted composite (regression-derived weights)
+            # Weighted composite (regression-derived weights, velo removed v7)
             w_blob = _load_tunnel_weights() or {}
             w_global = w_blob.get("global") or {
                 "commit": 0.55,
                 "plate": 0.19,
                 "rel": 0.10,
                 "rel_angle": 0.08,
-                "move": 0.06,
-                "velo": 0.02,
+                "move": 0.08,
             }
             w_pair = w_blob.get("pairs", {}).get(pair_label)
             weights = w_pair or w_global
             raw_tunnel = round(
-                commit_pct * weights["commit"] +
-                plate_pct * weights["plate"] +
-                rel_pct * weights["rel"] +
-                rel_angle_pct * weights["rel_angle"] +
-                move_pct * weights["move"] +
-                velo_pct * weights["velo"], 2)
+                commit_pct * weights.get("commit", 0.55) +
+                plate_pct * weights.get("plate", 0.19) +
+                rel_pct * weights.get("rel", 0.10) +
+                rel_angle_pct * weights.get("rel_angle", 0.08) +
+                move_pct * weights.get("move", 0.08), 2)
 
             # Outcome boost: small, sample-size gated, shrunk to league baseline
             outcome_boost = 0.0
