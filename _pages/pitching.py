@@ -1196,12 +1196,12 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
         # ── Best Tunnel Pairs (pure deception ranking) ──
         if isinstance(tunnel_df, pd.DataFrame) and not tunnel_df.empty and "Tunnel Score" in tunnel_df.columns:
             # Sort by tunnel score descending, take top 1
-            tunnel_sorted = tunnel_df.sort_values("Tunnel Score", ascending=False).head(1)
+            tunnel_sorted = tunnel_df.sort_values("Tunnel Score", ascending=False).head(3)
             # Only show section if there's at least one pair with a passing grade (C or better = score >= 40)
             best_score = tunnel_sorted["Tunnel Score"].max() if not tunnel_sorted.empty else 0
             if best_score > 0:
                 st.markdown("---")
-                st.markdown("**Best Tunnel Pair (Deception Only)**")
+                st.markdown("**Top Tunnel Pairs (Deception Only)**")
                 st.caption(
                     "Ranked purely by tunnel score — how deceptive two pitches look out of the hand. "
                     "Tunnel score measures: (1) **Commit separation** at 280ms before plate — how far apart "
