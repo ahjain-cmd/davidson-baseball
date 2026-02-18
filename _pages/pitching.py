@@ -2059,13 +2059,22 @@ def page_pitching(data):
         st.warning("No pitching data found.")
         return
 
-    pitchers = sorted(pitching["Pitcher"].unique())
-    c1, c2 = st.columns([2, 3])
-    with c1:
-        pitcher = st.selectbox("Select Pitcher", pitchers, format_func=display_name, key="pitching_pitcher")
+    c1, c2, c3 = st.columns([2, 3, 1])
     with c2:
         all_seasons = get_all_seasons()
         season_filter = st.multiselect("Season", all_seasons, default=all_seasons, key="pitching_season")
+    with c3:
+        game_mode = st.selectbox("Game Type", ["Games Only", "All", "Scrimmages Only"], key="pitching_game_type")
+
+    # Apply game/scrimmage filter: DAV_WIL vs DAV_WIL = scrimmage
+    if game_mode == "Games Only":
+        pitching = pitching[pitching["BatterTeam"] != DAVIDSON_TEAM_ID]
+    elif game_mode == "Scrimmages Only":
+        pitching = pitching[pitching["BatterTeam"] == DAVIDSON_TEAM_ID]
+
+    pitchers = sorted(pitching["Pitcher"].unique())
+    with c1:
+        pitcher = st.selectbox("Select Pitcher", pitchers, format_func=display_name, key="pitching_pitcher")
 
     all_pitcher_stats = compute_pitcher_stats_pop(season_filter=season_filter)
     pr = None

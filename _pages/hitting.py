@@ -1631,13 +1631,22 @@ def page_hitting(data):
         st.warning("No hitting data found.")
         return
 
-    batters = sorted(hitting["Batter"].unique())
-    c1, c2 = st.columns([2, 3])
-    with c1:
-        batter = st.selectbox("Select Hitter", batters, format_func=display_name, key="hitting_batter")
+    c1, c2, c3 = st.columns([2, 3, 1])
     with c2:
         all_seasons = get_all_seasons()
         season_filter = st.multiselect("Season", all_seasons, default=all_seasons, key="hitting_season")
+    with c3:
+        game_mode = st.selectbox("Game Type", ["Games Only", "All", "Scrimmages Only"], key="hitting_game_type")
+
+    # Apply game/scrimmage filter: DAV_WIL vs DAV_WIL = scrimmage
+    if game_mode == "Games Only":
+        hitting = hitting[hitting["PitcherTeam"] != DAVIDSON_TEAM_ID]
+    elif game_mode == "Scrimmages Only":
+        hitting = hitting[hitting["PitcherTeam"] == DAVIDSON_TEAM_ID]
+
+    batters = sorted(hitting["Batter"].unique())
+    with c1:
+        batter = st.selectbox("Select Hitter", batters, format_func=display_name, key="hitting_batter")
 
     bdf = hitting[(hitting["Batter"] == batter) & (hitting["Season"].isin(season_filter))]
     if len(bdf) < 20:
