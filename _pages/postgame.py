@@ -2800,13 +2800,13 @@ def _postgame_grades(gd, data):
                     season_cmd_by_pt=_season_cmd,
                 )
 
-            # 6b. Pitch Call Grade (on-demand — only compute when user checks)
-            if n_pitches >= _MIN_PITCHER_PITCHES:
-                if st.checkbox("Show Game Call Grade", key=f"pg_cg_chk_{slug}", value=False):
-                    try:
-                        _render_call_grade_section(pdf, data, pitcher, key_suffix=f"pit_{slug}")
-                    except Exception:
-                        st.caption("Could not compute call grade.")
+            # 6b. Pitch Call Grade — disabled pending redesign
+            # if n_pitches >= _MIN_PITCHER_PITCHES:
+            #     if st.checkbox("Show Game Call Grade", key=f"pg_cg_chk_{slug}", value=False):
+            #         try:
+            #             _render_call_grade_section(pdf, data, pitcher, key_suffix=f"pit_{slug}")
+            #         except Exception:
+            #             st.caption("Could not compute call grade.")
 
             # 7. Batter-by-Batter Breakdown
             pa_cols_p = [c for c in ["GameID", "Batter", "Inning", "PAofInning"] if c in pdf.columns]

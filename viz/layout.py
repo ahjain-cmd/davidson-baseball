@@ -76,19 +76,16 @@ GLOBAL_CSS = """<style>
         color: #1a1a2e !important;
     }
     /* Fix Material Symbols icon text overflow in expanders.
-       When the Material Symbols Rounded font fails to load, the icon
-       ligature name (e.g. "keyboard_arrow_right") renders as plain text.
-       Target via data-testid="stIconMaterial" (Streamlit 1.54). */
+       Hide the ligature text entirely and show a CSS triangle instead. */
     [data-testid="stExpander"] [data-testid="stIconMaterial"],
     [data-testid="stExpander"] [data-testid="stExpanderToggleIcon"],
     [data-testid="stExpander"] [data-testid="stIcon"] {
+        font-size: 0 !important;
         overflow: hidden !important;
-        width: 1.5rem !important;
-        min-width: 1.5rem !important;
-        max-width: 1.5rem !important;
-        height: 1.5rem !important;
-        flex-shrink: 0 !important;
-        display: inline-flex !important;
+        width: 0 !important;
+        min-width: 0 !important;
+        max-width: 0 !important;
+        display: none !important;
     }
 
     /* Force dark text everywhere in main content */
