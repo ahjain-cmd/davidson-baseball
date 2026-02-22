@@ -179,6 +179,7 @@ def load_opponent_pack(team_id: str, season_year: int) -> Optional[Dict[str, Any
     return out
 
 
+
 def _compute_and_store_hole_scores(pack: Dict[str, Any], opp_pitches: pd.DataFrame) -> None:
     """Compute per-hitter hole scores (pitch-type-specific + aggregate) and count-zone metrics.
 
@@ -192,7 +193,9 @@ def _compute_and_store_hole_scores(pack: Dict[str, Any], opp_pitches: pd.DataFra
       pack["hitting"]["hole_scores"] — columns: playerFullName, pitcher_throws, pitch_type, xb, yb, score, swing_pct, whiff_pct, slg, ev_mean, n
       pack["hitting"]["count_zone_metrics"] — columns: playerFullName, pitcher_throws, count_group, xb, yb, swing_rate, whiff_rate, slg, n
     """
-    from analytics.zone_vulnerability import compute_all_pitch_type_holes, compute_count_zone_metrics
+    from analytics.zone_vulnerability import (
+        compute_all_pitch_type_holes, compute_count_zone_metrics,
+    )
 
     rate_df = pack.get("hitting", {}).get("rate", pd.DataFrame())
     if rate_df.empty:
@@ -219,7 +222,7 @@ def _compute_and_store_hole_scores(pack: Dict[str, Any], opp_pitches: pd.DataFra
                 opp_pitches["Batter"].astype(str).str.strip() == str(hitter).strip()
             ]
         else:
-            continue
+            hitter_pitches = pd.DataFrame()
 
         if len(hitter_pitches) < 30:
             continue
@@ -232,7 +235,7 @@ def _compute_and_store_hole_scores(pack: Dict[str, Any], opp_pitches: pd.DataFra
 
         # Build list of (pitcher_throws_label, pitch_subset) pairs to compute
         splits = [("ALL", hitter_pitches)]
-        if has_pitcher_throws:
+        if has_pitcher_throws and not hitter_pitches.empty:
             for hand_val, hand_label in [("Right", "R"), ("Left", "L")]:
                 hand_df = hitter_pitches[
                     hitter_pitches["PitcherThrows"].astype(str).str.strip() == hand_val
@@ -259,21 +262,22 @@ def _compute_and_store_hole_scores(pack: Dict[str, Any], opp_pitches: pd.DataFra
                         "n": detail.get("n", 0),
                     })
 
-            # Count-zone metrics
-            czm = compute_count_zone_metrics(pitch_subset)
-            for cg, zone_dict in czm.items():
-                for (xb, yb), metrics in zone_dict.items():
-                    czm_rows.append({
-                        "playerFullName": hitter,
-                        "pitcher_throws": pt_label,
-                        "count_group": cg,
-                        "xb": xb,
-                        "yb": yb,
-                        "swing_rate": metrics["swing_rate"],
-                        "whiff_rate": metrics["whiff_rate"],
-                        "slg": metrics["slg"],
-                        "n": metrics["n"],
-                    })
+            # Count-zone metrics (only with observed pitches)
+            if not pitch_subset.empty:
+                czm = compute_count_zone_metrics(pitch_subset)
+                for cg, zone_dict in czm.items():
+                    for (xb, yb), metrics in zone_dict.items():
+                        czm_rows.append({
+                            "playerFullName": hitter,
+                            "pitcher_throws": pt_label,
+                            "count_group": cg,
+                            "xb": xb,
+                            "yb": yb,
+                            "swing_rate": metrics["swing_rate"],
+                            "whiff_rate": metrics["whiff_rate"],
+                            "slg": metrics["slg"],
+                            "n": metrics["n"],
+                        })
 
     if hole_rows:
         pack.setdefault("hitting", {})["hole_scores"] = pd.DataFrame(hole_rows)

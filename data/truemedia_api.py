@@ -291,6 +291,40 @@ def _fetch_hitters_vs_hand(team_id, season_year, hand="L"):
         return pd.DataFrame()
 
 
+def fetch_hitter_spray_vs_hand(team_id, season_year, hand="R"):
+    """Fetch hitter spray data (Pull%, Ctr%, Oppo%, Ground%) vs a specific pitcher hand.
+
+    Uses the pitcherHand parameter (not the filters syntax, which doesn't
+    support batted-ball columns).  Returns DataFrame with fullName column
+    and spray percentages as 0-1 decimals.
+    """
+    tok = get_temp_token()
+    if not tok:
+        return pd.DataFrame()
+    cols = _dedup_cols(
+        "[PA]", _HIT_LOCATION_COLS, _HIT_BATTEDBALL_COLS,
+    )
+    params = {
+        "teamId": team_id,
+        "seasonYear": season_year,
+        "columns": cols,
+        "format": "RAW",
+        "pitcherHand": hand,
+    }
+    parts = "&".join(f"{k}={v}" for k, v in params.items())
+    url = f"{_DQ_BASE}/PlayerTotals.csv?{parts}&token={tok}"
+    try:
+        res = requests.get(url, timeout=30)
+        res.raise_for_status()
+        df = pd.read_csv(StringIO(res.text))
+        # Normalize column name for downstream compatibility
+        if "fullName" in df.columns and "playerFullName" not in df.columns:
+            df["playerFullName"] = df["fullName"]
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_team_totals_hitting(season_year=2026):
     """Fetch team-level hitting totals for ALL D1 teams (for ranking context)."""

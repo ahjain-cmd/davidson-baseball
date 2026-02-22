@@ -9,6 +9,9 @@ import plotly.graph_objects as go
 import plotly.express as px
 from scipy.stats import percentileofscore
 
+# ML toggle — set to True to use XGBoost matchup model instead of formula composite
+USE_ML_MATCHUP = False
+
 from config import (
     DAVIDSON_TEAM_ID, ROSTER_2026, JERSEY, POSITION, PITCH_COLORS, NAME_MAP,
     SWING_CALLS, CONTACT_CALLS, TM_PITCH_PCT_COLS,
@@ -388,6 +391,13 @@ def _get_opp_hitter_profile(tm, hitter, team, pitch_df=None):
             v = _safe_num(pt, tm_col)
             if not pd.isna(v) and v > 0 and str(trackman_name).strip().upper() not in bad_pitch_labels:
                 profile["pitch_type_pcts"][trackman_name] = v
+
+    # Batter features for spatial hole score model
+    try:
+        from analytics.spatial_hole_model import extract_batter_features_from_profile
+        profile["_batter_features"] = extract_batter_features_from_profile(profile)
+    except (ImportError, Exception):
+        pass
 
     # Zone vulnerability summary (when pitch-level data is available)
     if pitch_df is not None and not pitch_df.empty:
@@ -2070,7 +2080,8 @@ def _score_pitcher_vs_hitter(arsenal, hitter_profile):
     if arsenal is None or hitter_profile is None:
         return None
     throws = "R" if arsenal["throws"] == "Right" else "L"
-    bats = hitter_profile["bats"]
+    bats_raw = hitter_profile["bats"]
+    bats = bats_raw[0] if bats_raw and len(bats_raw) > 1 else bats_raw
     platoon_label = "Neutral"
     if bats == "S":
         platoon_label = "Switch (Neutral)"
@@ -2114,7 +2125,15 @@ def _score_pitcher_vs_hitter(arsenal, hitter_profile):
     # Get tunnel data from arsenal
     tun_df = arsenal.get("tunnels", pd.DataFrame())
 
-    # Score each pitch using the unified composite scorer
+    # Score each pitch — ML or formula composite
+    ml_scores = None
+    if USE_ML_MATCHUP:
+        try:
+            from analytics.matchup_model import score_pitcher_vs_hitter_ml
+            ml_scores = score_pitcher_vs_hitter_ml(arsenal["pitches"], hd)
+        except (FileNotFoundError, ImportError):
+            ml_scores = None  # Fall back to formula
+
     pitch_scores = {}
     for pt_name, pt_data in arsenal["pitches"].items():
         is_hard = pt_name in _hard_pitches
@@ -2126,11 +2145,14 @@ def _score_pitcher_vs_hitter(arsenal, hitter_profile):
             "our_chase": pt_data.get("chase_pct", np.nan),
             "our_ev_against": pt_data.get("ev_against", np.nan),
         }
-        # Compute composite score
-        comp_score = _pitch_score_composite(
-            pt_name, pd_compat, hd, tun_df, platoon_label,
-            arsenal_data=pt_data  # pass full arsenal pitch data for IVB/EffVelo/zone_eff
-        )
+        # Compute composite score — use ML if available, else formula
+        if ml_scores is not None and pt_name in ml_scores:
+            comp_score = ml_scores[pt_name]
+        else:
+            comp_score = _pitch_score_composite(
+                pt_name, pd_compat, hd, tun_df, platoon_label,
+                arsenal_data=pt_data
+            )
         # Build reasons from notable factors
         reasons = []
         stuff = pt_data.get("stuff_plus", np.nan)
@@ -4987,11 +5009,11 @@ def _scouting_hitter_report(tm, team, trackman_data, count_splits=None, league_h
         ("Exit Velo", _safe_num(exit_d, "ExitVel"), _tm_pctile(exit_d, "ExitVel", all_h_exit), ".1f", True),
         ("Barrel %", _safe_num(exit_d, "Barrel%"), _tm_pctile(exit_d, "Barrel%", all_h_exit), ".1f", True),
         ("Hard Hit %", _safe_num(exit_d, "Hit95+%"), _tm_pctile(exit_d, "Hit95+%", all_h_exit), ".1f", True),
-        ("K %", _safe_num(rate, "K%"), _tm_pctile(rate, "K%", all_h_rate_qualified), ".1f", True),
+        ("K %", _safe_num(rate, "K%"), _tm_pctile(rate, "K%", all_h_rate_qualified), ".1f", False),
         ("BB %", _safe_num(rate, "BB%"), _tm_pctile(rate, "BB%", all_h_rate_qualified), ".1f", True),
-        ("Chase %", _safe_num(pr, "Chase%"), _tm_pctile(pr, "Chase%", all_h_pr_qualified), ".1f", True),
-        ("Whiff %", _safe_num(pr, "SwStrk%"), _tm_pctile(pr, "SwStrk%", all_h_pr_qualified), ".1f", True),
-        ("Contact %", _safe_num(pr, "Contact%"), _tm_pctile(pr, "Contact%", all_h_pr_qualified), ".1f", False),
+        ("Chase %", _safe_num(pr, "Chase%"), _tm_pctile(pr, "Chase%", all_h_pr_qualified), ".1f", False),
+        ("Whiff %", _safe_num(pr, "SwStrk%"), _tm_pctile(pr, "SwStrk%", all_h_pr_qualified), ".1f", False),
+        ("Contact %", _safe_num(pr, "Contact%"), _tm_pctile(pr, "Contact%", all_h_pr_qualified), ".1f", True),
         ("Speed Score", _safe_num(spd, "SpeedScore"), _tm_pctile(spd, "SpeedScore", all_h_spd), ".1f", True),
     ]
     # Filter out metrics with nan values

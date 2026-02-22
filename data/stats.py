@@ -287,13 +287,40 @@ def compute_batter_stats(data, season_filter=None):
         agg["OppoPct"] = np.nan
         agg["StraightPct"] = np.nan
 
+    # ML xwOBA — compute per-batter if model is available
+    try:
+        from analytics.xwoba_model import predict_xwoba_df
+        if not batted_all.empty and "ExitSpeed" in batted_all.columns and "Angle" in batted_all.columns:
+            batted_ml = batted_all.dropna(subset=["ExitSpeed", "Angle"]).copy()
+            if not batted_ml.empty:
+                batted_ml = predict_xwoba_df(batted_ml)
+                ml_agg = batted_ml.groupby(["Batter", "BatterTeam"]).agg(
+                    xwOBA=("xwOBA", "mean"),
+                    xBA=("xBA", "mean"),
+                    xSLG=("xSLG", "mean"),
+                ).reset_index()
+                agg = agg.merge(ml_agg, on=["Batter", "BatterTeam"], how="left")
+            else:
+                agg["xwOBA"] = np.nan
+                agg["xBA"] = np.nan
+                agg["xSLG"] = np.nan
+        else:
+            agg["xwOBA"] = np.nan
+            agg["xBA"] = np.nan
+            agg["xSLG"] = np.nan
+    except (FileNotFoundError, ImportError):
+        agg["xwOBA"] = np.nan
+        agg["xBA"] = np.nan
+        agg["xSLG"] = np.nan
+
     # Select output columns
     keep = ["Batter", "BatterTeam", "PA", "BBE", "AvgEV", "MaxEV", "HardHitPct",
             "Barrels", "BarrelPct", "BarrelPA", "SweetSpotPct", "AvgLA", "AvgDist",
             "WhiffPct", "KPct", "BBPct", "ChasePct", "ChaseContact",
             "ZoneSwingPct", "ZoneContactPct", "ZonePct", "SwingPct",
             "GBPct", "FBPct", "LDPct", "PUPct", "AirPct",
-            "PullPct", "StraightPct", "OppoPct"]
+            "PullPct", "StraightPct", "OppoPct",
+            "xwOBA", "xBA", "xSLG"]
     return agg[[c for c in keep if c in agg.columns]]
 
 

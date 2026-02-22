@@ -380,7 +380,7 @@ def _draw_hole_heatmap(ax, holes, bats, title):
     for (xb, yb), score in holes.items():
         grid[2 - yb, xb] = score  # flip y so top row = high zone
 
-    ax.imshow(grid, cmap=_HOLE_CMAP, vmin=20, vmax=80, aspect="auto")
+    ax.imshow(grid, cmap=_HOLE_CMAP, vmin=35, vmax=80, aspect="auto")
     # Draw strike zone border
     ax.add_patch(plt.Rectangle((-0.5, -0.5), 3, 3, fill=False, edgecolor="black", lw=2))
 
@@ -389,7 +389,7 @@ def _draw_hole_heatmap(ax, holes, bats, title):
             v = grid[yb, xb]
             if not np.isnan(v):
                 ax.text(xb, yb, f"{v:.0f}", ha="center", va="center", fontsize=8,
-                        fontweight="bold", color="black" if v < 60 else "white")
+                        fontweight="bold", color="black" if v < 68 else "white")
 
     # Labels
     b = _fmt_bats(bats)
@@ -2123,18 +2123,22 @@ def _render_pitcher_page(pitcher, pack, all_pitcher_pp):
 
 
 def _score_to_grade(score):
-    """Convert 0-100 matchup score to letter grade."""
-    if score >= 72:
+    """Convert composite matchup score to letter grade.
+
+    Thresholds calibrated to the 24-factor composite scorer which
+    naturally produces scores in the ~48-72 range.
+    """
+    if score >= 66:
         return "A+"
-    if score >= 65:
+    if score >= 63:
         return "A"
-    if score >= 60:
+    if score >= 61:
         return "B+"
-    if score >= 55:
+    if score >= 58:
         return "B"
-    if score >= 50:
+    if score >= 55:
         return "C"
-    if score >= 42:
+    if score >= 53:
         return "D"
     return "F"
 
@@ -3310,9 +3314,9 @@ def _render_pitching_matrix_page(pack, pitching_matrix, ordered_pitchers,
     # Grade methodology note
     y_meth = y - 0.16
     ax_footer.text(0.02, y_meth,
-        "METHODOLOGY:  Per-pitch Trackman cross-reference of pitcher arsenal vs hitter pitch-type "
-        "vulnerabilities.  Weights: Exit Velo 35%, Whiff Rate 25%, Barrel% 15%, Hard Hit% 10%, "
-        "Contact Depth 7.5%, Swing% 7.5% + platoon adjustment.  "
+        "METHODOLOGY:  24-factor composite per pitch type — Stuff+ 13%, Usage 18%, Tunnel 10%, "
+        "Our Whiff/CSW/Chase 25%, Their 2K Whiff 8%, Command+ 8%, Zone Exploit 5%, Platoon 4%, "
+        "wOBA Split 6%, IVB/Velo/Break 10%, Hitter K-prone/Contact/Barrel/Swing 12%.  "
         "Grades reflect relative matchup edge, not absolute pitcher quality.  "
         "Larger pitch samples yield more reliable grades.",
         fontsize=5, color="#999", transform=ax_footer.transAxes, va="top",

@@ -96,8 +96,12 @@ def classify_shift(*, pull_pct: float, center_pct: float, oppo_pct: float, gb_pc
     gb_pct = float(gb_pct) if pd.notna(gb_pct) else 0.0
     gb_pull_pct = float(gb_pull_pct) if gb_pull_pct is not None and pd.notna(gb_pull_pct) else None
 
-    if pull_pct > 45 and gb_pct > 45:
-        desc = f"Pull-heavy hitter ({pull_pct:.0f}% pull) with high GB rate ({gb_pct:.0f}%)."
+    if (pull_pct > 45 and gb_pct > 45) or pull_pct > 55:
+        desc = f"Pull-heavy hitter ({pull_pct:.0f}% pull)"
+        if gb_pct > 45:
+            desc += f" with high GB rate ({gb_pct:.0f}%)."
+        else:
+            desc += f" (extreme pull tendency)."
         if gb_pull_pct is not None:
             desc += f" Ground balls go pull-side {gb_pull_pct:.0f}% of the time."
         desc += " Shift infield toward pull side."
@@ -108,7 +112,7 @@ def classify_shift(*, pull_pct: float, center_pct: float, oppo_pct: float, gb_pc
             "color": "#fe6100",
             "desc": f"Moderate pull tendency ({pull_pct:.0f}%). Shade middle infielders toward pull side.",
         }
-    if oppo_pct > 40:
+    if oppo_pct > 40 or pull_pct < 30:
         return {
             "type": "Shade Oppo",
             "color": "#1f77b4",
@@ -348,6 +352,56 @@ def estimate_shift_contact_rv(
         return standard_contact_rv - benefit
 
     return standard_contact_rv
+
+
+def recommend_defense_from_matchup(
+    *,
+    pitcher: str,
+    batter: str,
+    batter_side: str,
+    state: GameState,
+    pitcher_season_filter=None,
+    batter_season_filter=None,
+) -> DefenseRecommendation:
+    """Movement-adjusted, shrinkage-blended defense using Trackman GB data.
+
+    Wraps compute_pitcher_batter_positioning(), converts FielderPosition objects
+    to DefenseRecommendation format, adds default OF positions, and applies
+    game-state situation overlay.
+    """
+    from analytics.gb_positioning import compute_pitcher_batter_positioning
+
+    matchup = compute_pitcher_batter_positioning(
+        pitcher=pitcher,
+        batter=batter,
+        batter_side=batter_side,
+        pitcher_season_filter=pitcher_season_filter,
+        batter_season_filter=batter_season_filter,
+    )
+
+    # Convert FielderPosition → {pos: {x, y}} dict
+    positions: Dict[str, Dict[str, float]] = {}
+    for pos_name, fp in matchup.positions.items():
+        positions[pos_name] = {"x": float(fp.x), "y": float(fp.y)}
+
+    # Add default OF positions only if model didn't produce them
+    of_defaults = {
+        "LF": {"x": -180.0, "y": 220.0},
+        "CF": {"x": 0.0, "y": 280.0},
+        "RF": {"x": 180.0, "y": 220.0},
+    }
+    for pos, xy in of_defaults.items():
+        if pos not in positions:
+            positions[pos] = xy
+
+    # Apply situation overlay
+    overlay, positions = apply_situation_overlay(state, positions)
+
+    return DefenseRecommendation(
+        shift=matchup.shift_type,
+        positions=positions,
+        overlay=overlay,
+    )
 
 
 def pitch_defense_mismatch(

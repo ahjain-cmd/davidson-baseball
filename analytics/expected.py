@@ -136,3 +136,20 @@ def _compute_expected_outcomes(batted_df):
                        + lw["triple_w"] * odf["x3B"]
                        + lw["hr_w"] * odf["xHR"])
     return odf.mean().to_dict()
+
+
+# ── ML-based xwOBA (side-by-side with bucket system) ─────────────────────────
+
+def _compute_expected_outcomes_ml(batted_df):
+    """Compute expected outcomes using ML xwOBA model (XGBoost multi-class).
+
+    Returns dict with xwOBA, xBA, xSLG, or empty dict if model unavailable.
+    Falls back to bucket system if model not trained.
+    """
+    if batted_df.empty:
+        return {}
+    try:
+        from analytics.xwoba_model import compute_batter_xwoba
+        return compute_batter_xwoba(batted_df)
+    except (FileNotFoundError, ImportError):
+        return {}

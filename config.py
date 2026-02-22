@@ -207,6 +207,61 @@ UNCG_POSITION = {
     "Holland, Tucker": "LHP",
 }
 
+# ── Fairfield 2026 Roster ────────
+FAIRFIELD_TEAM_NAME = "Fairfield"
+FAIRFIELD_COMBINED_TEAM_ID = "FAIRFIELD_COMBINED_2026"
+FAIRFIELD_TM_TEAM_ID = 730380544
+
+FAIRFIELD_TRANSFERS = {
+    "Spencer, Luke": "Wilkes",
+    "Stephenson, Zach": "Endicott",
+    "Haarde, Jake": "Penn State",
+    "Camera, Dom": "Hofstra",
+}
+
+FAIRFIELD_ROSTER_2026 = {
+    "Nomura, Luke", "Spencer, Luke", "Wawruck, Payten", "Colby, Nolan",
+    "Stephenson, Zach", "McIlroy, Liam", "Baglino, Aidan", "Paine, Ryan",
+    "Scanlan, Connor", "Kuczik, JP", "Byrne, Jack", "Bucciero, Matthew",
+    "Swanson, Boden", "Schmalzle, TJ", "Haarde, Jake", "Grande, Carter",
+    "Camera, Dom", "Gabardi, Dominic",
+    "Mulvaney, Jimmy", "Kalfas, Matt", "Engle, Harrison", "Hoxie, Hunter",
+    "Miller, Brendon", "Chambers, Joseph", "Wolff, Devin", "Grabmann, Matthew",
+    "Youngman, Will", "Maiorano, Ryan", "Sheldon, Jack", "Frank, Alex",
+    "Kurek, Matthew", "Memoli, Jake", "Ramchandran, NJ", "Kell, Kevin",
+    "Alekson, Ben", "Kelly, Nick",
+}
+
+FAIRFIELD_JERSEY = {
+    "Mulvaney, Jimmy": 1, "Nomura, Luke": 2, "Spencer, Luke": 3,
+    "Wawruck, Payten": 4, "Colby, Nolan": 5, "Stephenson, Zach": 6,
+    "McIlroy, Liam": 7, "Baglino, Aidan": 8, "Kalfas, Matt": 9,
+    "Paine, Ryan": 10, "Engle, Harrison": 11, "Scanlan, Connor": 13,
+    "Kuczik, JP": 14, "Byrne, Jack": 15, "Hoxie, Hunter": 16,
+    "Bucciero, Matthew": 17, "Miller, Brendon": 18, "Swanson, Boden": 19,
+    "Chambers, Joseph": 20, "Wolff, Devin": 21, "Schmalzle, TJ": 22,
+    "Haarde, Jake": 23, "Grabmann, Matthew": 24, "Youngman, Will": 25,
+    "Maiorano, Ryan": 26, "Grande, Carter": 27, "Camera, Dom": 29,
+    "Sheldon, Jack": 30, "Frank, Alex": 31, "Gabardi, Dominic": 33,
+    "Kurek, Matthew": 34, "Memoli, Jake": 35, "Ramchandran, NJ": 36,
+    "Kell, Kevin": 37, "Alekson, Ben": 38, "Kelly, Nick": 39,
+}
+
+FAIRFIELD_POSITION = {
+    "Nomura, Luke": "INF", "Spencer, Luke": "INF", "Wawruck, Payten": "OF",
+    "Colby, Nolan": "INF", "Stephenson, Zach": "OF", "McIlroy, Liam": "UTL",
+    "Baglino, Aidan": "C", "Paine, Ryan": "INF", "Scanlan, Connor": "INF",
+    "Kuczik, JP": "C", "Byrne, Jack": "OF", "Bucciero, Matthew": "OF",
+    "Swanson, Boden": "C", "Schmalzle, TJ": "OF", "Haarde, Jake": "OF",
+    "Grande, Carter": "INF", "Camera, Dom": "C", "Gabardi, Dominic": "OF/RHP",
+    "Mulvaney, Jimmy": "RHP", "Kalfas, Matt": "RHP", "Engle, Harrison": "RHP",
+    "Hoxie, Hunter": "RHP", "Miller, Brendon": "RHP", "Chambers, Joseph": "RHP",
+    "Wolff, Devin": "RHP", "Grabmann, Matthew": "RHP", "Youngman, Will": "RHP",
+    "Maiorano, Ryan": "RHP", "Sheldon, Jack": "RHP", "Frank, Alex": "RHP",
+    "Kurek, Matthew": "RHP", "Memoli, Jake": "RHP", "Ramchandran, NJ": "RHP",
+    "Kell, Kevin": "RHP", "Alekson, Ben": "RHP", "Kelly, Nick": "RHP",
+}
+
 NAME_MAP = {
     "Laughlin, Theo": "Loughlin, Theo",
     "Laughlin , Theo": "Loughlin, Theo",

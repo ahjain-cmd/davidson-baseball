@@ -88,6 +88,12 @@ def _hitter_card_content(data, batter, season_filter, bdf, batted, pr, all_batte
             ("Chase %", _safe_pr(pr, "ChasePct"), get_percentile(_safe_pr(pr, "ChasePct"), _safe_pop(all_stats, "ChasePct")), ".1f", False),
             ("Z-Contact %", _safe_pr(pr, "ZoneContactPct"), get_percentile(_safe_pr(pr, "ZoneContactPct"), _safe_pop(all_stats, "ZoneContactPct")), ".1f", True),
         ]
+        # Add ML xwOBA if available
+        xwoba_val = _safe_pr(pr, "xwOBA")
+        if not pd.isna(xwoba_val):
+            batting_metrics.append(
+                ("xwOBA", xwoba_val, get_percentile(xwoba_val, _safe_pop(all_stats, "xwOBA")), ".3f", True),
+            )
         render_savant_percentile_section(batting_metrics, "Percentile Rankings")
         st.caption(f"vs. {len(all_stats)} batters in database (min 50 PA)")
 
@@ -478,6 +484,12 @@ def _hitting_overview(data, batter, season_filter, bdf, batted, pr, all_batter_s
             ("Whiff %", _safe_pr(pr, "WhiffPct"), get_percentile(_safe_pr(pr, "WhiffPct"), _safe_pop(all_stats, "WhiffPct")), ".1f", False),
             ("Chase %", _safe_pr(pr, "ChasePct"), get_percentile(_safe_pr(pr, "ChasePct"), _safe_pop(all_stats, "ChasePct")), ".1f", False),
         ]
+        # Add ML xwOBA if available
+        xwoba_val = _safe_pr(pr, "xwOBA")
+        if not pd.isna(xwoba_val):
+            batting_metrics.append(
+                ("xwOBA", xwoba_val, get_percentile(xwoba_val, _safe_pop(all_stats, "xwOBA")), ".3f", True),
+            )
         render_savant_percentile_section(batting_metrics, "Percentile Rankings")
         st.caption(f"vs. {len(all_stats)} batters in database (min 50 PA)")
 

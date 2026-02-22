@@ -5,6 +5,7 @@ Builds davidson.duckdb with:
   - batter_stats_pop (base aggregates by season)
   - pitcher_stats_pop (base aggregates by season)
   - stuff_baselines, fb_velo_by_pitcher, velo_diff_stats
+  - gb_spray_baselines, pitch_movement_baselines, gb_spray_movement_coefs
   - tunnel_population, tunnel_benchmarks, tunnel_weights
   - tunnel_pair_outcomes
   - sidebar_stats, seasons, meta
@@ -33,6 +34,8 @@ from config import (
     TUNNEL_BENCH_PATH,
     TUNNEL_WEIGHTS_PATH,
 )
+
+import numpy as np
 
 from analytics.stuff_plus import _compute_stuff_plus
 from data.population import _build_tunnel_population_pop
@@ -428,6 +431,201 @@ def _create_stuff_baselines(con):
     }
 
 
+def _create_gb_spray_baselines(con):
+    """Create ground-ball spray baselines for pitcher-batter matchup positioning.
+
+    Tables created:
+      gb_spray_baselines       — per (BatterSide, PitchType) spray distributions
+      pitch_movement_baselines — per PitchType population movement stats
+      gb_spray_movement_coefs  — linear regression coefficients for Direction ~ movement deviation
+    """
+    # ── Table 1: gb_spray_baselines ──────────────────────────────────────────
+    sql_baselines = """
+        WITH gb AS (
+            SELECT
+                BatterSide,
+                TaggedPitchType,
+                Direction,
+                Distance,
+                Distance * SIN(RADIANS(Direction)) AS x,
+                Distance * COS(RADIANS(Direction)) AS y,
+                PlayResult
+            FROM trackman
+            WHERE PitchCall = 'InPlay'
+              AND TaggedHitType = 'GroundBall'
+              AND Direction IS NOT NULL
+              AND Distance IS NOT NULL
+              AND BatterSide IN ('Left', 'Right')
+              AND TaggedPitchType IS NOT NULL
+        ),
+        classified AS (
+            SELECT *,
+                CASE
+                    WHEN BatterSide = 'Right' AND Direction < -15 THEN 'Pull'
+                    WHEN BatterSide = 'Right' AND Direction > 15  THEN 'Oppo'
+                    WHEN BatterSide = 'Left'  AND Direction > 15  THEN 'Pull'
+                    WHEN BatterSide = 'Left'  AND Direction < -15 THEN 'Oppo'
+                    ELSE 'Center'
+                END AS FieldDir,
+                CASE
+                    WHEN x < 0 THEN 'SS_side'
+                    ELSE '2B_side'
+                END AS MiddleSide
+            FROM gb
+        )
+        SELECT
+            BatterSide,
+            TaggedPitchType,
+            COUNT(*) AS n_gb,
+            AVG(Direction) AS mean_direction,
+            STDDEV(Direction) AS std_direction,
+            AVG(x) AS mean_x,
+            AVG(y) AS mean_y,
+            -- Pull/Center/Oppo percentages
+            SUM(CASE WHEN FieldDir = 'Pull' THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS gb_pull_pct,
+            SUM(CASE WHEN FieldDir = 'Center' THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS gb_center_pct,
+            SUM(CASE WHEN FieldDir = 'Oppo' THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS gb_oppo_pct,
+            -- Out rate
+            SUM(CASE WHEN PlayResult IN ('Out', 'Sacrifice', 'FieldersChoice') THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS out_rate,
+            -- SS-side zone centroid
+            AVG(CASE WHEN MiddleSide = 'SS_side' THEN x END) AS ss_zone_mean_x,
+            AVG(CASE WHEN MiddleSide = 'SS_side' THEN y END) AS ss_zone_mean_y,
+            SUM(CASE WHEN MiddleSide = 'SS_side' THEN 1 ELSE 0 END) AS ss_zone_n,
+            -- 2B-side zone centroid
+            AVG(CASE WHEN MiddleSide = '2B_side' THEN x END) AS b2_zone_mean_x,
+            AVG(CASE WHEN MiddleSide = '2B_side' THEN y END) AS b2_zone_mean_y,
+            SUM(CASE WHEN MiddleSide = '2B_side' THEN 1 ELSE 0 END) AS b2_zone_n,
+            -- Pull zone centroid
+            AVG(CASE WHEN FieldDir = 'Pull' THEN x END) AS pull_zone_mean_x,
+            AVG(CASE WHEN FieldDir = 'Pull' THEN y END) AS pull_zone_mean_y,
+            SUM(CASE WHEN FieldDir = 'Pull' THEN 1 ELSE 0 END) AS pull_zone_n,
+            -- Oppo zone centroid
+            AVG(CASE WHEN FieldDir = 'Oppo' THEN x END) AS oppo_zone_mean_x,
+            AVG(CASE WHEN FieldDir = 'Oppo' THEN y END) AS oppo_zone_mean_y,
+            SUM(CASE WHEN FieldDir = 'Oppo' THEN 1 ELSE 0 END) AS oppo_zone_n
+        FROM classified
+        GROUP BY BatterSide, TaggedPitchType
+        HAVING COUNT(*) >= 20
+    """
+    baseline_df = con.execute(sql_baselines).fetchdf()
+    con.register("gb_spray_bl_df", baseline_df)
+    con.execute("CREATE OR REPLACE TABLE gb_spray_baselines AS SELECT * FROM gb_spray_bl_df")
+    print(f"  gb_spray_baselines: {len(baseline_df)} rows")
+
+    # ── Table 2: pitch_movement_baselines ────────────────────────────────────
+    sql_movement = """
+        SELECT
+            TaggedPitchType,
+            AVG(InducedVertBreak) AS pop_ivb_mean,
+            STDDEV(InducedVertBreak) AS pop_ivb_std,
+            AVG(CASE WHEN PitcherThrows IN ('Left','L') THEN -HorzBreak ELSE HorzBreak END) AS pop_hb_mean,
+            STDDEV(CASE WHEN PitcherThrows IN ('Left','L') THEN -HorzBreak ELSE HorzBreak END) AS pop_hb_std,
+            AVG(RelSpeed) AS pop_velo_mean,
+            STDDEV(RelSpeed) AS pop_velo_std,
+            COUNT(*) AS n
+        FROM trackman
+        WHERE TaggedPitchType IS NOT NULL
+          AND TaggedPitchType NOT IN ('Other', 'Undefined', 'Knuckleball')
+          AND InducedVertBreak IS NOT NULL
+          AND HorzBreak IS NOT NULL
+          AND RelSpeed IS NOT NULL
+          AND PitcherThrows IS NOT NULL
+        GROUP BY TaggedPitchType
+        HAVING COUNT(*) >= 100
+    """
+    movement_df = con.execute(sql_movement).fetchdf()
+    con.register("pitch_mov_bl_df", movement_df)
+    con.execute("CREATE OR REPLACE TABLE pitch_movement_baselines AS SELECT * FROM pitch_mov_bl_df")
+    print(f"  pitch_movement_baselines: {len(movement_df)} rows")
+
+    # ── Table 3: gb_spray_movement_coefs ─────────────────────────────────────
+    # Linear regression: Direction ~ hb_deviation + ivb_deviation + velo_deviation
+    # hb_deviation = pitcher_avg_hb - pop_mean_hb (per pitch type)
+    # ivb_deviation = pitcher_avg_ivb - pop_mean_ivb (per pitch type)
+    # velo_deviation = pitcher_avg_velo - pop_mean_velo (per pitch type)
+    sql_gb_with_movement = """
+        WITH pitcher_avgs AS (
+            SELECT
+                Pitcher,
+                TaggedPitchType,
+                AVG(CASE WHEN PitcherThrows IN ('Left','L') THEN -HorzBreak ELSE HorzBreak END) AS pitcher_hb,
+                AVG(InducedVertBreak) AS pitcher_ivb,
+                AVG(RelSpeed) AS pitcher_velo,
+                COUNT(*) AS pitcher_n
+            FROM trackman
+            WHERE TaggedPitchType IS NOT NULL
+              AND HorzBreak IS NOT NULL
+              AND InducedVertBreak IS NOT NULL
+              AND RelSpeed IS NOT NULL
+              AND PitcherThrows IS NOT NULL
+            GROUP BY Pitcher, TaggedPitchType
+            HAVING COUNT(*) >= 10
+        )
+        SELECT
+            t.BatterSide,
+            t.TaggedPitchType,
+            t.Direction,
+            pa.pitcher_hb,
+            pa.pitcher_ivb,
+            pa.pitcher_velo
+        FROM trackman t
+        JOIN pitcher_avgs pa ON t.Pitcher = pa.Pitcher AND t.TaggedPitchType = pa.TaggedPitchType
+        WHERE t.PitchCall = 'InPlay'
+          AND t.TaggedHitType = 'GroundBall'
+          AND t.Direction IS NOT NULL
+          AND t.BatterSide IN ('Left', 'Right')
+          AND t.TaggedPitchType IS NOT NULL
+    """
+    gb_mov_df = con.execute(sql_gb_with_movement).fetchdf()
+
+    # Build population movement means for deviation computation
+    mov_means = {}
+    for _, row in movement_df.iterrows():
+        mov_means[row["TaggedPitchType"]] = {
+            "hb_mean": float(row["pop_hb_mean"]),
+            "ivb_mean": float(row["pop_ivb_mean"]),
+            "velo_mean": float(row["pop_velo_mean"]) if pd.notna(row.get("pop_velo_mean")) else None,
+        }
+
+    coef_rows = []
+    for (bside, pt), grp in gb_mov_df.groupby(["BatterSide", "TaggedPitchType"]):
+        if len(grp) < 50 or pt not in mov_means:
+            continue
+        pop = mov_means[pt]
+        hb_dev = grp["pitcher_hb"].values - pop["hb_mean"]
+        ivb_dev = grp["pitcher_ivb"].values - pop["ivb_mean"]
+        velo_dev = grp["pitcher_velo"].values - pop["velo_mean"] if pop["velo_mean"] is not None else np.zeros(len(grp))
+        direction = grp["Direction"].values
+
+        # numpy least-squares: Direction = hb_coef * hb_dev + ivb_coef * ivb_dev + velo_coef * velo_dev + intercept
+        A = np.column_stack([hb_dev, ivb_dev, velo_dev, np.ones(len(grp))])
+        result, residuals, _, _ = np.linalg.lstsq(A, direction, rcond=None)
+        hb_coef, ivb_coef, velo_coef, intercept = result
+
+        # R-squared
+        ss_res = np.sum((direction - A @ result) ** 2)
+        ss_tot = np.sum((direction - direction.mean()) ** 2)
+        r_sq = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
+
+        coef_rows.append({
+            "BatterSide": bside,
+            "TaggedPitchType": pt,
+            "hb_coef": float(hb_coef),
+            "ivb_coef": float(ivb_coef),
+            "velo_coef": float(velo_coef),
+            "intercept": float(intercept),
+            "r_squared": float(r_sq),
+            "n": len(grp),
+        })
+
+    coef_df = pd.DataFrame(coef_rows)
+    if coef_df.empty:
+        coef_df = pd.DataFrame(columns=["BatterSide", "TaggedPitchType", "hb_coef", "ivb_coef", "velo_coef", "intercept", "r_squared", "n"])
+    con.register("gb_coef_df", coef_df)
+    con.execute("CREATE OR REPLACE TABLE gb_spray_movement_coefs AS SELECT * FROM gb_coef_df")
+    print(f"  gb_spray_movement_coefs: {len(coef_df)} rows")
+
+
 def _create_davidson_data(con, parquet_path):
     _pname = _name_case_sql("Pitcher")
     _bname = _name_case_sql("Batter")
@@ -631,6 +829,7 @@ def run(parquet_path, db_path, overwrite=False):
     _create_batter_stats_pop(con)
     _create_pitcher_stats_pop(con)
     baselines = _create_stuff_baselines(con)
+    _create_gb_spray_baselines(con)
     _create_davidson_data(con, parquet_path)
     _attach_stuff_plus(con, baselines)
     _create_tunnel_population(con)
@@ -647,7 +846,47 @@ def main():
     parser.add_argument("--parquet", default=PARQUET_PATH, help="Path to Trackman parquet file")
     parser.add_argument("--out", default=DUCKDB_PATH, help="Output DuckDB path")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing DB file")
+    parser.add_argument("--train-hole-model", action="store_true",
+                        help="Train ML hole score model (XGBoost) from Trackman data")
+    parser.add_argument("--train-xwoba-model", action="store_true",
+                        help="Train ML xwOBA model (XGBoost multi-class) from Trackman data")
+    parser.add_argument("--train-matchup-model", action="store_true",
+                        help="Train ML pitcher-batter matchup model (XGBoost) from Trackman data")
+    parser.add_argument("--train-gb-model", action="store_true",
+                        help="Train ML GB direction model (XGBoost) from Trackman data")
+    parser.add_argument("--train-spatial-hole-model", action="store_true",
+                        help="Train spatial hole score model (3 XGBoost sub-models) from Trackman data")
     args = parser.parse_args()
+
+    if args.train_hole_model:
+        print("Training ML hole score model...")
+        from analytics.hole_score_model import train_hole_score_model
+        train_hole_score_model(parquet_path=args.parquet)
+        return
+
+    if args.train_xwoba_model:
+        print("Training ML xwOBA model...")
+        from analytics.xwoba_model import train_xwoba_model
+        train_xwoba_model(parquet_path=args.parquet)
+        return
+
+    if args.train_matchup_model:
+        print("Training ML matchup model...")
+        from analytics.matchup_model import train_matchup_model
+        train_matchup_model(parquet_path=args.parquet)
+        return
+
+    if args.train_gb_model:
+        print("Training ML GB direction model...")
+        from analytics.gb_model import train_gb_direction_model
+        train_gb_direction_model(parquet_path=args.parquet)
+        return
+
+    if args.train_spatial_hole_model:
+        print("Training spatial hole score model...")
+        from analytics.spatial_hole_model import train_spatial_hole_model
+        train_spatial_hole_model(parquet_path=args.parquet)
+        return
 
     run(args.parquet, args.out, overwrite=args.overwrite)
     print(f"Precompute complete: {args.out}")

@@ -291,7 +291,15 @@ def _postgame_summary(gd):
         st.markdown("**Batted Ball Quality**")
         ev_str = f"Avg EV: {avg_ev:.1f}" if pd.notna(avg_ev) else "Avg EV: -"
         mx_str = f"Max EV: {max_ev:.1f}" if pd.notna(max_ev) else "Max EV: -"
-        st.caption(f"{ev_str}  {mx_str}  BBE: {len(dav_bbe)}")
+        xwoba_str = ""
+        try:
+            from analytics.xwoba_model import compute_batter_xwoba
+            xw = compute_batter_xwoba(dav_hitting)
+            if xw.get("n_batted_balls", 0) > 0 and not np.isnan(xw.get("xwOBA", np.nan)):
+                xwoba_str = f"  xwOBA: {xw['xwOBA']:.3f}"
+        except (FileNotFoundError, ImportError):
+            pass
+        st.caption(f"{ev_str}  {mx_str}  BBE: {len(dav_bbe)}{xwoba_str}")
 
     st.markdown("---")
 
@@ -991,6 +999,20 @@ def _pg_hitter_detail(bdf, data, batter):
                 if "ExitSpeed" in bbe_df.columns and "Angle" in bbe_df.columns:
                     barrel = is_barrel_mask(bbe_df).mean() * 100
                     st.metric("Barrel%", f"{barrel:.1f}%")
+            # ML xwOBA row
+            try:
+                from analytics.xwoba_model import compute_batter_xwoba
+                xwoba_stats = compute_batter_xwoba(bdf)
+                if xwoba_stats.get("n_batted_balls", 0) > 0 and not np.isnan(xwoba_stats.get("xwOBA", np.nan)):
+                    xw_c1, xw_c2, xw_c3 = st.columns(3)
+                    with xw_c1:
+                        st.metric("xwOBA", f"{xwoba_stats['xwOBA']:.3f}")
+                    with xw_c2:
+                        st.metric("xBA", f"{xwoba_stats['xBA']:.3f}")
+                    with xw_c3:
+                        st.metric("xSLG", f"{xwoba_stats['xSLG']:.3f}")
+            except (FileNotFoundError, ImportError):
+                pass
         else:
             st.caption("No batted ball data.")
 

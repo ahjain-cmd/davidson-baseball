@@ -304,21 +304,58 @@ def _merge_packs(packs: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
     _VOLUME_FALLBACKS = ["BF", "PA", "G", "IP", "Inn"]
 
+    # Build per-pack player→volume lookup for each group.
+    # This lets us resolve dedup for tables that lack their own volume column
+    # (e.g. hit_types, hit_locations) by preferring the pack/season where the
+    # player had more PA/IP.
+    _rate_tables = {"hitting": "rate", "pitching": "traditional",
+                    "catching": "rate", "defense": "rate"}
+
+    # pack_vol[group][pack_idx][player_name] = volume (PA or IP)
+    pack_vol: Dict[str, Dict[int, Dict[str, float]]] = {}
+    for group_name in all_tables:
+        pack_vol[group_name] = {}
+        vol_col = _VOLUME_COLS.get(group_name, "PA")
+        ref_table = _rate_tables.get(group_name)
+        if not ref_table:
+            continue
+        for pi, p in enumerate(packs):
+            df = p.get(group_name, {}).get(ref_table)
+            if not isinstance(df, pd.DataFrame) or df.empty:
+                continue
+            nc = None
+            for c in _NAME_COL_CANDIDATES:
+                if c in df.columns:
+                    nc = c
+                    break
+            if nc and vol_col in df.columns:
+                vols = df.set_index(nc)[vol_col]
+                vols = pd.to_numeric(vols, errors="coerce").fillna(0)
+                pack_vol[group_name][pi] = vols.to_dict()
+
     for group_name, table_names in all_tables.items():
         merged[group_name] = {}
         vol_col = _VOLUME_COLS.get(group_name, "PA")
 
         for table_name in table_names:
             frames = []
-            for p in packs:
+            frame_pack_idx = []
+            for pi, p in enumerate(packs):
                 df = p.get(group_name, {}).get(table_name)
                 if isinstance(df, pd.DataFrame) and not df.empty:
                     frames.append(df)
+                    frame_pack_idx.append(pi)
             if not frames:
                 merged[group_name][table_name] = pd.DataFrame()
                 continue
 
-            combined = pd.concat(frames, ignore_index=True)
+            # Tag each frame with its pack index for cross-ref dedup
+            tagged = []
+            for fi, df in enumerate(frames):
+                cp = df.copy()
+                cp["_pack_idx"] = frame_pack_idx[fi]
+                tagged.append(cp)
+            combined = pd.concat(tagged, ignore_index=True)
 
             # Deduplicate: keep the row with more playing time per player
             name_col = None
@@ -330,7 +367,7 @@ def _merge_packs(packs: List[Dict[str, Any]]) -> Dict[str, Any]:
                 # Find best volume column available in this table
                 best_vol = None
                 for vc in [vol_col] + _VOLUME_FALLBACKS:
-                    if vc in combined.columns:
+                    if vc in combined.columns and vc != "_pack_idx":
                         best_vol = vc
                         break
 
@@ -338,10 +375,22 @@ def _merge_packs(packs: List[Dict[str, Any]]) -> Dict[str, Any]:
                     combined[best_vol] = pd.to_numeric(combined[best_vol], errors="coerce").fillna(0)
                     combined = combined.sort_values(best_vol, ascending=True)
                     combined = combined.drop_duplicates(subset=[name_col], keep="last")
+                elif pack_vol.get(group_name):
+                    # No volume column in this table (e.g. hit_types, hit_locations).
+                    # Cross-reference PA/IP from the rate table for this pack.
+                    def _ref_vol(row):
+                        pi = int(row["_pack_idx"])
+                        pv = pack_vol[group_name].get(pi, {})
+                        return pv.get(row[name_col], 0)
+                    combined["_ref_vol"] = combined.apply(_ref_vol, axis=1)
+                    combined = combined.sort_values("_ref_vol", ascending=True)
+                    combined = combined.drop_duplicates(subset=[name_col], keep="last")
+                    combined = combined.drop(columns=["_ref_vol"])
                 else:
-                    # No volume column — keep last (most recent season)
+                    # No volume column and no lookup — keep last (most recent season)
                     combined = combined.drop_duplicates(subset=[name_col], keep="last")
 
+            combined = combined.drop(columns=["_pack_idx"], errors="ignore")
             merged[group_name][table_name] = combined
 
     return merged

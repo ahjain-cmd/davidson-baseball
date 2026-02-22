@@ -30,6 +30,7 @@ from data.bryant_combined import load_bryant_combined_pack
 from decision_engine.recommenders.defense_recommender import (
     pitch_defense_mismatch,
     recommend_defense_from_truemedia,
+    recommend_defense_from_matchup,
 )
 
 
@@ -554,18 +555,42 @@ def render_ingame_panel(data):
         elif bats in {"S", "SWITCH"}:
             batter_side = "Left" if throws.startswith("R") else "Right"
 
-        defense = recommend_defense_from_truemedia(
-            batter_side=batter_side,
-            pull_pct=pull_pct,
-            center_pct=ctr_pct,
-            oppo_pct=opp_pct,
-            gb_pct=gb_pct,
-            fb_pct=fb_pct,
-            ld_pct=ld_pct,
-            pu_pct=pu_pct,
-            exit_vel=hitter_profile.get("ev"),
-            state=state,
-        )
+        # Try matchup model (pitcher-batter GB positioning) if batter exists in Trackman DB
+        _use_matchup = False
+        try:
+            from config import tm_name_to_trackman
+            _batter_trackman = tm_name_to_trackman(opp_hitter)
+            if _batter_trackman:
+                from data.loader import query_population as _qp
+                _check = _qp(f"SELECT COUNT(*) AS n FROM trackman WHERE Batter = '{_batter_trackman.replace(chr(39), chr(39)+chr(39))}' AND PitchCall = 'InPlay' AND TaggedHitType = 'GroundBall'")
+                if not _check.empty and int(_check.iloc[0]["n"]) >= 5:
+                    _use_matchup = True
+        except Exception:
+            pass
+
+        if _use_matchup:
+            defense = recommend_defense_from_matchup(
+                pitcher=our_pitcher,
+                batter=_batter_trackman,
+                batter_side=batter_side,
+                state=state,
+                pitcher_season_filter=tuple(season_filter) if season_filter else None,
+            )
+            st.caption("Source: Trackman matchup model (movement-adjusted, shrinkage)")
+        else:
+            defense = recommend_defense_from_truemedia(
+                batter_side=batter_side,
+                pull_pct=pull_pct,
+                center_pct=ctr_pct,
+                oppo_pct=opp_pct,
+                gb_pct=gb_pct,
+                fb_pct=fb_pct,
+                ld_pct=ld_pct,
+                pu_pct=pu_pct,
+                exit_vel=hitter_profile.get("ev"),
+                state=state,
+            )
+            st.caption("Source: TrueMedia aggregate model")
 
         st.markdown(f"**Shift:** `{defense.shift['type']}`")
         st.caption(defense.shift.get("desc", ""))

@@ -12,6 +12,10 @@ from config import (
 )
 from data.loader import get_all_seasons, query_population
 from viz.layout import CHART_LAYOUT, section_header
+from analytics.gb_positioning import (
+    compute_pitcher_batter_positioning,
+    MatchupPositioning,
+)
 
 
 def _compute_spray_zones(batted_df, batter_side):
@@ -286,6 +290,17 @@ def _draw_defensive_field(batted_df, recommended=None, actual_positions=None, he
     return fig
 
 
+def _apply_game_filter(df, game_mode):
+    """Filter DataFrame by game vs scrimmage. DAV_WIL vs DAV_WIL = scrimmage."""
+    if game_mode == "Games Only":
+        return df[~((df.get("PitcherTeam", pd.Series()) == DAVIDSON_TEAM_ID) &
+                     (df.get("BatterTeam", pd.Series()) == DAVIDSON_TEAM_ID))].copy()
+    elif game_mode == "Scrimmages Only":
+        return df[((df.get("PitcherTeam", pd.Series()) == DAVIDSON_TEAM_ID) &
+                    (df.get("BatterTeam", pd.Series()) == DAVIDSON_TEAM_ID))].copy()
+    return df  # "All"
+
+
 def page_defensive_positioning(data):
     st.markdown('<div class="section-header">Defensive Positioning</div>', unsafe_allow_html=True)
     st.caption("Spray-based defensive alignment optimizer — see where batted balls land and where fielders should stand")
@@ -293,34 +308,72 @@ def page_defensive_positioning(data):
     # Mode selection
     mode = st.radio("Analysis Mode", ["Scout Batter", "Team Tendencies"], horizontal=True, key="dp_mode")
 
+    # ── Use the pre-loaded `data` DataFrame (fast!) instead of scanning parquet ──
+    # `data` contains all Davidson-involved games from load_davidson_data()
+    if data is None or data.empty:
+        st.error("No data loaded.")
+        return
+
+    # Season + Game/Scrimmage filters (shared)
+    col_s, col_g = st.columns([1, 1])
+    with col_s:
+        all_seasons = sorted(data["Season"].dropna().unique().tolist()) if "Season" in data.columns else []
+        season_filter = st.multiselect("Season", all_seasons, default=all_seasons, key="dp_season")
+    with col_g:
+        game_mode = st.selectbox("Game Type", ["Games Only", "All", "Scrimmages Only"], key="dp_game_type")
+
+    # Apply season filter
+    fdata = data.copy()
+    if season_filter and "Season" in fdata.columns:
+        fdata = fdata[fdata["Season"].isin(season_filter)]
+    fdata = _apply_game_filter(fdata, game_mode)
+
     if mode == "Scout Batter":
-        # All batters in the database (via DuckDB)
-        _bp = query_population("SELECT DISTINCT Batter FROM trackman WHERE PitchCall='InPlay' AND Batter IS NOT NULL ORDER BY Batter")
-        batters = _bp["Batter"].tolist()
-        if not batters:
-            st.warning("No batted ball data found.")
+        # Build batter list from pre-loaded data (instant, no parquet scan)
+        inplay = fdata[fdata["PitchCall"] == "InPlay"].copy() if "PitchCall" in fdata.columns else pd.DataFrame()
+        if inplay.empty:
+            st.warning("No batted ball data with current filters.")
             return
-        col1, col2 = st.columns([2, 1])
-        with col1:
+
+        # Deduplicate: get unique (Batter, BatterTeam) combos
+        batter_teams = (
+            inplay[["Batter", "BatterTeam"]]
+            .dropna(subset=["Batter"])
+            .drop_duplicates()
+            .query("Batter != '' and Batter != ', '")
+            .sort_values("Batter")
+        )
+        teams_available = sorted(batter_teams["BatterTeam"].dropna().unique().tolist())
+        teams_list = ["All Teams"] + teams_available
+
+        col_t, col_b = st.columns([1, 2])
+        with col_t:
+            team_filter = st.selectbox("Filter by Team", teams_list, key="dp_team_filter")
+        with col_b:
+            if team_filter != "All Teams":
+                bt_filtered = batter_teams[batter_teams["BatterTeam"] == team_filter]
+            else:
+                bt_filtered = batter_teams
+            batters = bt_filtered["Batter"].tolist()
+            if not batters:
+                st.warning("No batters found for this team.")
+                return
             batter = st.selectbox("Select Batter", batters, format_func=display_name, key="dp_batter")
-        with col2:
-            seasons = get_all_seasons()
-            season_filter = st.multiselect("Season", seasons, default=seasons, key="dp_season")
-        _season_clause = f"AND Season IN ({','.join(str(int(s)) for s in season_filter)})" if season_filter else ""
-        bdf = query_population(f"SELECT * FROM trackman WHERE Batter = '{batter.replace(chr(39), chr(39)+chr(39))}' {_season_clause}")
+
+        bdf = fdata[fdata["Batter"] == batter]
         label = display_name(batter)
     else:
-        _tp = query_population("SELECT DISTINCT BatterTeam FROM trackman WHERE BatterTeam IS NOT NULL ORDER BY BatterTeam")
-        teams = _tp["BatterTeam"].tolist()
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            team = st.selectbox("Select Team", teams, key="dp_team")
-        with col2:
-            seasons = get_all_seasons()
-            season_filter = st.multiselect("Season", seasons, default=seasons, key="dp_season_t")
-        _season_clause = f"AND Season IN ({','.join(str(int(s)) for s in season_filter)})" if season_filter else ""
-        bdf = query_population(f"SELECT * FROM trackman WHERE BatterTeam = '{team}' {_season_clause}")
+        teams_available = sorted(fdata["BatterTeam"].dropna().unique().tolist()) if "BatterTeam" in fdata.columns else []
+        if not teams_available:
+            st.warning("No team data with current filters.")
+            return
+        team = st.selectbox("Select Team", teams_available, key="dp_team")
+        bdf = fdata[fdata["BatterTeam"] == team]
         label = team
+
+    if bdf.empty or "PitchCall" not in bdf.columns:
+        st.warning(f"No pitch data found for {label}.")
+        return
 
     batted = bdf[bdf["PitchCall"] == "InPlay"].copy()
     if len(batted) < 10:
@@ -341,8 +394,9 @@ def page_defensive_positioning(data):
         f'<span style="margin-left:12px;font-size:13px;color:#666 !important;">Bats: {b_str} | '
         f'{len(batted)} batted balls</span></div>', unsafe_allow_html=True)
 
-    tab_spray, tab_shift, tab_sit, tab_actual = st.tabs([
-        "Spray & Positioning", "Shift Analysis", "Situational", "Actual Positioning"
+    tab_spray, tab_shift, tab_sit, tab_actual, tab_matchup = st.tabs([
+        "Spray & Positioning", "Shift Analysis", "Situational", "Actual Positioning",
+        "Pitcher-Batter Matchup",
     ])
 
     # ─── Tab 1: Spray Tendencies & Optimal Positioning ──────
@@ -669,30 +723,26 @@ def page_defensive_positioning(data):
         else:
             st.success(f"Loaded positioning data: {len(pos_data)} pitches from {pos_data['_GameID'].nunique()} game(s)")
 
-            # Convert positioning coordinates to spray chart coordinate system
-            # Positioning: X = horizontal (1B side positive), Z = depth (3B side negative)
-            # Spray chart: x = horizontal (right field positive), y = distance from home plate
-            # The positioning uses a different coordinate system — X is depth, Z is lateral
-            # Based on the data: 1B X~90,Z~72; 3B X~73,Z~-50; CF X~332,Z~2
-            # This looks like X = distance from home, Z = lateral (positive = 1B side)
-            # We need to map to spray chart: x = lateral, y = distance
+            # FHC coordinate system (verified from data):
+            #   X = depth from home plate (feet): 1B~89, SS~141, CF~315
+            #   Z = lateral position (feet): negative=3B/LF side, positive=1B/RF side
+            # Spray chart coordinate system:
+            #   x = lateral (negative=left/3B, positive=right/1B)
+            #   y = depth from home plate
+            # Mapping: FHC_Z → spray_x, FHC_X → spray_y
             pos_cols = ["1B", "2B", "3B", "SS", "LF", "CF", "RF"]
             has_pos = all(f"{p}_PositionAtReleaseX" in pos_data.columns for p in pos_cols)
 
             if has_pos:
-                # Show per-pitch positioning for InPlay pitches
-                inplay_pos = pos_data[pos_data["PitchCall"] == "InPlay"].copy() if "PitchCall" in pos_data.columns else pos_data.copy()
-
-                if len(inplay_pos) > 0:
-                    # Compute average positions across all pitches
+                if pos_data[f"1B_PositionAtReleaseX"].notna().any():
+                    # Compute average positions across all pitches (shows general alignment)
                     avg_positions = {}
                     for p in pos_cols:
                         x_col = f"{p}_PositionAtReleaseX"
                         z_col = f"{p}_PositionAtReleaseZ"
                         if pos_data[x_col].notna().any():
-                            # Map: positioning Z -> spray chart x (lateral), positioning X -> spray chart y (depth)
-                            avg_x = pos_data[z_col].mean()  # lateral position
-                            avg_y = pos_data[x_col].mean()  # depth from home
+                            avg_x = pos_data[z_col].mean()   # FHC Z → spray x (lateral)
+                            avg_y = pos_data[x_col].mean()   # FHC X → spray y (depth)
                             avg_positions[p] = (avg_x, avg_y)
 
                     # Draw field with actual positions + spray data + recommended
@@ -738,3 +788,200 @@ def page_defensive_positioning(data):
                     st.dataframe(pd.DataFrame(shift_rows).set_index("Shift Type"), use_container_width=True)
             else:
                 st.warning("Positioning coordinate columns not found in the CSV data.")
+
+    # ─── Tab 5: Pitcher-Batter Matchup ──────────────
+    with tab_matchup:
+        section_header("Pitcher-Batter Matchup Positioning")
+        st.caption("Movement-adjusted, shrinkage-blended positioning — factors in the pitcher's pitch mix and movement profile")
+
+        if mode != "Scout Batter":
+            st.info("Pitcher-Batter Matchup is only available in Scout Batter mode.")
+        else:
+            # Pitcher selector — use pre-loaded data (fast)
+            pitchers = sorted(
+                data["Pitcher"].dropna()
+                .loc[lambda s: (s != '') & (s != ', ')]
+                .unique().tolist()
+            ) if "Pitcher" in data.columns else []
+            if not pitchers:
+                st.warning("No pitcher data found in database.")
+            else:
+                col_p1, col_p2 = st.columns([2, 1])
+                with col_p1:
+                    sel_pitcher = st.selectbox("Select Pitcher", pitchers, format_func=display_name, key="dp_matchup_pitcher")
+                with col_p2:
+                    pitcher_seasons = sorted(data["Season"].dropna().unique().tolist()) if "Season" in data.columns else []
+                    pitcher_season_filter = st.multiselect(
+                        "Pitcher Season", pitcher_seasons, default=pitcher_seasons, key="dp_matchup_p_season"
+                    )
+
+                pitcher_sf = tuple(pitcher_season_filter) if pitcher_season_filter else None
+                batter_sf = tuple(season_filter) if season_filter else None
+
+                matchup = compute_pitcher_batter_positioning(
+                    pitcher=sel_pitcher,
+                    batter=batter,
+                    batter_side=batter_side,
+                    pitcher_season_filter=pitcher_sf,
+                    batter_season_filter=batter_sf,
+                )
+
+                # Warnings
+                for w in matchup.warnings:
+                    st.warning(w)
+
+                # Shift recommendation banner
+                shift = matchup.shift_type
+                shift_color = shift.get("color", "#2ca02c")
+                conf_colors = {"High": "#2ca02c", "Medium": "#fe6100", "Low": "#d22d49"}
+                conf_color = conf_colors.get(matchup.confidence, "#888")
+                st.markdown(
+                    f'<div style="padding:16px;background:white;border-radius:10px;border-left:6px solid {shift_color};'
+                    f'border:1px solid #eee;margin:8px 0;">'
+                    f'<div style="font-size:20px;font-weight:900;color:{shift_color} !important;">{shift.get("type", "Standard")}</div>'
+                    f'<div style="font-size:13px;color:#333 !important;margin-top:4px;">{shift.get("desc", "")}</div>'
+                    f'<div style="font-size:12px;color:#888 !important;margin-top:6px;">'
+                    f'GB Pull: {matchup.overall_pull_pct:.1f}% | Center: {matchup.overall_center_pct:.1f}% | Oppo: {matchup.overall_oppo_pct:.1f}%'
+                    f' | GB%: <b style="color:#333 !important;">{matchup.gb_pct:.1f}%</b>'
+                    f' | Confidence: <b style="color:{conf_color} !important;">{matchup.confidence}</b></div>'
+                    f'</div>', unsafe_allow_html=True)
+
+                if matchup.positions:
+                    # Two-column layout: field + position descriptions
+                    col_field_m, col_desc_m = st.columns([3, 2])
+                    with col_field_m:
+                        # Build recommended positions dict for _draw_defensive_field
+                        rec_positions = {
+                            p: (pos.x, pos.y) for p, pos in matchup.positions.items()
+                        }
+                        # Show all batted balls (GB + air) for full-field context
+                        fig_matchup = _draw_defensive_field(
+                            batted, recommended=rec_positions, height=520,
+                            title=f"Matchup: {display_name(batter)} vs {display_name(sel_pitcher)}"
+                        )
+                        st.plotly_chart(fig_matchup, use_container_width=True)
+                        st.caption("All batted balls shown. Stars = matchup-adjusted positions (7 fielders).")
+
+                    with col_desc_m:
+                        section_header("Infield Position Instructions")
+                        pos_rows = []
+                        for pos_name in ["3B", "SS", "2B", "1B"]:
+                            fp = matchup.positions.get(pos_name)
+                            if not fp:
+                                continue
+                            pos_rows.append({
+                                "Position": pos_name,
+                                "Instruction": fp.description,
+                                "Depth": f"{fp.depth_ft:.0f} ft",
+                                "From 2B Bag": f"{fp.lateral_from_2b_ft:+.0f} ft",
+                                "Confidence": fp.confidence,
+                            })
+                        if pos_rows:
+                            st.dataframe(pd.DataFrame(pos_rows).set_index("Position"), use_container_width=True)
+
+                        # Outfield instructions
+                        of_rows = []
+                        for pos_name in ["LF", "CF", "RF"]:
+                            fp = matchup.positions.get(pos_name)
+                            if not fp:
+                                continue
+                            of_rows.append({
+                                "Position": pos_name,
+                                "Instruction": fp.description,
+                                "Depth": f"{fp.depth_ft:.0f} ft",
+                                "Confidence": fp.confidence,
+                            })
+                        if of_rows:
+                            section_header("Outfield Instructions")
+                            st.dataframe(pd.DataFrame(of_rows).set_index("Position"), use_container_width=True)
+
+                # Pitch mix contribution table
+                section_header("Pitch Mix Contribution")
+                mix_rows = []
+                for pt, summary in sorted(matchup.per_pitch_type.items(), key=lambda x: -(x[1].get("mix_pct") or 0)):
+                    mv_shift = summary.get("movement_shift_deg", 0)
+                    mv_str = f"{mv_shift:+.1f}\u00b0" if abs(mv_shift) > 0.05 else "-"
+                    mix_rows.append({
+                        "Pitch Type": pt,
+                        "Mix%": f"{summary.get('mix_pct', 0):.1f}%",
+                        "Batter GBs": summary.get("n_batter", 0),
+                        "Pull%": f"{summary.get('pull_pct', 0):.1f}%" if summary.get("pull_pct") is not None else "-",
+                        "Ctr%": f"{summary.get('center_pct', 0):.1f}%" if summary.get("center_pct") is not None else "-",
+                        "Opp%": f"{summary.get('oppo_pct', 0):.1f}%" if summary.get("oppo_pct") is not None else "-",
+                        "Mvmt Shift": mv_str,
+                        "Source": summary.get("source", "-"),
+                    })
+                if mix_rows:
+                    st.dataframe(pd.DataFrame(mix_rows).set_index("Pitch Type"), use_container_width=True)
+
+                # Expander: Pitcher Movement Profile
+                with st.expander("Pitcher Movement Profile"):
+                    from analytics.gb_positioning import get_pitcher_movement_profile
+                    p_profile = get_pitcher_movement_profile(sel_pitcher, pitcher_sf)
+                    if p_profile:
+                        prof_rows = []
+                        for pt, prof in sorted(p_profile.items(), key=lambda x: -x[1].get("usage_pct", 0)):
+                            prof_rows.append({
+                                "Pitch": pt,
+                                "Velo": f"{prof['velo']:.1f}" if prof.get("velo") else "-",
+                                "IVB": f"{prof['ivb']:.1f}" if prof.get("ivb") else "-",
+                                "HB": f"{prof['hb']:.1f}" if prof.get("hb") else "-",
+                                "Spin": f"{prof['spin']:.0f}" if prof.get("spin") else "-",
+                                "Ext": f"{prof['ext']:.1f}" if prof.get("ext") else "-",
+                                "Usage%": f"{prof['usage_pct']:.1f}%",
+                            })
+                        st.dataframe(pd.DataFrame(prof_rows).set_index("Pitch"), use_container_width=True)
+                    else:
+                        st.info("No pitch data found for this pitcher.")
+
+                # Expander: Shrinkage Details & Confidence
+                with st.expander("Confidence & Shrinkage Details"):
+                    st.caption("Shows how much the model trusts the batter's data vs population for each pitch type")
+
+                    # Visual confidence gauge
+                    total_gb = sum(s.get("n_batter", 0) for s in matchup.per_pitch_type.values())
+                    has_movement = any(abs(s.get("movement_shift_deg", 0)) > 0.05 for s in matchup.per_pitch_type.values())
+
+                    gauge_items = [
+                        ("Sample Size", total_gb, 40, "ground balls"),
+                        ("Movement Adj.", 1 if has_movement else 0, 1, "active" if has_movement else "inactive"),
+                    ]
+                    gauge_cols = st.columns(len(gauge_items))
+                    for gc, (label, val, target, unit) in zip(gauge_cols, gauge_items):
+                        with gc:
+                            pct = min(val / target * 100, 100) if target > 0 else 0
+                            bar_color = "#2ca02c" if pct >= 75 else "#fe6100" if pct >= 40 else "#d22d49"
+                            st.markdown(
+                                f'<div style="text-align:center;">'
+                                f'<div style="font-size:11px;color:#888 !important;">{label}</div>'
+                                f'<div style="background:#eee;border-radius:4px;height:8px;margin:4px 0;">'
+                                f'<div style="background:{bar_color};height:8px;border-radius:4px;width:{pct:.0f}%;"></div></div>'
+                                f'<div style="font-size:12px;font-weight:700;color:#333 !important;">{val} {unit}</div>'
+                                f'</div>', unsafe_allow_html=True)
+
+                    st.markdown("")
+
+                    shrink_rows = []
+                    for pt, summary in matchup.per_pitch_type.items():
+                        bw = summary.get("batter_weight", 0)
+                        pw = summary.get("pop_weight", 1)
+                        mv = summary.get("movement_shift_deg", 0)
+                        shrink_rows.append({
+                            "Pitch Type": pt,
+                            "Batter GBs": summary.get("n_batter", 0),
+                            "Batter Weight": f"{bw * 100:.0f}%",
+                            "Pop Weight": f"{pw * 100:.0f}%",
+                            "Mvmt Shift": f"{mv:+.1f}\u00b0" if abs(mv) > 0.05 else "-",
+                        })
+                    if shrink_rows:
+                        st.dataframe(pd.DataFrame(shrink_rows).set_index("Pitch Type"), use_container_width=True)
+
+                    # Interpretation
+                    if total_gb < 10:
+                        st.info("Very few batter ground balls — positions heavily rely on population averages. "
+                                "Increase confidence by adding more game data.")
+                    elif total_gb < 30:
+                        st.info("Moderate sample size — positions blend batter data with population baselines. "
+                                "Recommendations will stabilize with more data.")
+                    else:
+                        st.success(f"Good sample size ({total_gb} GBs) — positions primarily reflect this batter's actual tendencies.")
