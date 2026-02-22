@@ -75,25 +75,20 @@ GLOBAL_CSS = """<style>
     [data-testid="stExpander"] summary p {
         color: #1a1a2e !important;
     }
-    /* Fix Material Symbols toggle icon in expanders —
-       hide the icon-name text that leaks when the font doesn't load */
-    [data-testid="stExpanderToggleIcon"] {
+    /* Fix Material Symbols icon text overflow in expanders.
+       When the Material Symbols Rounded font fails to load, the icon
+       ligature name (e.g. "keyboard_arrow_right") renders as plain text.
+       Target via data-testid="stIconMaterial" (Streamlit 1.54). */
+    [data-testid="stExpander"] [data-testid="stIconMaterial"],
+    [data-testid="stExpander"] [data-testid="stExpanderToggleIcon"],
+    [data-testid="stExpander"] [data-testid="stIcon"] {
         overflow: hidden !important;
         width: 1.5rem !important;
         min-width: 1.5rem !important;
         max-width: 1.5rem !important;
+        height: 1.5rem !important;
         flex-shrink: 0 !important;
-    }
-    [data-testid="stExpander"] summary {
-        gap: 0.5rem !important;
-    }
-    /* Target Material Symbols spans by font-family (won't match label text) */
-    [data-testid="stExpander"] summary span[class*="material"],
-    [data-testid="stExpander"] summary .material-symbols-rounded {
-        overflow: hidden !important;
-        width: 1.5rem !important;
-        max-width: 1.5rem !important;
-        flex-shrink: 0 !important;
+        display: inline-flex !important;
     }
 
     /* Force dark text everywhere in main content */
