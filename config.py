@@ -507,6 +507,7 @@ TEAM_NAMES = {
     "SOU_GAM": "South Carolina", "QUN_RYL": "Quinnipiac",
     "IND_SPI8": "Indiana St.", "ONT_BLU": "Ontario",
     "202_ONT1": "Ontario",
+    "FAI_STA": "Fairfield",
 }
 
 

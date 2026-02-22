@@ -2443,6 +2443,7 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
 
     # --- Location Execution Score (50%) ---
     loc_exec_score = 50.0
+    in_best_pct = 0.0
     best_locations = {}
     loc_by_pitch = {}  # per-pitch-type location detail
     loc_df = pitcher_pdf.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
@@ -2490,6 +2491,8 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
             # Recognizes that pitchers need zone variety — hitting best zones
             # 35-45% of the time is genuinely good command.
             loc_exec_score = min(100, max(0, (in_best_pct - 15) / 0.45))
+        else:
+            in_best_pct = 0.0
 
     # Combined grade
     combined = 0.50 * seq_util_score + 0.50 * loc_exec_score
@@ -2521,25 +2524,61 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
         elif combined >= 45:
             grade_letter = "D+"
 
-    # Opponent weakness check
+    # Opponent weakness check — dynamically load the right opponent pack
     opp_weakness_pct = None
     try:
-        from data.bryant_combined import load_bryant_combined_pack
-        pack = load_bryant_combined_pack()
-        if pack and "hitting" in pack:
-            hole_data = pack["hitting"]
-            # Check if pitcher attacked opponent holes on 2-strike counts
-            two_strike_df = pitcher_pdf[
-                (pitcher_pdf.get("Strikes", pd.Series(dtype=float)).fillna(0).astype(int) == 2)
-            ] if "Strikes" in pitcher_pdf.columns else pd.DataFrame()
-            if len(two_strike_df) >= 5 and not loc_df.empty:
-                attacked = 0
-                total_2k = 0
-                for _, row in two_strike_df.iterrows():
-                    batter = row.get("Batter", "")
-                    if batter in hole_data and isinstance(hole_data[batter], pd.DataFrame):
+        # Determine opponent team from the batters (pitcher is Davidson, batters are opponents)
+        opp_teams = pitcher_pdf["BatterTeam"].dropna().unique().tolist() if "BatterTeam" in pitcher_pdf.columns else []
+        opp_team = next((t for t in opp_teams if t != DAVIDSON_TEAM_ID), None)
+
+        # Map Trackman team ID → combined pack loader
+        _PACK_LOADERS = {
+            "FAI_STA": ("data.fairfield_combined", "load_fairfield_combined_pack"),
+            "BRY_BUL": ("data.bryant_combined", "load_bryant_combined_pack"),
+        }
+
+        pack = None
+        if opp_team and opp_team in _PACK_LOADERS:
+            mod_name, func_name = _PACK_LOADERS[opp_team]
+            import importlib
+            mod = importlib.import_module(mod_name)
+            pack = getattr(mod, func_name)()
+
+        if pack:
+            hole_scores_df = pack.get("hitting", {}).get("hole_scores", pd.DataFrame())
+            if not hole_scores_df.empty and "Strikes" in pitcher_pdf.columns:
+                two_strike_df = pitcher_pdf[
+                    pitcher_pdf["Strikes"].fillna(0).astype(int) == 2
+                ].dropna(subset=["PlateLocSide", "PlateLocHeight"])
+
+                if len(two_strike_df) >= 5:
+                    # Build per-batter top-2 hole zones from the pack
+                    agg_holes = hole_scores_df[
+                        (hole_scores_df["pitcher_throws"] == "ALL") & (hole_scores_df["pitch_type"] == "ALL")
+                    ]
+                    # Build lookup by last name (handles Matt/Matthew mismatches)
+                    lastname_to_holes = {}
+                    for name, grp in agg_holes.groupby("playerFullName"):
+                        top2 = grp.nlargest(2, "score")
+                        zones = [(int(r["xb"]), int(r["yb"])) for _, r in top2.iterrows()]
+                        last = str(name).strip().split()[-1].lower() if name else ""
+                        if last:
+                            lastname_to_holes[last] = zones
+
+                    attacked = 0
+                    total_2k = 0
+                    for _, row in two_strike_df.iterrows():
+                        batter = str(row.get("Batter", ""))
+                        # Trackman format "Last, First" — extract last name
+                        batter_last = batter.split(",")[0].strip().lower() if batter else ""
+                        if batter_last not in lastname_to_holes:
+                            continue
                         total_2k += 1
-                opp_weakness_pct = attacked / max(total_2k, 1) * 100 if total_2k > 0 else None
+                        xb = int(np.clip(np.digitize(row["PlateLocSide"], _ZONE_X_EDGES) - 1, 0, 2))
+                        yb = int(np.clip(np.digitize(row["PlateLocHeight"], _ZONE_Y_EDGES) - 1, 0, 2))
+                        if (xb, yb) in lastname_to_holes[batter_last]:
+                            attacked += 1
+                    opp_weakness_pct = attacked / max(total_2k, 1) * 100 if total_2k > 0 else None
     except Exception:
         pass
 
@@ -2548,6 +2587,7 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
         "grade_score": combined,
         "seq_util_score": seq_util_score,
         "loc_exec_score": loc_exec_score,
+        "in_best_pct": in_best_pct,
         "top_pairs": top_pairs,
         "top_sequences": top_sequences,
         "best_locations": best_locations,
@@ -2587,24 +2627,30 @@ def _render_call_grade_section(pitcher_pdf, data, pitcher, key_suffix):
         )
     with col_explain:
         # Build explanation
-        seq_label = "strong" if seq_s >= 70 else "average" if seq_s >= 40 else "low"
-        loc_label = "strong" if loc_s >= 70 else "average" if loc_s >= 40 else "low"
+        seq_label = "Strong" if seq_s >= 70 else "Average" if seq_s >= 40 else "Low"
+        loc_label = "Strong" if loc_s >= 70 else "Average" if loc_s >= 40 else "Low"
         usage_ct = grade_info.get("usage_count", 0)
         total_tr = grade_info.get("total_transitions", 1)
         usage_p = grade_info.get("usage_pct", 0)
         pair_names = grade_info.get("top_pair_names", [])
+        best_pct = grade_info.get("in_best_pct", 0)
 
         expl_parts = []
-        expl_parts.append(
-            f"**Sequence Utilization ({seq_s:.0f}/100):** {seq_label.title()} — "
-            f"used top pairs in **{usage_ct} of {total_tr}** pitch transitions ({usage_p:.0f}%)."
-        )
         if pair_names:
-            expl_parts[-1] += f" Best pairs: {', '.join(pair_names)}."
+            expl_parts.append(
+                f"**Sequence Utilization ({seq_s:.0f}/100):** {seq_label} — "
+                f"used top pairs in **{usage_ct} of {total_tr}** pitch transitions ({usage_p:.0f}%). "
+                f"Best pairs: {', '.join(pair_names)}."
+            )
+        else:
+            expl_parts.append(
+                f"**Sequence Utilization ({seq_s:.0f}/100):** {seq_label} — "
+                f"insufficient pitch variety to evaluate sequence usage."
+            )
 
         expl_parts.append(
-            f"**Location Execution ({loc_s:.0f}/100):** {loc_label.title()} — "
-            f"pitched to best zones {loc_s:.0f}% of the time."
+            f"**Location Execution ({loc_s:.0f}/100):** {loc_label} — "
+            f"pitched to best zones {best_pct:.0f}% of the time."
         )
         for line in expl_parts:
             st.markdown(f'<div style="font-size:13px;padding:3px 0;">{line}</div>', unsafe_allow_html=True)

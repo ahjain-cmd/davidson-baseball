@@ -74,6 +74,17 @@ GLOBAL_CSS = """<style>
     [data-testid="stExpander"] summary p {
         color: #1a1a2e !important;
     }
+    /* Fix Material Icons text overflow when font fails to load in Docker */
+    [data-testid="stExpanderToggleIcon"] {
+        overflow: hidden !important;
+        width: 1.5rem !important;
+        min-width: 1.5rem !important;
+        max-width: 1.5rem !important;
+        flex-shrink: 0 !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+    }
 
     /* Force dark text everywhere in main content */
     [data-testid="stAppViewContainer"] h1,
