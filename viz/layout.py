@@ -3,6 +3,7 @@ import streamlit as st
 
 GLOBAL_CSS = """<style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,1,0');
 
     /* Force light backgrounds everywhere */
     [data-testid="stAppViewContainer"],
@@ -74,16 +75,16 @@ GLOBAL_CSS = """<style>
     [data-testid="stExpander"] summary p {
         color: #1a1a2e !important;
     }
-    /* Fix Material Icons text overflow when font fails to load in Docker */
-    [data-testid="stExpanderToggleIcon"] {
+    /* Fix Material Symbols toggle icon in expanders */
+    [data-testid="stExpanderToggleIcon"],
+    [data-testid="stExpander"] summary > span:first-child {
         overflow: hidden !important;
         width: 1.5rem !important;
         min-width: 1.5rem !important;
         max-width: 1.5rem !important;
         flex-shrink: 0 !important;
-        display: inline-flex !important;
-        align-items: center !important;
-        justify-content: center !important;
+        display: inline-block !important;
+        vertical-align: middle !important;
     }
 
     /* Force dark text everywhere in main content */
