@@ -40,20 +40,73 @@ _OUTCOME_WEIGHTS = {
     "InPlay": 1.0,  # base — overridden by EV tiers below
 }
 
+# ---------------------------------------------------------------------------
+# Count-context multipliers: adjust outcome weights by the count.
+# A ball on 0-0 is poor command; a ball on 0-2 is a strategic waste pitch.
+# Keys are (balls, strikes) → {"ball": multiplier, "strike": multiplier}.
+#   ball mult > 1  → throwing a ball here is WORSE than usual
+#   ball mult < 1  → throwing a ball here is ACCEPTABLE (waste pitch)
+#   strike mult < 1 → getting a strike here is MORE valuable than usual
+# ---------------------------------------------------------------------------
+_COUNT_CONTEXT = {
+    # Pitcher's counts — waste pitches are strategic
+    (0, 2): {"ball": 0.5, "strike": 0.9},
+    (1, 2): {"ball": 0.6, "strike": 0.9},
+    # Neutral / slight advantage
+    (0, 0): {"ball": 1.1, "strike": 1.0},   # first pitch — get ahead
+    (0, 1): {"ball": 0.9, "strike": 1.0},
+    (1, 1): {"ball": 1.0, "strike": 1.0},
+    (2, 2): {"ball": 0.9, "strike": 0.9},
+    # Behind in count — balls are costly, strikes are crucial
+    (1, 0): {"ball": 1.2, "strike": 0.85},
+    (2, 0): {"ball": 1.4, "strike": 0.75},
+    (2, 1): {"ball": 1.2, "strike": 0.85},
+    (3, 0): {"ball": 1.5, "strike": 0.7},
+    (3, 1): {"ball": 1.4, "strike": 0.75},
+    # Full count — walk vs strikeout, high stakes both ways
+    (3, 2): {"ball": 1.3, "strike": 0.8},
+}
+
 # Bayesian stabilization: number of pitches at which the observed score
 # receives 50 % weight (the other 50 % comes from the league-average prior).
 BAYESIAN_N = 150
 
+# Pitch-call categories for count multiplier lookup
+_BALL_CALLS = {"BallCalled", "BallinDirt", "BallIntentional", "HitByPitch"}
+_STRIKE_CALLS = {
+    "StrikeCalled", "StrikeSwinging",
+    "FoulBall", "FoulBallNotFieldable", "FoulBallFieldable",
+    "InPlay",
+}
+
 
 def _outcome_weight_series(ptd):
-    """Per-pitch outcome weights.  InPlay pitches are further split by EV."""
+    """Per-pitch outcome weights combining base outcome + count context + EV."""
     w = ptd["PitchCall"].map(_OUTCOME_WEIGHTS).fillna(1.0).copy()
+
+    # EV-based overrides for batted balls
     if "ExitSpeed" in ptd.columns:
         inplay = ptd["PitchCall"] == "InPlay"
         ev = pd.to_numeric(ptd["ExitSpeed"], errors="coerce")
         w.loc[inplay & (ev >= 98)]              = 2.0   # barrel-level
         w.loc[inplay & (ev >= 95) & (ev < 98)]  = 1.5   # hard hit
         w.loc[inplay & (ev < 85)]               = 0.8   # weak contact
+
+    # Count-context multipliers
+    if "Balls" in ptd.columns and "Strikes" in ptd.columns:
+        balls = pd.to_numeric(ptd["Balls"], errors="coerce")
+        strikes = pd.to_numeric(ptd["Strikes"], errors="coerce")
+        for (b, s), mults in _COUNT_CONTEXT.items():
+            count_mask = (balls == b) & (strikes == s)
+            if not count_mask.any():
+                continue
+            ball_mask = count_mask & ptd["PitchCall"].isin(_BALL_CALLS)
+            strike_mask = count_mask & ptd["PitchCall"].isin(_STRIKE_CALLS)
+            if ball_mask.any():
+                w.loc[ball_mask] *= mults["ball"]
+            if strike_mask.any():
+                w.loc[strike_mask] *= mults["strike"]
+
     return w
 
 
