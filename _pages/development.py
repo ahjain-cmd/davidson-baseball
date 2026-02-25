@@ -24,8 +24,17 @@ def page_development(data):
             return
         player = st.selectbox("Pitcher", sorted(pdf["Pitcher"].unique()), key="dv_p")
         pdata = pdf[pdf["Pitcher"] == player]
-        metric = st.selectbox("Metric", ["RelSpeed", "SpinRate", "InducedVertBreak", "HorzBreak",
-                                          "Extension", "VertApprAngle", "EffectiveVelo"], key="dv_mp")
+
+        # Ensure StuffPlus is computed
+        if "StuffPlus" not in pdata.columns:
+            pdata = _compute_stuff_plus(pdata.copy())
+
+        metrics = ["RelSpeed", "SpinRate", "InducedVertBreak", "HorzBreak",
+                   "Extension", "VertApprAngle", "EffectiveVelo"]
+        if "StuffPlus" in pdata.columns and pdata["StuffPlus"].notna().any():
+            metrics.append("StuffPlus")
+        metric = st.selectbox("Metric", metrics, key="dv_mp")
+
         pts = sorted(pdata["TaggedPitchType"].dropna().unique())
         # Default to pitch types with >= 10% usage
         total = len(pdata["TaggedPitchType"].dropna())
@@ -42,9 +51,12 @@ def page_development(data):
             fig = px.scatter(daily, x="Date", y="Value", color="PitchType", size="Count",
                              color_discrete_map=PITCH_COLORS, trendline="lowess",
                              labels={"Value": metric})
-            # Add per-pitch-type historical average lines
+            # Historical average lines (exclude last 30 days for out-of-sample baseline)
+            dates = pd.to_datetime(pdata["Date"], errors="coerce")
+            cutoff = dates.max() - pd.Timedelta(days=30)
+            hist = pdata[dates <= cutoff]
             for pt in sel_pt:
-                pt_vals = pdata.loc[pdata["TaggedPitchType"] == pt, metric].dropna()
+                pt_vals = hist.loc[hist["TaggedPitchType"] == pt, metric].dropna()
                 if len(pt_vals) > 0:
                     fig.add_hline(
                         y=pt_vals.mean(),
@@ -55,6 +67,11 @@ def page_development(data):
                         annotation_font_size=10,
                         annotation_font_color=PITCH_COLORS.get(pt, "#777"),
                     )
+            # For StuffPlus, also add the D1 average baseline at 100
+            if metric == "StuffPlus":
+                fig.add_hline(y=100, line_dash="dash", line_color="gray",
+                              annotation_text="D1 Avg (100)",
+                              annotation_font_size=10)
             fig.update_layout(height=400, **CHART_LAYOUT)
             st.plotly_chart(fig, use_container_width=True)
 
@@ -66,42 +83,13 @@ def page_development(data):
                     fig = go.Figure()
                     fig.add_trace(go.Scatter(x=list(range(len(sub))), y=sub.rolling(window).mean(),
                                              name=pt, line=dict(color=PITCH_COLORS.get(pt, "#777"))))
+                    if metric == "StuffPlus":
+                        fig.add_hline(y=100, line_dash="dash", line_color="gray",
+                                      annotation_text="D1 Avg (100)")
                     fig.update_layout(title=f"{pt} Rolling {window} {metric}",
                                       xaxis_title="Pitch #", yaxis_title=metric, height=220,
                                       **CHART_LAYOUT)
                     st.plotly_chart(fig, use_container_width=True)
-
-            # Rolling Stuff+
-            st.subheader("Rolling Stuff+")
-            pdata_stuff = _compute_stuff_plus(pdata_s.copy())
-            if "StuffPlus" in pdata_stuff.columns and pdata_stuff["StuffPlus"].notna().any():
-                stuff_fig = go.Figure()
-                has_trace = False
-                for pt in sel_pt:
-                    sub = pdata_stuff[pdata_stuff["TaggedPitchType"] == pt]["StuffPlus"].dropna()
-                    if len(sub) >= window:
-                        stuff_fig.add_trace(go.Scatter(
-                            x=list(range(len(sub))),
-                            y=sub.rolling(window).mean(),
-                            name=pt,
-                            line=dict(color=PITCH_COLORS.get(pt, "#777")),
-                        ))
-                        has_trace = True
-                if has_trace:
-                    stuff_fig.add_hline(y=100, line_dash="dash", line_color="gray",
-                                        annotation_text="Avg (100)")
-                    stuff_fig.update_layout(
-                        title=f"Rolling {window} Stuff+",
-                        xaxis_title="Pitch #",
-                        yaxis_title="Stuff+",
-                        height=350,
-                        **CHART_LAYOUT,
-                    )
-                    st.plotly_chart(stuff_fig, use_container_width=True)
-                else:
-                    st.info("Not enough pitches per type for rolling Stuff+.")
-            else:
-                st.info("Stuff+ could not be computed for this pitcher.")
     else:
         hdf = filter_davidson(data, "batter")
         if hdf.empty:
