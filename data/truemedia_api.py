@@ -102,6 +102,7 @@ _HIT_RATE_COLS = "[PA],[AB],[AVG],[OBP],[SLG],[OPS],[WOBA],[K%],[BB%],[ISO]"
 _HIT_COUNTING_COLS = "[PA],[AB],[H],[K],[BB],[HR],[2B],[3B],[SB],[HBP],[SF],[RBI],[R]"
 _HIT_DISCIPLINE_COLS = "[Chase%],[SwStrk%],[Contact%],[Swing%],[P/PA],[FPStk%],[InZoneSwing%]"
 _HIT_EXIT_COLS = "[ExitVel],[Barrel%],[HardHit%]"
+_HIT_EXPECTED_COLS = "[xAVG],[xSLG],[xWOBA],[xOBP],[xISO]"
 _HIT_BATTEDBALL_COLS = "[Ground%],[Fly%],[Line%],[Popup%]"
 _HIT_LOCATION_COLS = "[HPull%],[HCtr%],[HOppFld%],[HFarLft%],[HLftCtr%],[HDeadCtr%],[HRtCtr%],[HFarRt%]"
 _HIT_PITCHTYPE_COLS = "[4Seam%],[Slider%],[Curve%],[Change%],[Sink2Seam%],[Cutter%],[Split%],[Sweeper%]"
@@ -120,7 +121,7 @@ def _dedup_cols(*groups):
 
 _ALL_HIT_COLS = _dedup_cols(
     _HIT_RATE_COLS, _HIT_COUNTING_COLS, _HIT_DISCIPLINE_COLS,
-    _HIT_EXIT_COLS, _HIT_BATTEDBALL_COLS, _HIT_LOCATION_COLS,
+    _HIT_EXIT_COLS, _HIT_EXPECTED_COLS, _HIT_BATTEDBALL_COLS, _HIT_LOCATION_COLS,
     _HIT_PITCHTYPE_COLS, _HIT_ZONE_COLS,
 )
 
@@ -130,6 +131,7 @@ _PIT_RATE_COLS = "[K%|PIT],[BB%|PIT],[LOB%],[OPS|PIT],[WOBA|PIT],[BA|PIT]"
 _PIT_MOVEMENT_COLS = "[FBVel],[Spin],[IndVertBrk],[HorzBrk]"
 _PIT_DISCIPLINE_COLS = "[Chase%|PIT],[SwStrk%|PIT],[Contact%|PIT],[Swing%|PIT],[FPStk%|PIT],[InZone%|PIT]"
 _PIT_EXIT_COLS = "[ExitVel|PIT],[Barrel%|PIT],[HardHit%|PIT]"
+_PIT_EXPECTED_COLS = "[xAVG|PIT],[xSLG|PIT],[xWOBA|PIT]"
 _PIT_BATTEDBALL_COLS = "[Ground%|PIT],[Fly%|PIT],[Line%|PIT],[Popup%|PIT]"
 _PIT_PITCHTYPE_COLS = "[4Seam%|PIT],[Slider%|PIT],[Curve%|PIT],[Change%|PIT],[Sink2Seam%|PIT],[Cutter%|PIT],[Split%|PIT],[Sweeper%|PIT]"
 _PIT_COUNTING_COLS = "[K|PIT],[BB|PIT],[H|PIT],[ER],[BF]"
@@ -137,7 +139,7 @@ _PIT_ZONE_COLS = "[High%|PIT],[VMid%|PIT],[Low%|PIT],[Inside%|PIT],[HMid%|PIT],[
 
 _ALL_PIT_COLS = _dedup_cols(
     _PIT_TRAD_COLS, _PIT_RATE_COLS, _PIT_MOVEMENT_COLS,
-    _PIT_DISCIPLINE_COLS, _PIT_EXIT_COLS, _PIT_BATTEDBALL_COLS,
+    _PIT_DISCIPLINE_COLS, _PIT_EXIT_COLS, _PIT_EXPECTED_COLS, _PIT_BATTEDBALL_COLS,
     _PIT_PITCHTYPE_COLS, _PIT_COUNTING_COLS, _PIT_ZONE_COLS,
 )
 
@@ -547,14 +549,15 @@ def build_tm_dict_for_team(team_id, team_name, season_year=2026):
     # ── Build hitting sub-DataFrames ──
     h = hit_raw if not hit_raw.empty else pd.DataFrame()
 
+    _expected_hit_cols = ["xAVG", "xSLG", "xWOBA", "xOBP", "xISO"]
     hit_dict = {
         "rate": _sub_df(h, ["PA", "AB", "BA", "AVG", "OBP", "SLG", "OPS", "WOBA", "wOBA",
                             "K%", "BB%", "ISO"]) if not h.empty else pd.DataFrame(),
         "counting": _sub_df(h, ["PA", "AB", "H", "K", "BB", "HR", "2B", "3B",
                                 "SB", "HBP", "SF", "RBI", "R"]) if not h.empty else pd.DataFrame(),
         "exit": _sub_df(h, ["ExitVel", "Barrel%", "HardHit%", "Hit95+%"]) if not h.empty else pd.DataFrame(),
-        "expected_rate": pd.DataFrame(),
-        "expected_hit_rates": pd.DataFrame(),
+        "expected_rate": _sub_df(h, _expected_hit_cols) if not h.empty else pd.DataFrame(),
+        "expected_hit_rates": _sub_df(h, _expected_hit_cols) if not h.empty else pd.DataFrame(),
         "hit_types": _sub_df(h, ["Ground%", "Fly%", "Line%", "Popup%"]) if not h.empty else pd.DataFrame(),
         "hit_locations": _sub_df(h, ["HPull%", "HCtr%", "HOppFld%",
                                      "HFarLft%", "HLftCtr%", "HDeadCtr%", "HRtCtr%", "HFarRt%"]) if not h.empty else pd.DataFrame(),
@@ -618,7 +621,7 @@ def build_tm_dict_for_team(team_id, team_name, season_year=2026):
         "pitch_rates": _sub_df(p, ["Chase%", "SwStrk%", "Contact%", "Swing%",
                                     "FPStk%", "InZone%"]) if not p.empty else pd.DataFrame(),
         "exit": _sub_df(p, ["ExitVel", "Barrel%", "HardHit%"]) if not p.empty else pd.DataFrame(),
-        "expected_rate": pd.DataFrame(),
+        "expected_rate": _sub_df(p, ["xAVG", "xSLG", "xWOBA"]) if not p.empty else pd.DataFrame(),
         "hit_types": _sub_df(p, ["Ground%", "Fly%", "Line%", "Popup%"]) if not p.empty else pd.DataFrame(),
         "hit_locations": pd.DataFrame(),
         "counting": pd.DataFrame(),
@@ -627,7 +630,7 @@ def build_tm_dict_for_team(team_id, team_name, season_year=2026):
         "baserunning": pd.DataFrame(),
         "stolen_bases": pd.DataFrame(),
         "home_runs": pd.DataFrame(),
-        "expected_hit_rates": pd.DataFrame(),
+        "expected_hit_rates": _sub_df(p, ["xAVG", "xSLG", "xWOBA"]) if not p.empty else pd.DataFrame(),
         "pitch_calls": pd.DataFrame(),
         "pitch_type_counts": pd.DataFrame(),
         "expected_counting": pd.DataFrame(),
@@ -699,8 +702,8 @@ def build_tm_dict_for_league_hitters(season_year=2026, allow_fallback=False, max
         "counting": _sub_df(h, ["PA", "AB", "H", "K", "BB", "HR", "2B", "3B",
                                 "SB", "HBP", "SF", "RBI", "R"]) if not h.empty else pd.DataFrame(),
         "exit": _sub_df(h, ["ExitVel", "Barrel%", "HardHit%", "Hit95+%"]) if not h.empty else pd.DataFrame(),
-        "expected_rate": pd.DataFrame(),
-        "expected_hit_rates": pd.DataFrame(),
+        "expected_rate": _sub_df(h, ["xAVG", "xSLG", "xWOBA", "xOBP", "xISO"]) if not h.empty else pd.DataFrame(),
+        "expected_hit_rates": _sub_df(h, ["xAVG", "xSLG", "xWOBA", "xOBP", "xISO"]) if not h.empty else pd.DataFrame(),
         "hit_types": _sub_df(h, ["Ground%", "Fly%", "Line%", "Popup%"]) if not h.empty else pd.DataFrame(),
         "hit_locations": _sub_df(h, ["HPull%", "HCtr%", "HOppFld%",
                                      "HFarLft%", "HLftCtr%", "HDeadCtr%", "HRtCtr%", "HFarRt%"]) if not h.empty else pd.DataFrame(),
@@ -780,7 +783,7 @@ def build_tm_dict_for_league_pitchers(season_year=2026, allow_fallback=False, ma
         "pitch_rates": _sub_df(p, ["Chase%", "SwStrk%", "Contact%", "Swing%",
                                     "FPStk%", "InZone%"]) if not p.empty else pd.DataFrame(),
         "exit": _sub_df(p, ["ExitVel", "Barrel%", "HardHit%"]) if not p.empty else pd.DataFrame(),
-        "expected_rate": pd.DataFrame(),
+        "expected_rate": _sub_df(p, ["xAVG", "xSLG", "xWOBA"]) if not p.empty else pd.DataFrame(),
         "hit_types": _sub_df(p, ["Ground%", "Fly%", "Line%", "Popup%"]) if not p.empty else pd.DataFrame(),
         "hit_locations": pd.DataFrame(),
         "counting": pd.DataFrame(),
@@ -789,7 +792,7 @@ def build_tm_dict_for_league_pitchers(season_year=2026, allow_fallback=False, ma
         "baserunning": pd.DataFrame(),
         "stolen_bases": pd.DataFrame(),
         "home_runs": pd.DataFrame(),
-        "expected_hit_rates": pd.DataFrame(),
+        "expected_hit_rates": _sub_df(p, ["xAVG", "xSLG", "xWOBA"]) if not p.empty else pd.DataFrame(),
         "pitch_calls": pd.DataFrame(),
         "pitch_type_counts": pd.DataFrame(),
         "expected_counting": pd.DataFrame(),
@@ -860,7 +863,7 @@ def fetch_team_all_pitches_trackman(team_id, season_year=2026):
 
     combined = pd.concat(all_dfs, ignore_index=True)
 
-    logger.info("GamePitchesTrackman raw columns (%d): %s", len(combined.columns), list(combined.columns)[:40])
+    logger.info("GamePitchesTrackman raw columns (%d): %s", len(combined.columns), list(combined.columns))
     combined["__source"] = "truemedia"
 
     # ── Column rename: GamePitchesTrackman API → local Trackman parquet format ──
@@ -898,6 +901,11 @@ def fetch_team_all_pitches_trackman(team_id, season_year=2026):
         # Batted ball
         "exitVelocity": "ExitSpeed",
         "launchAngle": "Angle",
+        # Called-strike probability (used for attackable-zone filtering)
+        "pCallSRTK%": "CalledStrikeProb",
+        "pCallSRTK": "CalledStrikeProb",
+        "calledStrikeProb": "CalledStrikeProb",
+        "calledStrikeProbability": "CalledStrikeProb",
         # Count / situation
         "balls": "Balls", "strikes": "Strikes", "outs": "Outs",
         "inning": "Inning", "side": "Top/Bottom",
@@ -972,7 +980,16 @@ def fetch_team_all_pitches_trackman(team_id, season_year=2026):
             "R": "Right", "L": "Left", "S": "Both",
         })
 
-    logger.info("After normalization columns: %s", list(combined.columns)[:40])
+    # ── Normalize CalledStrikeProb to 0-1 scale ──
+    if "CalledStrikeProb" in combined.columns:
+        cs_vals = pd.to_numeric(combined["CalledStrikeProb"], errors="coerce")
+        # If values look like percentages (max > 1.5), scale to 0-1
+        if cs_vals.dropna().max() > 1.5:
+            combined["CalledStrikeProb"] = cs_vals / 100.0
+        else:
+            combined["CalledStrikeProb"] = cs_vals
+
+    logger.info("After normalization columns: %s", list(combined.columns))
 
     return combined
 

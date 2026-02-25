@@ -298,6 +298,8 @@ def _hitter_card_content(data, batter, season_filter, bdf, batted, pr, all_batte
                 height=250, margin=dict(l=80, r=20, t=40, b=20),
                 plot_bgcolor="white", paper_bgcolor="white",
                 font=dict(family="Inter, Arial, sans-serif"),
+                hoverlabel=dict(bgcolor="white", font_color="#000000", font_size=13,
+                                font_family="Inter, Arial, sans-serif", bordercolor="#cccccc"),
             )
             _plotly_chart_bats(fig, use_container_width=True, key="hc_count_grid")
             st.caption("EV (bold) + Whiff% per count. Green = EV above DB avg, Red = below.")
@@ -837,6 +839,8 @@ def _hitting_overview(data, batter, season_filter, bdf, batted, pr, all_batter_s
             height=250, margin=dict(l=80, r=20, t=40, b=20),
             plot_bgcolor="white", paper_bgcolor="white",
             font=dict(family="Inter, Arial, sans-serif"),
+            hoverlabel=dict(bgcolor="white", font_color="#000000", font_size=13,
+                            font_family="Inter, Arial, sans-serif", bordercolor="#cccccc"),
         )
         _plotly_chart_bats(fig, use_container_width=True, key="hitter_count_grid")
 
@@ -1995,7 +1999,9 @@ def _hitting_lab_content(data, batter, season_filter, bdf, batted, pr, all_batte
                                                              scaleanchor="y", fixedrange=True),
                                                   yaxis=dict(range=[0, 5], showticklabels=False,
                                                              fixedrange=True),
-                                                  margin=dict(l=5, r=5, t=5, b=5))
+                                                  margin=dict(l=5, r=5, t=5, b=5),
+                                                  hoverlabel=dict(bgcolor="white", font_color="#000000", font_size=13,
+                                                                  font_family="Inter, Arial, sans-serif", bordercolor="#cccccc"))
                             _plotly_chart_bats(fig_pt, use_container_width=True)
                         else:
                             st.caption("Not enough data")

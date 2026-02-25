@@ -52,6 +52,7 @@ from analytics.zone_vulnerability import (
     analyze_zone_patterns as _zv_analyze_zone_patterns,
     swing_path_vulnerability as _zv_swing_path_vulnerability,
     compute_hole_scores_3x3 as _zv_compute_hole_scores_3x3,
+    convert_holes_to_percentiles as _zv_convert_holes_to_percentiles,
 )
 
 
@@ -6398,7 +6399,8 @@ def _swing_hole_finder(b_tm, hitter_name, bats=None, bats_norm=None, sp=None, is
         d["ybin"] = np.clip(np.digitize(d["PlateLocHeight"], y_edges) - 1, 0, 2)
 
         # Use shared hole-score computation on normalized data (same population as barrel overlay)
-        scores = _zv_compute_hole_scores_3x3(d, bats, sp=sp, min_zone_n=min_zone_n)
+        scores_raw = _zv_compute_hole_scores_3x3(d, bats, sp=sp, min_zone_n=min_zone_n)
+        scores = _zv_convert_holes_to_percentiles(scores_raw, bats)
 
         hs_grid = np.full((3, 3), np.nan)
         barrel_grid = np.full((3, 3), np.nan)
@@ -6436,15 +6438,15 @@ def _swing_hole_finder(b_tm, hitter_name, bats=None, bats_norm=None, sp=None, is
                 v = hs_grid[yi, xi]
                 if pd.isna(v):
                     row.append("")
-                elif v >= max_score - 5 and v >= 50:
+                elif v >= max_score - 5 and v >= 60:
                     # Highlight top hole(s) with attack indicator
                     row.append(f"<b>⚾ {v:.0f}</b>")
                 else:
                     row.append(f"<b>{v:.0f}</b>")
             text_grid.append(row)
 
-        z_min = 0
-        z_max = 100.0
+        z_min = 20
+        z_max = 80.0
 
         # Improved colorscale: green (safe) -> yellow -> orange -> red (vulnerable/attack)
         fig = go.Figure(data=go.Heatmap(

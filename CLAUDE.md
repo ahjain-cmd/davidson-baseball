@@ -55,74 +55,118 @@ Raw Trackman CSVs (v3/{year}/{month}/{day}/CSV/)
 
 ## Adding New Games from Trackman CSVs
 
-Each game comes as two files from Trackman:
-- `{date}-{venue}-{game#}_unverified.csv` — pitch-level data (167 cols)
-- `{date}-{venue}-{game#}_unverified_playerpositioning_FHC.csv` — fielder positioning (30 extra cols)
+Each game comes as one or two files from Trackman:
+- `{date}-{venue}-{game#}_unverified.csv` — pitch-level data (167 cols) **(required)**
+- `{date}-{venue}-{game#}_unverified_playerpositioning_FHC.csv` — fielder positioning (30 extra cols) **(optional)**
 
 **Critical:** `config.py` resolves `PARQUET_PATH` to `all_trackman_fixed.parquet` if it exists, otherwise `all_trackman.parquet`. Always merge into `all_trackman_fixed.parquet` — that's what precompute reads.
 
 ### Steps
 
-1. **Merge CSV + FHC into the parquet using DuckDB** (memory-efficient, don't use pandas — parquet is ~2GB):
+#### 1. Merge CSV into the parquet using DuckDB
+
+The full script below handles both cases (with or without FHC). It auto-detects type mismatches between CSV and parquet and casts accordingly. Run from `~/davidson_baseball/`.
+
 ```python
 import duckdb
 con = duckdb.connect()
 
-# Join trackman CSV with FHC positioning CSV on PitchNo + Date
-positioning_cols = [
-    'DetectedShift',
-    '1B_PositionAtReleaseX', '1B_PositionAtReleaseZ',
-    '2B_PositionAtReleaseX', '2B_PositionAtReleaseZ',
-    '3B_PositionAtReleaseX', '3B_PositionAtReleaseZ',
-    'SS_PositionAtReleaseX', 'SS_PositionAtReleaseZ',
-    'LF_PositionAtReleaseX', 'LF_PositionAtReleaseZ',
-    'CF_PositionAtReleaseX', 'CF_PositionAtReleaseZ',
-    'RF_PositionAtReleaseX', 'RF_PositionAtReleaseZ',
-    '1B_Name', '1B_Id', '2B_Name', '2B_Id',
-    '3B_Name', '3B_Id', 'SS_Name', 'SS_Id',
-    'LF_Name', 'LF_Id', 'CF_Name', 'CF_Id',
-    'RF_Name', 'RF_Id', 'FHC'
-]
-fhc_select = ", ".join(f'fhc."{c}"' for c in positioning_cols)
+csv_path = "<trackman_csv>"           # e.g. "/Users/ahanjain/20260224-WoffordCollege-1_unverified.csv"
+fhc_path = "<fhc_csv_or_None>"       # e.g. None if no FHC file
+parquet_path = "all_trackman_fixed.parquet"
+out_path = "all_trackman_fixed_new.parquet"
 
+# If FHC file exists, join it with the trackman CSV first
+if fhc_path:
+    positioning_cols = [
+        'DetectedShift',
+        '1B_PositionAtReleaseX', '1B_PositionAtReleaseZ',
+        '2B_PositionAtReleaseX', '2B_PositionAtReleaseZ',
+        '3B_PositionAtReleaseX', '3B_PositionAtReleaseZ',
+        'SS_PositionAtReleaseX', 'SS_PositionAtReleaseZ',
+        'LF_PositionAtReleaseX', 'LF_PositionAtReleaseZ',
+        'CF_PositionAtReleaseX', 'CF_PositionAtReleaseZ',
+        'RF_PositionAtReleaseX', 'RF_PositionAtReleaseZ',
+        '1B_Name', '1B_Id', '2B_Name', '2B_Id',
+        '3B_Name', '3B_Id', 'SS_Name', 'SS_Id',
+        'LF_Name', 'LF_Id', 'CF_Name', 'CF_Id',
+        'RF_Name', 'RF_Id', 'FHC'
+    ]
+    fhc_select = ", ".join(f'fhc."{c}"' for c in positioning_cols)
+    csv_source = f"""(
+        SELECT tm.*, {fhc_select}
+        FROM read_csv('{csv_path}', auto_detect=true) tm
+        LEFT JOIN read_csv('{fhc_path}', auto_detect=true) fhc
+        ON tm."PitchNo" = fhc."PitchNo" AND tm."Date" = fhc."Date"
+    )"""
+else:
+    csv_source = f"read_csv('{csv_path}', auto_detect=true)"
+
+# Get schemas
+parquet_cols = con.execute(f"SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_parquet('{parquet_path}'))").fetchall()
+csv_cols = con.execute(f"SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM {csv_source})").fetchall()
+csv_names = {c for c, _ in csv_cols}
+parquet_types = {c: t for c, t in parquet_cols}
+
+# Build casted SELECT: cast mismatched types, add NULLs for missing cols
+csv_select_parts = []
+for c, t in csv_cols:
+    if c in parquet_types and parquet_types[c] != t:
+        csv_select_parts.append(f'CAST("{c}" AS {parquet_types[c]}) AS "{c}"')
+    else:
+        csv_select_parts.append(f'"{c}"')
+for c, t in parquet_cols:
+    if c not in csv_names:
+        csv_select_parts.append(f'NULL::{t} AS "{c}"')
+
+csv_select = ", ".join(csv_select_parts)
+parquet_col_order = ", ".join(f'"{c}"' for c, _ in parquet_cols)
+
+# Merge: UNION ALL existing + new → write new parquet
 con.execute(f"""
-    CREATE TEMP VIEW new_game AS
-    SELECT tm.*, {fhc_select}
-    FROM read_csv('<trackman_csv>', auto_detect=true) tm
-    LEFT JOIN read_csv('<fhc_csv>', auto_detect=true) fhc
-    ON tm."PitchNo" = fhc."PitchNo" AND tm."Date" = fhc."Date"
+    COPY (
+        SELECT {parquet_col_order} FROM read_parquet('{parquet_path}')
+        UNION ALL
+        SELECT {parquet_col_order} FROM (SELECT {csv_select} FROM {csv_source})
+    ) TO '{out_path}' (FORMAT PARQUET, COMPRESSION ZSTD)
 """)
 
-# Get parquet schema and build casted SELECT to handle type mismatches
-# (CSV auto-detect may infer BIGINT for IDs that are VARCHAR in parquet)
-# Then UNION ALL existing parquet + new game → write new parquet
-# See actual implementation for full cast logic
+# Verify row counts
+old = con.execute(f"SELECT COUNT(*) FROM read_parquet('{parquet_path}')").fetchone()[0]
+new = con.execute(f"SELECT COUNT(*) FROM read_parquet('{out_path}')").fetchone()[0]
+csv_n = con.execute(f"SELECT COUNT(*) FROM {csv_source}").fetchone()[0]
+print(f"Old: {old:,} + CSV: {csv_n:,} = New: {new:,}")
+assert new == old + csv_n, "Row count mismatch!"
 ```
 
-Type mismatches to expect: `PitcherId`, `BatterId`, `HomeTeamForeignID`, `AwayTeamForeignID`, `1B_Id`..`3B_Id` (BIGINT→VARCHAR), `PopTime`/`ExchangeTime`/`CatchPosition*` (DOUBLE→VARCHAR), `y0` (BIGINT→DOUBLE). Cast all CSV columns to match parquet types in the UNION ALL.
+**Common type mismatches:** `PitcherId`, `BatterId`, `HomeTeamForeignID`, `AwayTeamForeignID` (BIGINT→VARCHAR), `y0` (BIGINT→DOUBLE). The script handles these automatically.
 
-2. **Swap parquet files:**
+#### 2. Swap parquet files
 ```bash
 mv all_trackman_fixed.parquet all_trackman_fixed.parquet.bak
 mv all_trackman_fixed_new.parquet all_trackman_fixed.parquet
 ```
 
-3. **Rebuild DuckDB (must use --overwrite):**
+#### 3. Rebuild DuckDB (must use --overwrite)
 ```bash
 python3 precompute.py --overwrite
 ```
+This rebuilds `davidson.duckdb` and exports `.cache/davidson_data.feather`.
 
-4. **Upload to server and deploy:**
+#### 4. Upload to server and deploy
 ```bash
+# Upload all three files (parquet, duckdb, feather)
 scp -i ~/ahanjainndavidsonbaseball all_trackman_fixed.parquet root@165.227.182.92:~/davidson-baseball/
 scp -i ~/ahanjainndavidsonbaseball davidson.duckdb root@165.227.182.92:~/davidson-baseball/
 scp -i ~/ahanjainndavidsonbaseball .cache/davidson_data.feather root@165.227.182.92:~/davidson-baseball/.cache/
+# SSH key passphrase: davbas
+
+# Restart the container
 ssh -i ~/ahanjainndavidsonbaseball root@165.227.182.92 \
   "cd ~/davidson-baseball && docker compose down && docker compose up -d --build"
-# SSH key passphrase: davbas
 ```
 
-**If no FHC file is provided:** Skip the LEFT JOIN and just use the trackman CSV directly. The 30 positioning columns will be NULL.
+**Troubleshooting:** If Docker build fails with snapshot errors, SSH in and run `docker system prune -f` before rebuilding.
 
 ## Architecture
 

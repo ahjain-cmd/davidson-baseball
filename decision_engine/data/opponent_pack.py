@@ -240,7 +240,7 @@ def _compute_and_store_hole_scores(pack: Dict[str, Any], opp_pitches: pd.DataFra
                 hand_df = hitter_pitches[
                     hitter_pitches["PitcherThrows"].astype(str).str.strip() == hand_val
                 ]
-                if len(hand_df) >= 30:
+                if len(hand_df) >= 20:
                     splits.append((hand_label, hand_df))
 
         for pt_label, pitch_subset in splits:

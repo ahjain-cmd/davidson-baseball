@@ -262,6 +262,75 @@ FAIRFIELD_POSITION = {
     "Kell, Kevin": "RHP", "Alekson, Ben": "RHP", "Kelly, Nick": "RHP",
 }
 
+# ── Wofford 2026 Roster ────────
+WOFFORD_TEAM_NAME = "Wofford"
+WOFFORD_COMBINED_TEAM_ID = "WOFFORD_COMBINED_2026"
+WOFFORD_TM_TEAM_ID = 730176512
+
+WOFFORD_TRANSFERS = {
+    "Quarrie, Marc": "Muhlenberg",
+    "Manning, Lucas": "Holy Cross",
+    "Burroughs, Keeton": "Pittsburgh",
+    "Newman, Blayne": "USC Aiken",
+    "Bouknight, Cade": "USC Aiken",
+    "Childers, Corben": "Anderson University",
+    "Egger, Sheldon": "Edmonds",
+    "Feliz, Raul": "Indian River State",
+    "Herndon, Hunter": "Sewanee",
+    "Brini, Niko": "UConn",
+}
+
+WOFFORD_ROSTER_2026 = {
+    "Tribble, Logan", "Belk, Ethan", "Porter, Zach", "Layman, James",
+    "Campi, Harrison", "Mannelly, Andrew", "Quarrie, Marc", "Timblin, Ben",
+    "Hardin, Tanner", "Manning, Lucas", "Little, Branton", "Rivers, Davis",
+    "Weaver, Mason", "Burroughs, Keeton", "Collins, Cade", "Davis, Champ",
+    "Norris, Will", "Alston, Miller", "Laughlin, Austin", "Draper, Cole",
+    "Lewis, Hiram", "Smith, JT", "Egger, Sheldon", "Newman, Blayne",
+    "Bouknight, Cade", "Childers, Corben", "Estes, Wes", "Bouchard, Alec",
+    "Gold, Brady", "Fitzpatrick, PJ", "Snow, Brady", "Gerrick, Noah",
+    "Michaels, Kenny", "Myers, Alex", "Feliz, Raul", "Kirwan, Tommy",
+    "Herndon, Hunter", "Condon, Cullen", "James, Trey", "Brini, Niko",
+    "Euart, Jack", "Gray, John", "Clemente, Michael", "Compton, Mason",
+    "Howard, Will", "Rembish, Logan", "Vargo, Lucas",
+}
+
+WOFFORD_JERSEY = {
+    "Tribble, Logan": 1, "Belk, Ethan": 2, "Porter, Zach": 3,
+    "Layman, James": 4, "Campi, Harrison": 5, "Mannelly, Andrew": 6,
+    "Quarrie, Marc": 7, "Timblin, Ben": 8, "Hardin, Tanner": 9,
+    "Manning, Lucas": 10, "Little, Branton": 11, "Rivers, Davis": 12,
+    "Weaver, Mason": 13, "Burroughs, Keeton": 14, "Collins, Cade": 15,
+    "Davis, Champ": 16, "Norris, Will": 17, "Alston, Miller": 18,
+    "Laughlin, Austin": 19, "Draper, Cole": 20, "Lewis, Hiram": 21,
+    "Smith, JT": 22, "Egger, Sheldon": 23, "Newman, Blayne": 24,
+    "Bouknight, Cade": 26, "Childers, Corben": 27, "Estes, Wes": 28,
+    "Bouchard, Alec": 30, "Gold, Brady": 31, "Fitzpatrick, PJ": 34,
+    "Snow, Brady": 35, "Gerrick, Noah": 36, "Michaels, Kenny": 37,
+    "Myers, Alex": 38, "Feliz, Raul": 39, "Kirwan, Tommy": 41,
+    "Herndon, Hunter": 43, "Condon, Cullen": 44, "James, Trey": 45,
+    "Brini, Niko": 46, "Euart, Jack": 48, "Gray, John": 50,
+}
+
+WOFFORD_POSITION = {
+    "Tribble, Logan": "OF", "Belk, Ethan": "OF", "Porter, Zach": "C",
+    "Layman, James": "INF", "Campi, Harrison": "INF", "Mannelly, Andrew": "OF",
+    "Quarrie, Marc": "OF", "Timblin, Ben": "OF", "Hardin, Tanner": "INF",
+    "Manning, Lucas": "C", "Little, Branton": "RHP", "Rivers, Davis": "RHP",
+    "Weaver, Mason": "RHP", "Burroughs, Keeton": "INF", "Collins, Cade": "INF",
+    "Davis, Champ": "RHP", "Norris, Will": "OF", "Alston, Miller": "LHP",
+    "Laughlin, Austin": "RHP", "Draper, Cole": "RHP", "Lewis, Hiram": "RHP",
+    "Smith, JT": "C", "Egger, Sheldon": "LHP", "Newman, Blayne": "RHP",
+    "Bouknight, Cade": "RHP", "Childers, Corben": "RHP", "Estes, Wes": "RHP",
+    "Bouchard, Alec": "RHP", "Gold, Brady": "INF", "Fitzpatrick, PJ": "RHP",
+    "Snow, Brady": "RHP", "Gerrick, Noah": "OF", "Michaels, Kenny": "LHP",
+    "Myers, Alex": "INF", "Feliz, Raul": "C", "Kirwan, Tommy": "INF",
+    "Herndon, Hunter": "INF/OF", "Condon, Cullen": "RHP", "James, Trey": "LHP",
+    "Brini, Niko": "OF", "Euart, Jack": "INF", "Gray, John": "RHP",
+    "Clemente, Michael": "RHP", "Compton, Mason": "RHP", "Howard, Will": "RHP",
+    "Rembish, Logan": "RHP", "Vargo, Lucas": "RHP",
+}
+
 NAME_MAP = {
     "Laughlin, Theo": "Loughlin, Theo",
     "Laughlin , Theo": "Loughlin, Theo",

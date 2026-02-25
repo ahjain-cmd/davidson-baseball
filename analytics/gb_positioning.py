@@ -27,7 +27,7 @@ from decision_engine.core.shrinkage import shrink_value, confidence_tier
 from decision_engine.recommenders.defense_recommender import classify_shift
 
 # ML toggle — set to True to use XGBoost GB direction model for movement adjustment
-USE_ML_GB = False
+USE_ML_GB = True
 
 
 # ──────────────────────────────────────────────
@@ -1173,12 +1173,17 @@ def compute_pitcher_batter_positioning(
     # Air ball spray for outfield positioning
     air_spray = get_batter_air_spray(batter, batter_side, batter_season_filter)
 
+    # When ML covered all pitch types, the adjusted sprays already incorporate
+    # movement effects — skip OLS movement inside _compute_weighted_fielder_positions
+    ml_covered_all = (ml_spray_override is not None and
+                      all(pt in ml_spray_override.get("per_pitch", {}) for pt in adjusted_sprays))
+
     if adjusted_sprays:
         positions, movement_detail = _compute_weighted_fielder_positions(
             adjusted_sprays, pitch_mix, batter_side, conf, air_spray=air_spray,
             pop_baselines=pop_baselines, gb_pct=float(gb_pct_est),
-            pitcher_profile=pitcher_profile if not pitcher_not_found else None,
-            pop_movement=pop_movement if not pitcher_not_found else None,
+            pitcher_profile=None if ml_covered_all else (pitcher_profile if not pitcher_not_found else None),
+            pop_movement=None if ml_covered_all else (pop_movement if not pitcher_not_found else None),
         )
     else:
         positions = {}

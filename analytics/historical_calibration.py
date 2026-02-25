@@ -134,63 +134,22 @@ def _compute_outcome_probs(con: duckdb.DuckDBPyConnection, pq: str) -> Dict[str,
 # ── 1B. wOBA / Linear weights ────────────────────────────────────────────────
 
 def _compute_linear_weights(con: duckdb.DuckDBPyConnection, pq: str) -> Dict[str, float]:
-    """Compute NCAA-environment linear weights from actual run-scoring data.
+    """Return standard wOBA linear weights.
 
-    Uses the RunsScored column to compute average runs scored on each PA outcome type,
-    then normalizes to a wOBA scale where 0 = out.
+    Prior implementation attempted to derive weights from the Trackman
+    RunsScored column, but that column records literal runs scored on each
+    play — not run-expectancy change (RE24).  This produced severely
+    distorted weights (HR/1B ratio 6.0x vs correct ~2.3x) because a
+    single rarely drives in a run directly while a HR always scores at
+    least the batter.
+
+    Proper RE24-based weights require full base-out state tracking across
+    innings, which our Trackman data does not reliably support.  Instead
+    we use the standard Statcast/FanGraphs 2023 wOBA weights, which are
+    derived from MLB RE24 tables and whose *ratios* are stable across
+    seasons and closely match NCAA D1 run environments.
     """
-    rows = con.execute(f"""
-        WITH pa_terminal AS (
-            SELECT
-                GameID || '_' || CAST(Inning AS VARCHAR) || '_'
-                    || CAST(PAofInning AS VARCHAR) || '_' || Batter AS pa_id,
-                CASE
-                    WHEN KorBB = 'Strikeout' THEN 'Strikeout'
-                    WHEN KorBB = 'Walk' THEN 'Walk'
-                    WHEN PitchCall = 'HitByPitch' THEN 'HitByPitch'
-                    WHEN PitchCall = 'InPlay' AND PlayResult = 'Single' THEN 'Single'
-                    WHEN PitchCall = 'InPlay' AND PlayResult = 'Double' THEN 'Double'
-                    WHEN PitchCall = 'InPlay' AND PlayResult = 'Triple' THEN 'Triple'
-                    WHEN PitchCall = 'InPlay' AND PlayResult = 'HomeRun' THEN 'HomeRun'
-                    WHEN PitchCall = 'InPlay' AND PlayResult = 'Error' THEN 'Error'
-                    WHEN PitchCall = 'InPlay' AND PlayResult IN ('Out','FieldersChoice','Sacrifice') THEN 'Out'
-                    ELSE NULL
-                END AS outcome,
-                COALESCE(CAST(RunsScored AS DOUBLE), 0) AS runs
-            FROM read_parquet('{pq}')
-            WHERE PitchCall IS NOT NULL AND PitchCall != 'Undefined'
-              AND (PitchCall = 'InPlay' OR KorBB IN ('Strikeout','Walk') OR PitchCall = 'HitByPitch')
-        )
-        SELECT
-            outcome,
-            AVG(runs) AS avg_runs,
-            COUNT(*) AS n
-        FROM pa_terminal
-        WHERE outcome IS NOT NULL
-        GROUP BY outcome
-    """).fetchall()
-
-    runs_by_outcome = {}
-    for outcome, avg_runs, n in rows:
-        runs_by_outcome[outcome] = (float(avg_runs), int(n))
-
-    # Normalize: wOBA weight = avg_runs(outcome) - avg_runs(out)
-    out_runs = runs_by_outcome.get("Out", (0.0, 0))[0]
-    k_runs = runs_by_outcome.get("Strikeout", (0.0, 0))[0]
-    base_runs = (out_runs + k_runs) / 2.0 if out_runs or k_runs else 0.0
-
-    def _weight(key: str) -> float:
-        return round(max(0.0, runs_by_outcome.get(key, (base_runs, 0))[0] - base_runs), 4)
-
-    return {
-        "out_w": 0.0,
-        "bb_w": _weight("Walk"),
-        "hbp_w": _weight("HitByPitch"),
-        "single_w": _weight("Single"),
-        "double_w": _weight("Double"),
-        "triple_w": _weight("Triple"),
-        "hr_w": _weight("HomeRun"),
-    }
+    return fallback_linear_weights()
 
 
 # ── 1C. Steal success rates by pitch velocity class ─────────────────────────
@@ -503,15 +462,21 @@ def fallback_outcome_probs() -> Dict[str, Dict[str, float]]:
 
 
 def fallback_linear_weights() -> Dict[str, float]:
-    """Return the current hardcoded wOBA weights."""
+    """Standard wOBA linear weights (2023 Statcast / FanGraphs).
+
+    These are RE24-based run values per PA outcome, normalized so out=0.
+    The ratios are stable across MLB seasons and closely match NCAA D1.
+    Prior version used literal RunsScored which massively over-weighted HRs
+    (HR/1B ratio was 6.0x vs the correct ~2.3x).
+    """
     return {
-        "out_w": 0.00,
-        "bb_w": 0.32,
-        "hbp_w": 0.32,
-        "single_w": 0.47,
-        "double_w": 0.78,
-        "triple_w": 1.05,
-        "hr_w": 1.40,
+        "out_w": 0.000,
+        "bb_w": 0.696,
+        "hbp_w": 0.726,
+        "single_w": 0.883,
+        "double_w": 1.244,
+        "triple_w": 1.569,
+        "hr_w": 2.004,
     }
 
 

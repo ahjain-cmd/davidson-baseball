@@ -1241,7 +1241,9 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
                                          margin=dict(l=45, r=10, t=10, b=40),
                                          xaxis=dict(tickfont=dict(color="#000000"), title_font=dict(color="#000000")),
                                          yaxis=dict(tickfont=dict(color="#000000"), title_font=dict(color="#000000")),
-                                         coloraxis=dict(colorbar=dict(tickfont=dict(color="#000000"), title_font=dict(color="#000000"))))
+                                         coloraxis=dict(colorbar=dict(tickfont=dict(color="#000000"), title_font=dict(color="#000000"))),
+                                         hoverlabel=dict(bgcolor="white", font_color="#000000", font_size=13,
+                                                         font_family="Inter, Arial, sans-serif", bordercolor="#cccccc"))
                 st.plotly_chart(fig_matrix, use_container_width=True, key="pc_trans_mini")
 
     # ── Section E: Platoon Splits ──
@@ -1822,7 +1824,9 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
                 )
                 fig_matrix.update_layout(height=350, plot_bgcolor="white", paper_bgcolor="white",
                                         font=dict(size=11, color="#000000", family="Inter, Arial, sans-serif"),
-                                        margin=dict(l=80, r=10, t=30, b=60))
+                                        margin=dict(l=80, r=10, t=30, b=60),
+                                        hoverlabel=dict(bgcolor="white", font_color="#000000", font_size=13,
+                                                        font_family="Inter, Arial, sans-serif", bordercolor="#cccccc"))
                 st.plotly_chart(fig_matrix, use_container_width=True, key="plab_trans")
 
             with tcol2:
@@ -1839,7 +1843,9 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
                         )
                         fig_whiff.update_layout(height=350, plot_bgcolor="white", paper_bgcolor="white",
                                                font=dict(size=11, color="#000000", family="Inter, Arial, sans-serif"),
-                                               margin=dict(l=80, r=10, t=30, b=60))
+                                               margin=dict(l=80, r=10, t=30, b=60),
+                                               hoverlabel=dict(bgcolor="white", font_color="#000000", font_size=13,
+                                                               font_family="Inter, Arial, sans-serif", bordercolor="#cccccc"))
                         st.plotly_chart(fig_whiff, use_container_width=True, key="plab_whiff_hm")
 
     # Count-state pitch selection

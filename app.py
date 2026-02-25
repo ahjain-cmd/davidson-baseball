@@ -10,6 +10,14 @@ from viz.layout import GLOBAL_CSS
 
 st.set_page_config(page_title="Davidson Baseball Analytics", layout="wide")
 pio.templates.default = "plotly_white"
+# Force readable hover tooltips globally — white bg, dark text.
+# Without this, Streamlit dark-mode or browser preferences can cause
+# dark-on-dark tooltip text that is impossible to read.
+pio.templates[pio.templates.default].layout.hoverlabel = dict(
+    bgcolor="white",
+    font=dict(color="#000000", size=13, family="Inter, Arial, sans-serif"),
+    bordercolor="#cccccc",
+)
 
 st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
 

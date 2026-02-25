@@ -177,6 +177,13 @@ CHART_LAYOUT = dict(
     font=dict(size=11, color="#000000", family="Inter, Arial, sans-serif"),
     margin=dict(l=45, r=10, t=30, b=40),
     coloraxis=dict(colorbar=dict(tickfont=dict(color="#000000"), title_font=dict(color="#000000"))),
+    hoverlabel=dict(
+        bgcolor="white",
+        font_color="#000000",
+        font_size=13,
+        font_family="Inter, Arial, sans-serif",
+        bordercolor="#cccccc",
+    ),
 )
 
 
@@ -190,6 +197,13 @@ def force_dark_fonts(fig):
         font=dict(color="#000000"),
         xaxis=dict(tickfont=dict(color="#000000"), title_font=dict(color="#000000")),
         yaxis=dict(tickfont=dict(color="#000000"), title_font=dict(color="#000000")),
+        hoverlabel=dict(
+            bgcolor="white",
+            font_color="#000000",
+            font_size=13,
+            font_family="Inter, Arial, sans-serif",
+            bordercolor="#cccccc",
+        ),
     )
     if hasattr(fig, 'layout') and hasattr(fig.layout, 'coloraxis'):
         fig.update_layout(

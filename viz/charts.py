@@ -127,6 +127,8 @@ def make_spray_chart(in_play_df, height=360):
         font=dict(color="#000000", family="Inter, Arial, sans-serif"),
         legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="center", x=0.5,
                     font=dict(size=10, color="#000000"), bgcolor="rgba(0,0,0,0)"),
+        hoverlabel=dict(bgcolor="white", font_color="#000000", font_size=13,
+                        font_family="Inter, Arial, sans-serif", bordercolor="#cccccc"),
     )
     return fig
 
@@ -259,6 +261,8 @@ def make_movement_profile(pdf, height=520):
         margin=dict(l=10, r=10, t=30, b=10),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5,
                     font=dict(size=11, color="#000000")),
+        hoverlabel=dict(bgcolor="white", font_color="#000000", font_size=13,
+                        font_family="Inter, Arial, sans-serif", bordercolor="#cccccc"),
     )
     return fig
 
@@ -309,6 +313,8 @@ def make_pitch_location_heatmap(pitch_data, title, color, height=380):
         height=height, margin=dict(l=5, r=5, t=5, b=5),
         plot_bgcolor="white", paper_bgcolor="white",
         font=dict(color="#000000", family="Inter, Arial, sans-serif"),
+        hoverlabel=dict(bgcolor="white", font_color="#000000", font_size=13,
+                        font_family="Inter, Arial, sans-serif", bordercolor="#cccccc"),
     )
     if title:
         fig.add_annotation(

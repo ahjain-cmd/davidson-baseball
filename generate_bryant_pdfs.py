@@ -39,7 +39,8 @@ from config import (
     POSITION,
     JERSEY,
 )
-from analytics.zone_vulnerability import compute_hole_scores_3x3
+from analytics.zone_vulnerability import compute_hole_scores_3x3, compute_grouped_pitch_type_holes, convert_holes_to_percentiles, convert_hole_detail_to_percentiles
+from data.stats import compute_swing_path_metrics
 from _pages.scouting import (
     _get_our_pitcher_arsenal,
     _get_opp_hitter_profile,
@@ -71,6 +72,7 @@ _SLG_CMAP = LinearSegmentedColormap.from_list("slg", ["#3498db", "#ffffff", "#e7
 _HEAT_CMAP = LinearSegmentedColormap.from_list("heat", ["#ffffff", "#3498db", "#e74c3c"])
 _SWING_CMAP = LinearSegmentedColormap.from_list("swing", ["#3498db", "#ffffff", "#e74c3c"])
 _EV_CMAP = LinearSegmentedColormap.from_list("ev", ["#3498db", "#e74c3c"])
+_COUNT_CMAP = LinearSegmentedColormap.from_list("count_swing", ["#3498db", "#ffffff", "#e74c3c"])
 
 # Pure-pitcher positions to skip
 _PITCHER_ONLY = {"RHP", "LHP"}
@@ -380,7 +382,7 @@ def _draw_hole_heatmap(ax, holes, bats, title):
     for (xb, yb), score in holes.items():
         grid[2 - yb, xb] = score  # flip y so top row = high zone
 
-    ax.imshow(grid, cmap=_HOLE_CMAP, vmin=35, vmax=80, aspect="auto")
+    ax.imshow(grid, cmap=_HOLE_CMAP, vmin=20, vmax=80, aspect="auto")
     # Draw strike zone border
     ax.add_patch(plt.Rectangle((-0.5, -0.5), 3, 3, fill=False, edgecolor="black", lw=2))
 
@@ -389,7 +391,7 @@ def _draw_hole_heatmap(ax, holes, bats, title):
             v = grid[yb, xb]
             if not np.isnan(v):
                 ax.text(xb, yb, f"{v:.0f}", ha="center", va="center", fontsize=8,
-                        fontweight="bold", color="black" if v < 68 else "white")
+                        fontweight="bold", color="black")
 
     # Labels
     b = _fmt_bats(bats)
@@ -402,6 +404,11 @@ def _draw_hole_heatmap(ax, holes, bats, title):
     ax.set_ylabel("Low → High", fontsize=6, labelpad=2)
     ax.set_xticks([])
     ax.set_yticks([])
+
+
+def _extract_pt_scores(pt_detail):
+    """Convert {(xb,yb): {"score": ...}} to {(xb,yb): float}."""
+    return {k: v["score"] for k, v in pt_detail.items() if "score" in v}
 
 
 def _style_zone_grid(ax, bats, cmap, vmin, vmax, cb_label=""):
@@ -583,6 +590,248 @@ def _hand_k_rate(pitches_df, hand_val):
     return ks / len(ab) * 100
 
 
+def _compute_count_approach(pitches_df):
+    """Compute swing% for each ball-strike count from pitch-level data.
+
+    Returns dict: {(balls, strikes): {"swing_pct": float, "n": int, "chase_pct": float}}
+    or {} if insufficient data.
+    """
+    if pitches_df.empty or "Balls" not in pitches_df.columns or "Strikes" not in pitches_df.columns:
+        return {}
+    df = pitches_df.copy()
+    df["_balls"] = pd.to_numeric(df["Balls"], errors="coerce")
+    df["_strikes"] = pd.to_numeric(df["Strikes"], errors="coerce")
+    df = df.dropna(subset=["_balls", "_strikes"])
+    df["_balls"] = df["_balls"].astype(int)
+    df["_strikes"] = df["_strikes"].astype(int)
+
+    result = {}
+    for b in range(4):
+        for s in range(3):
+            cell = df[(df["_balls"] == b) & (df["_strikes"] == s)]
+            if len(cell) < 5:
+                continue
+            swings = cell[cell["PitchCall"].isin(SWING_CALLS)]
+            swing_pct = len(swings) / len(cell) * 100
+            entry = {"swing_pct": swing_pct, "n": len(cell)}
+            # Chase% for out-of-zone pitches
+            loc = cell.dropna(subset=["PlateLocSide", "PlateLocHeight"])
+            if len(loc) >= 5:
+                oz = loc[(loc["PlateLocSide"].abs() > ZONE_SIDE) |
+                         (~loc["PlateLocHeight"].between(ZONE_HEIGHT_BOT, ZONE_HEIGHT_TOP))]
+                if len(oz) >= 3:
+                    oz_swings = oz[oz["PitchCall"].isin(SWING_CALLS)]
+                    entry["chase_pct"] = len(oz_swings) / len(oz) * 100
+            result[(b, s)] = entry
+    return result
+
+
+def _identify_extreme_counts(count_approach):
+    """Return dict with 'most_aggressive' and 'most_passive' lists of ((b,s), swing%) tuples."""
+    if not count_approach:
+        return {}
+    items = [(k, v["swing_pct"]) for k, v in count_approach.items() if v["n"] >= 5]
+    if len(items) < 3:
+        return {}
+    items_sorted = sorted(items, key=lambda x: x[1], reverse=True)
+    return {
+        "most_aggressive": items_sorted[:2],
+        "most_passive": items_sorted[-2:],
+    }
+
+
+def _draw_count_grid(ax, count_data, title="Swing% by Count"):
+    """Draw 4-row x 3-col count grid colored by swing%.
+
+    Rows: 0-3 balls (top to bottom: 3,2,1,0)
+    Cols: 0-2 strikes (left to right)
+    """
+    grid = np.full((4, 3), np.nan)
+    n_grid = np.full((4, 3), 0)
+    for (b, s), info in count_data.items():
+        row = 3 - b  # 3 balls at top
+        grid[row, s] = info["swing_pct"]
+        n_grid[row, s] = info["n"]
+
+    ax.set_title(title, fontsize=8, fontweight="bold", pad=4)
+
+    if np.all(np.isnan(grid)):
+        ax.text(0.5, 0.5, "Insufficient data", ha="center", va="center",
+                fontsize=9, color="#999", transform=ax.transAxes)
+        ax.axis("off")
+        return
+
+    masked = np.ma.masked_invalid(grid)
+    ax.imshow(masked, cmap=_COUNT_CMAP, vmin=15, vmax=65, aspect="auto",
+              origin="upper")
+
+    # Hitter count highlight: (3,0), (3,1), (2,0), (2,1) → rows 0,0,1,1 cols 0,1
+    hitter_cells = {(0, 0), (0, 1), (1, 0), (1, 1)}
+
+    for r in range(4):
+        for c in range(3):
+            if np.isnan(grid[r, c]):
+                ax.text(c, r, "—", ha="center", va="center", fontsize=7, color="#999")
+                continue
+            val = grid[r, c]
+            n = n_grid[r, c]
+            # Text color: dark for light bg, white for dark bg
+            txt_color = "#ffffff" if val > 52 or val < 22 else "#1a1a2e"
+            ax.text(c, r - 0.12, f"{val:.0f}%", ha="center", va="center",
+                    fontsize=7.5, fontweight="bold", color=txt_color)
+            ax.text(c, r + 0.22, f"n={n}", ha="center", va="center",
+                    fontsize=5.5, color=txt_color, alpha=0.8)
+            # Bold border for hitter counts
+            if (r, c) in hitter_cells:
+                rect = plt.Rectangle((c - 0.5, r - 0.5), 1, 1, linewidth=1.8,
+                                     edgecolor="#1a1a2e", facecolor="none")
+                ax.add_patch(rect)
+
+    ax.set_xticks([0, 1, 2])
+    ax.set_xticklabels(["0", "1", "2"], fontsize=7)
+    ax.set_xlabel("Strikes", fontsize=7)
+    ax.set_yticks([0, 1, 2, 3])
+    ax.set_yticklabels(["3", "2", "1", "0"], fontsize=7)
+    ax.set_ylabel("Balls", fontsize=7)
+    ax.tick_params(length=0)
+
+
+def _draw_count_situation_bars(ax, count_splits, pitches_df):
+    """Horizontal bar chart: key count-situation metrics."""
+    ax.set_title("Count Situations", fontsize=8, fontweight="bold", pad=4)
+
+    rows = []  # (label, value, color)
+
+    # 1. First Pitch Swing% vs 2-Strike Swing%
+    fp_swing = None
+    ts_swing = None
+    if count_splits.get("first_pitch") is not None and not count_splits["first_pitch"].empty:
+        v = _safe_num(count_splits["first_pitch"], "Swing%", np.nan)
+        if pd.notna(v):
+            fp_swing = v
+    if count_splits.get("two_strike") is not None and not count_splits["two_strike"].empty:
+        v = _safe_num(count_splits["two_strike"], "Swing%", np.nan)
+        if pd.notna(v):
+            ts_swing = v
+
+    # Fallback to pitch-level
+    if fp_swing is None and not pitches_df.empty:
+        balls = pd.to_numeric(pitches_df.get("Balls"), errors="coerce")
+        strikes = pd.to_numeric(pitches_df.get("Strikes"), errors="coerce")
+        fp = pitches_df[(balls == 0) & (strikes == 0)]
+        if len(fp) >= 5:
+            fp_swing = len(fp[fp["PitchCall"].isin(SWING_CALLS)]) / len(fp) * 100
+    if ts_swing is None and not pitches_df.empty:
+        balls = pd.to_numeric(pitches_df.get("Balls"), errors="coerce")
+        strikes = pd.to_numeric(pitches_df.get("Strikes"), errors="coerce")
+        ts = pitches_df[strikes == 2]
+        if len(ts) >= 5:
+            ts_swing = len(ts[ts["PitchCall"].isin(SWING_CALLS)]) / len(ts) * 100
+
+    if fp_swing is not None:
+        rows.append(("1st Pitch Swing%", fp_swing, "#e74c3c"))
+    if ts_swing is not None:
+        rows.append(("2-Strike Swing%", ts_swing, "#c0392b"))
+
+    # 2. Ahead wOBA vs Behind wOBA
+    ahead_woba = None
+    behind_woba = None
+    if count_splits.get("ahead") is not None and not count_splits["ahead"].empty:
+        v = _safe_num(count_splits["ahead"], "WOBA", np.nan)
+        if pd.notna(v):
+            ahead_woba = v
+    if count_splits.get("behind") is not None and not count_splits["behind"].empty:
+        v = _safe_num(count_splits["behind"], "WOBA", np.nan)
+        if pd.notna(v):
+            behind_woba = v
+
+    if ahead_woba is not None:
+        rows.append((f"Ahead wOBA", ahead_woba * 1000, "#2980b9"))
+    if behind_woba is not None:
+        rows.append((f"Behind wOBA", behind_woba * 1000, "#3498db"))
+
+    # 3. Chase% overall vs Chase% with 2 strikes
+    chase_all = None
+    chase_2k = None
+    if count_splits.get("two_strike") is not None and not count_splits["two_strike"].empty:
+        v = _safe_num(count_splits["two_strike"], "Chase%", np.nan)
+        if pd.notna(v):
+            chase_2k = v
+
+    # Fallback chase from pitch-level
+    if not pitches_df.empty:
+        loc = pitches_df.dropna(subset=["PlateLocSide", "PlateLocHeight"])
+        if len(loc) >= 10:
+            oz = loc[(loc["PlateLocSide"].abs() > ZONE_SIDE) |
+                     (~loc["PlateLocHeight"].between(ZONE_HEIGHT_BOT, ZONE_HEIGHT_TOP))]
+            if len(oz) >= 5:
+                chase_all = len(oz[oz["PitchCall"].isin(SWING_CALLS)]) / len(oz) * 100
+            # 2-strike chase fallback
+            if chase_2k is None:
+                strikes = pd.to_numeric(loc.get("Strikes"), errors="coerce")
+                oz_2k = oz[strikes.reindex(oz.index) == 2] if len(oz) > 0 else pd.DataFrame()
+                if len(oz_2k) >= 5:
+                    chase_2k = len(oz_2k[oz_2k["PitchCall"].isin(SWING_CALLS)]) / len(oz_2k) * 100
+
+    if chase_all is not None:
+        rows.append(("Chase% (All)", chase_all, "#27ae60"))
+    if chase_2k is not None:
+        rows.append(("Chase% (2K)", chase_2k, "#2ecc71"))
+
+    if not rows:
+        ax.text(0.5, 0.5, "Insufficient data", ha="center", va="center",
+                fontsize=9, color="#999", transform=ax.transAxes)
+        ax.axis("off")
+        return
+
+    labels = [r[0] for r in rows]
+    values = [r[1] for r in rows]
+    colors = [r[2] for r in rows]
+
+    y_pos = np.arange(len(rows))
+    ax.barh(y_pos, values, color=colors, height=0.6, alpha=0.85)
+
+    # Value labels
+    max_val = max(values) if values else 1
+    for i, (lbl, val, _) in enumerate(rows):
+        # wOBA values are scaled (x1000), display as .XXX
+        if "wOBA" in lbl:
+            ax.text(val + max_val * 0.02, i, f".{int(val):03d}", va="center",
+                    fontsize=6.5, fontweight="bold")
+        else:
+            ax.text(val + max_val * 0.02, i, f"{val:.0f}%", va="center",
+                    fontsize=6.5, fontweight="bold")
+
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(labels, fontsize=6.5)
+    ax.invert_yaxis()
+    ax.set_xlim(0, max_val * 1.2)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.tick_params(axis="x", labelsize=6)
+    ax.set_xlabel("")
+
+
+def _first_pitch_stats(pitches_df):
+    """Compute 1st-pitch swing tendencies. Returns dict with overall, vs_rhp, vs_lhp rates."""
+    if pitches_df.empty or "Balls" not in pitches_df.columns or "Strikes" not in pitches_df.columns:
+        return {}
+    balls = pd.to_numeric(pitches_df["Balls"], errors="coerce")
+    strikes = pd.to_numeric(pitches_df["Strikes"], errors="coerce")
+    fp = pitches_df[(balls == 0) & (strikes == 0)]
+    if len(fp) < 5:
+        return {}
+    swings = fp[fp["PitchCall"].isin(SWING_CALLS)]
+    result = {"rate": len(swings) / len(fp) * 100, "n": len(fp)}
+    if "PitcherThrows" in fp.columns:
+        for hand, label in [("Right", "vs_rhp"), ("Left", "vs_lhp")]:
+            sub = fp[fp["PitcherThrows"].isin([hand, hand[0]])]
+            if len(sub) >= 3:
+                sw = sub[sub["PitchCall"].isin(SWING_CALLS)]
+                result[label] = len(sw) / len(sub) * 100
+    return result
+
+
 def _top_hole(holes, bats):
     """Return (zone_desc, score) for the highest hole score, or (None, None)."""
     if not holes:
@@ -592,7 +841,8 @@ def _top_hole(holes, bats):
 
 
 def _generate_hitter_summary(name, rate_row, cnt_row, ht_row, hl_row, pr_row,
-                              pitches_df, holes_all, holes_rhp, holes_lhp):
+                              pitches_df, holes_all, holes_rhp, holes_lhp,
+                              count_approach=None, count_splits=None):
     """Rule-based natural language scouting summary (4-6 sentences).
 
     Incorporates platoon splits, zone vulnerability by pitcher hand,
@@ -707,17 +957,54 @@ def _generate_hitter_summary(name, rate_row, cnt_row, ht_row, hl_row, pr_row,
     if platoon_parts:
         sentences.append(". ".join(platoon_parts) + ".")
 
+    # ── S2.5: Count-based approach ──
+    count_parts = []
+    if count_approach:
+        extreme = _identify_extreme_counts(count_approach)
+        if extreme:
+            most_agg = extreme.get("most_aggressive")
+            most_pas = extreme.get("most_passive")
+            if most_agg:
+                c = most_agg[0]
+                count_parts.append(f"most aggressive on {c[0][0]}-{c[0][1]} ({c[1]:.0f}% swing)")
+            if most_pas:
+                c = most_pas[0]
+                count_parts.append(f"most passive on {c[0][0]}-{c[0][1]} ({c[1]:.0f}% swing)")
+
+    if count_splits:
+        fp_cs = count_splits.get("first_pitch")
+        if fp_cs is not None and not fp_cs.empty:
+            fp_swing_val = _safe_num(fp_cs, "Swing%", np.nan)
+            if pd.notna(fp_swing_val):
+                if fp_swing_val >= 45:
+                    count_parts.append(f"aggressive first-pitch swinger ({fp_swing_val:.0f}%)")
+                elif fp_swing_val <= 20:
+                    count_parts.append(f"very passive on first pitches ({fp_swing_val:.0f}%)")
+
+        ahead_cs = count_splits.get("ahead")
+        behind_cs = count_splits.get("behind")
+        ahead_woba = _safe_num(ahead_cs, "WOBA", np.nan) if ahead_cs is not None and not ahead_cs.empty else np.nan
+        behind_woba = _safe_num(behind_cs, "WOBA", np.nan) if behind_cs is not None and not behind_cs.empty else np.nan
+        if pd.notna(ahead_woba) and pd.notna(behind_woba):
+            if ahead_woba > 0.380:
+                count_parts.append(f"dangerous when ahead (.{int(ahead_woba*1000):03d} wOBA)")
+            if behind_woba < 0.250:
+                count_parts.append("struggles when behind in count")
+
+    if count_parts:
+        sentences.append(" | ".join(count_parts).capitalize() + ".")
+
     # ── S3: Zone vulnerability by hand ──
     vuln_parts = []
     rhp_desc, rhp_score = _top_hole(holes_rhp, bats)
     lhp_desc, lhp_score = _top_hole(holes_lhp, bats)
     all_desc, all_score = _top_hole(holes_all, bats)
 
-    if rhp_desc and rhp_score and rhp_score > 45:
+    if rhp_desc and rhp_score and rhp_score > 60:
         vuln_parts.append(f"vs RHP: biggest hole is {rhp_desc} ({rhp_score:.0f})")
-    if lhp_desc and lhp_score and lhp_score > 45:
+    if lhp_desc and lhp_score and lhp_score > 60:
         vuln_parts.append(f"vs LHP: biggest hole is {lhp_desc} ({lhp_score:.0f})")
-    if not vuln_parts and all_desc and all_score and all_score > 45:
+    if not vuln_parts and all_desc and all_score and all_score > 60:
         vuln_parts.append(f"primary hole is {all_desc} ({all_score:.0f})")
 
     approach_bits = []
@@ -734,7 +1021,7 @@ def _generate_hitter_summary(name, rate_row, cnt_row, ht_row, hl_row, pr_row,
 
     # ── S4: Gameplan vs RHP ──
     gp_r = []
-    if rhp_desc and rhp_score and rhp_score > 50:
+    if rhp_desc and rhp_score and rhp_score > 65:
         loc = rhp_desc
         if "away" in loc and "down" in loc:
             gp_r.append("attack down-and-away with breaking balls")
@@ -756,12 +1043,33 @@ def _generate_hitter_summary(name, rate_row, cnt_row, ht_row, hl_row, pr_row,
         gp_r.append("pitch away to neutralize pull power")
     if pd.notna(gb) and gb > 48:
         gp_r.append("stay elevated to avoid ground-ball damage")
+    # Count-based tactical advice
+    if count_approach:
+        extreme = _identify_extreme_counts(count_approach)
+        if extreme:
+            agg = extreme.get("most_aggressive", [])
+            if agg and agg[0][1] >= 45 and agg[0][0] == (0, 0):
+                gp_r.append("be ready to make him chase on 0-0")
+            pas = extreme.get("most_passive", [])
+            if pas and pas[0][1] <= 22 and pas[0][0] == (0, 0):
+                gp_r.append("can steal a first-pitch strike")
+    if count_splits:
+        ahead_cs = count_splits.get("ahead")
+        if ahead_cs is not None and not ahead_cs.empty:
+            a_woba = _safe_num(ahead_cs, "WOBA", np.nan)
+            if pd.notna(a_woba) and a_woba > 0.380:
+                gp_r.append("avoid falling behind — dangerous on hitter's counts")
+        ts_cs = count_splits.get("two_strike")
+        if ts_cs is not None and not ts_cs.empty:
+            ts_chase = _safe_num(ts_cs, "Chase%", np.nan)
+            if pd.notna(ts_chase) and ts_chase > 35:
+                gp_r.append("expand off the plate with 2 strikes")
     if gp_r:
         sentences.append("vs RHP: " + ", ".join(gp_r) + ".")
 
     # ── S5: Gameplan vs LHP ──
     gp_l = []
-    if lhp_desc and lhp_score and lhp_score > 50:
+    if lhp_desc and lhp_score and lhp_score > 65:
         loc = lhp_desc
         if "away" in loc and "down" in loc:
             gp_l.append("attack down-and-away with offspeed")
@@ -794,7 +1102,7 @@ def _generate_hitter_summary(name, rate_row, cnt_row, ht_row, hl_row, pr_row,
 
 # ── Main page renderer ──────────────────────────────────────────────────────
 
-def _render_hitter_page(hitter, pack, pitches):
+def _render_hitter_page(hitter, pack, pitches, count_splits_all=None):
     """Build one-page matplotlib figure for a hitter. Returns Figure or None."""
     h_rate = _tm_player(_tm_team(pack["hitting"]["rate"], _TEAM), hitter)
     h_cnt = _tm_player(_tm_team(pack["hitting"].get("counting", pd.DataFrame()), _TEAM), hitter)
@@ -814,27 +1122,64 @@ def _render_hitter_page(hitter, pack, pitches):
     if not pitches.empty and "Batter" in pitches.columns:
         hitter_pitches = pitches[pitches["Batter"] == hitter].copy()
 
+    # Swing path metrics for hole-score multipliers
+    sp = compute_swing_path_metrics(hitter_pitches) if not hitter_pitches.empty else None
+
     # Hole scores
-    holes_all = compute_hole_scores_3x3(hitter_pitches, bats) if not hitter_pitches.empty else {}
+    holes_all = compute_hole_scores_3x3(hitter_pitches, bats, sp=sp) if not hitter_pitches.empty else {}
     holes_rhp = {}
     holes_lhp = {}
+    holes_rhp_grouped = {}
+    holes_lhp_grouped = {}
+    n_lhp = 0
     if not hitter_pitches.empty and "PitcherThrows" in hitter_pitches.columns:
         rhp_df = hitter_pitches[hitter_pitches["PitcherThrows"].isin(["Right", "R"])]
         lhp_df = hitter_pitches[hitter_pitches["PitcherThrows"].isin(["Left", "L"])]
-        if len(rhp_df) >= 30:
-            holes_rhp = compute_hole_scores_3x3(rhp_df, bats)
-        if len(lhp_df) >= 30:
-            holes_lhp = compute_hole_scores_3x3(lhp_df, bats)
+        n_lhp = len(lhp_df)
+        if len(rhp_df) >= 20:
+            holes_rhp = compute_hole_scores_3x3(rhp_df, bats, sp=sp)
+            holes_rhp_grouped = compute_grouped_pitch_type_holes(rhp_df, bats, sp=sp, min_zone_n_pt=5)
+        if len(lhp_df) >= 20:
+            holes_lhp = compute_hole_scores_3x3(lhp_df, bats, sp=sp)
+            holes_lhp_grouped = compute_grouped_pitch_type_holes(lhp_df, bats, sp=sp, min_zone_n_pt=5)
+
+    # Zone-relative percentiles for display
+    holes_all_pct = convert_holes_to_percentiles(holes_all, bats)
+    holes_rhp_pct = convert_holes_to_percentiles(holes_rhp, bats)
+    holes_lhp_pct = convert_holes_to_percentiles(holes_lhp, bats)
+    holes_rhp_grouped_pct = {}
+    for grp_name, grp_data in holes_rhp_grouped.items():
+        holes_rhp_grouped_pct[grp_name] = convert_hole_detail_to_percentiles(grp_data, bats, grp_name)
+    holes_lhp_grouped_pct = {}
+    for grp_name, grp_data in holes_lhp_grouped.items():
+        holes_lhp_grouped_pct[grp_name] = convert_hole_detail_to_percentiles(grp_data, bats, grp_name)
+
+    # Count approach
+    count_approach = _compute_count_approach(hitter_pitches)
+
+    # Per-hitter count splits from TrueMedia
+    hitter_count_splits = {}
+    if count_splits_all:
+        for situation, df in count_splits_all.items():
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                player_row = _tm_player(df, hitter)
+                if not player_row.empty:
+                    hitter_count_splits[situation] = player_row
 
     # AI Summary
     summary = _generate_hitter_summary(hitter, h_rate, h_cnt, h_ht, h_hl, h_pr,
-                                        hitter_pitches, holes_all, holes_rhp, holes_lhp)
+                                        hitter_pitches, holes_all_pct, holes_rhp_pct, holes_lhp_pct,
+                                        count_approach=count_approach,
+                                        count_splits=hitter_count_splits)
+
+    # 1st pitch swing stats
+    fp_stats = _first_pitch_stats(hitter_pitches)
 
     # ── Figure layout ────────────────────────────────────────────────────
     fig = plt.figure(figsize=(8.5, 11))
     gs = gridspec.GridSpec(
         7, 1, figure=fig,
-        height_ratios=[0.4, 0.75, 1.7, 1.6, 1.6, 1.6, 1.6],
+        height_ratios=[0.4, 0.85, 2.0, 1.9, 1.9, 1.9, 0.25],
         hspace=0.22, top=0.97, bottom=0.02, left=0.04, right=0.96,
     )
 
@@ -853,54 +1198,113 @@ def _render_hitter_page(hitter, pack, pitches):
     ax_spray = fig.add_subplot(gs_row2[0, 1])
     _draw_spray_chart(ax_spray, h_hl)
 
-    # Row 3: Hole Score vs RHP + vs LHP
-    gs_row3 = gs[3].subgridspec(1, 2, wspace=0.4)
-    ax_hole_r = fig.add_subplot(gs_row3[0, 0])
-    if holes_rhp:
-        _draw_hole_heatmap(ax_hole_r, holes_rhp, bats, "Hole Score vs RHP")
-    elif holes_all:
-        _draw_hole_heatmap(ax_hole_r, holes_all, bats, "Hole Score (All)")
-    else:
-        ax_hole_r.set_title("Hole Score vs RHP", fontsize=8, fontweight="bold")
-        ax_hole_r.text(0.5, 0.5, "Insufficient data", ha="center", va="center",
-                       fontsize=9, color="#999", transform=ax_hole_r.transAxes)
-        ax_hole_r.axis("off")
+    # Row 3: FB vs RHP | Brk vs RHP | CH vs RHP | FB vs LHP | Brk vs LHP (5-column)
+    gs_row3 = gs[3].subgridspec(1, 5, wspace=0.30)
 
-    ax_hole_l = fig.add_subplot(gs_row3[0, 1])
-    if holes_lhp:
-        _draw_hole_heatmap(ax_hole_l, holes_lhp, bats, "Hole Score vs LHP")
+    _GROUP_LABELS = ["Fastball", "Breaking Ball", "Changeup"]
+    _GROUP_SHORT = {"Fastball": "FB", "Breaking Ball": "Brk", "Changeup": "CH"}
+
+    # Cols 0-2: Grouped pitch-type hole heatmaps vs RHP
+    for col_idx, grp_name in enumerate(_GROUP_LABELS):
+        ax_grp = fig.add_subplot(gs_row3[0, col_idx])
+        grp_scores = holes_rhp_grouped_pct.get(grp_name)
+        if grp_scores:
+            _draw_hole_heatmap(ax_grp, grp_scores, bats,
+                               f"Hole: {_GROUP_SHORT[grp_name]} vs RHP")
+        else:
+            ax_grp.set_title(f"Hole: {_GROUP_SHORT[grp_name]} vs RHP",
+                             fontsize=8, fontweight="bold")
+            grp_data = holes_rhp_grouped.get(grp_name)
+            ax_grp.text(0.5, 0.5, "Insufficient data" if grp_data else "n/a",
+                        ha="center", va="center", fontsize=9, color="#999",
+                        transform=ax_grp.transAxes)
+            ax_grp.axis("off")
+
+    # Col 3: FB vs LHP
+    ax_fb_lhp = fig.add_subplot(gs_row3[0, 3])
+    fb_lhp_scores = holes_lhp_grouped_pct.get("Fastball")
+    if fb_lhp_scores:
+        _draw_hole_heatmap(ax_fb_lhp, fb_lhp_scores, bats, "Hole: FB vs LHP")
     else:
-        ax_hole_l.set_title("Hole Score vs LHP", fontsize=8, fontweight="bold")
-        ax_hole_l.text(0.5, 0.5, "n < 30 vs LHP" if not holes_lhp else "Insufficient data",
+        ax_fb_lhp.set_title("Hole: FB vs LHP", fontsize=8, fontweight="bold")
+        ax_fb_lhp.text(0.5, 0.5, "n < 20 vs LHP" if n_lhp < 20 else "Insufficient data",
                        ha="center", va="center", fontsize=9, color="#999",
-                       transform=ax_hole_l.transAxes)
-        ax_hole_l.axis("off")
+                       transform=ax_fb_lhp.transAxes)
+        ax_fb_lhp.axis("off")
+
+    # Col 4: Brk vs LHP
+    ax_brk_lhp = fig.add_subplot(gs_row3[0, 4])
+    brk_lhp_scores = holes_lhp_grouped_pct.get("Breaking Ball")
+    if brk_lhp_scores:
+        _draw_hole_heatmap(ax_brk_lhp, brk_lhp_scores, bats, "Hole: Brk vs LHP")
+    else:
+        ax_brk_lhp.set_title("Hole: Brk vs LHP", fontsize=8, fontweight="bold")
+        ax_brk_lhp.text(0.5, 0.5, "n < 20 vs LHP" if n_lhp < 20 else "Insufficient data",
+                       ha="center", va="center", fontsize=9, color="#999",
+                       transform=ax_brk_lhp.transAxes)
+        ax_brk_lhp.axis("off")
 
     # Row 4: SLG by pitch type (top 4 overall)
     gs_row4 = gs[4].subgridspec(1, 4, wspace=0.55)
     _draw_slg_by_pitch_type_row(fig, gs_row4, hitter_pitches, "SLG by Pitch Type", bats=bats)
 
-    # Row 5: SLG by pitch type per hand (top 3 vs RHP, spacer, top 3 vs LHP)
-    gs_row5 = gs[5].subgridspec(1, 7, wspace=0.3,
-                                 width_ratios=[1, 1, 1, 0.15, 1, 1, 1])
-    _draw_slg_hand_splits(fig, gs_row5, hitter_pitches, bats=bats)
+    # Row 5: Count Approach + Zone Summary
+    gs_row5 = gs[5].subgridspec(1, 4, wspace=0.45, width_ratios=[1.2, 1, 1, 1.2])
 
-    # Row 6: Zone Summary (Whiff Density, Swing%, 2-Strike Whiff%)
-    gs_row6 = gs[6].subgridspec(1, 3, wspace=0.55)
-    ax_whiff = fig.add_subplot(gs_row6[0, 0])
-    _draw_zone_metric(ax_whiff, hitter_pitches, _whiff_count,
-                      "Whiff Density", _SWING_CMAP, 0, 15, lambda v: f"{int(v)}",
-                      bats=bats, cb_label="Whiff Cnt")
+    # Col 0: Count grid
+    ax_cnt_grid = fig.add_subplot(gs_row5[0, 0])
+    _draw_count_grid(ax_cnt_grid, count_approach)
 
-    ax_swing = fig.add_subplot(gs_row6[0, 1])
+    # Col 1: Swing% by Zone
+    ax_swing = fig.add_subplot(gs_row5[0, 1])
     _draw_zone_metric(ax_swing, hitter_pitches, _swing_pct,
                       "Swing% by Zone", _SWING_CMAP, 0, 100, lambda v: f"{v:.0f}%",
                       bats=bats, cb_label="Swing%")
 
-    ax_2k = fig.add_subplot(gs_row6[0, 2])
+    # Col 2: 2-Strike Whiff% zone
+    ax_2k = fig.add_subplot(gs_row5[0, 2])
     _draw_zone_metric(ax_2k, hitter_pitches, _two_strike_whiff_pct,
                       "2-Strike Whiff%", _SWING_CMAP, 0, 60, lambda v: f"{v:.0f}%",
                       bats=bats, cb_label="Whiff%")
+
+    # Col 3: Count situation bars
+    ax_cnt_bars = fig.add_subplot(gs_row5[0, 3])
+    _draw_count_situation_bars(ax_cnt_bars, hitter_count_splits, hitter_pitches)
+
+    # Row 6: Count approach one-liner
+    ax_fp = fig.add_subplot(gs[6])
+    ax_fp.axis("off")
+    extreme = _identify_extreme_counts(count_approach)
+    footer_parts = []
+    if fp_stats:
+        footer_parts.append(f"1st Pitch Swing: {fp_stats['rate']:.0f}%")
+    if extreme:
+        agg = extreme.get("most_aggressive", [])
+        pas = extreme.get("most_passive", [])
+        if agg:
+            c = agg[0]
+            footer_parts.append(f"Most aggressive: {c[0][0]}-{c[0][1]} ({c[1]:.0f}% swing)")
+        if pas:
+            c = pas[0]
+            footer_parts.append(f"Most passive: {c[0][0]}-{c[0][1]} ({c[1]:.0f}% swing)")
+    if hitter_count_splits:
+        ahead_cs = hitter_count_splits.get("ahead")
+        behind_cs = hitter_count_splits.get("behind")
+        if ahead_cs is not None and not ahead_cs.empty:
+            a_woba = _safe_num(ahead_cs, "WOBA", np.nan)
+            if pd.notna(a_woba):
+                footer_parts.append(f"Ahead wOBA: .{int(a_woba*1000):03d}")
+        if behind_cs is not None and not behind_cs.empty:
+            b_woba = _safe_num(behind_cs, "WOBA", np.nan)
+            if pd.notna(b_woba):
+                footer_parts.append(f"Behind wOBA: .{int(b_woba*1000):03d}")
+    if footer_parts:
+        ax_fp.text(0.5, 0.5, "  |  ".join(footer_parts), ha="center", va="center",
+                   fontsize=7.5, fontweight="bold", color="#1a1a2e",
+                   transform=ax_fp.transAxes)
+    else:
+        ax_fp.text(0.5, 0.5, "Count approach: Insufficient data", ha="center", va="center",
+                   fontsize=8, color="#999", transform=ax_fp.transAxes)
 
     return fig
 
@@ -5123,6 +5527,9 @@ def main():
     out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bryant_scouting_pdfs")
     os.makedirs(out_dir, exist_ok=True)
 
+    # Fetch TrueMedia count splits (graceful degradation — no TM team ID for Bryant)
+    count_splits_all = {}
+
     if not matchup_only:
         all_pdf_path = os.path.join(out_dir, "bryant_all_hitters.pdf")
         all_pdf = PdfPages(all_pdf_path)
@@ -5136,7 +5543,7 @@ def main():
 
             print(f"  Generating: {hitter}...")
             try:
-                fig = _render_hitter_page(hitter, pack, pitches)
+                fig = _render_hitter_page(hitter, pack, pitches, count_splits_all=count_splits_all)
             except Exception as e:
                 print(f"    ERROR: {e}")
                 continue
