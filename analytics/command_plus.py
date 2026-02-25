@@ -1,4 +1,13 @@
-"""Command+ and pitch pair results computation."""
+"""Command+ and pitch pair results computation.
+
+Command+ measures pitch location quality using:
+  1. Outcome-weighted location spread — deviations from the pitcher's mean
+     location are weighted by pitch outcome.  Good outcomes (called strikes,
+     whiffs) reduce the effective miss; bad outcomes (hard contact, balls)
+     amplify it.
+  2. Bayesian stabilization — small-sample Command+ is regressed toward
+     league-average (100) so that 15-pitch cameos don't produce wild scores.
+"""
 
 import streamlit as st
 import pandas as pd
@@ -10,6 +19,56 @@ from config import (
     MIN_TUNNEL_SEQ_PCT, PLATE_SIDE_MAX, PLATE_HEIGHT_MIN, PLATE_HEIGHT_MAX,
 )
 from data.loader import query_population
+
+# ---------------------------------------------------------------------------
+# Outcome-weight mapping: how much each pitch outcome inflates or
+# deflates the location-miss penalty.
+#   < 1.0  → good outcome, reduces miss penalty
+#   = 1.0  → neutral
+#   > 1.0  → bad outcome, amplifies miss penalty
+# ---------------------------------------------------------------------------
+_OUTCOME_WEIGHTS = {
+    "StrikeCalled": 0.5,
+    "StrikeSwinging": 0.5,
+    "FoulBall": 0.75,
+    "FoulBallNotFieldable": 0.75,
+    "FoulBallFieldable": 0.75,
+    "BallCalled": 1.2,
+    "BallinDirt": 1.2,
+    "BallIntentional": 1.0,
+    "HitByPitch": 1.5,
+    "InPlay": 1.0,  # base — overridden by EV tiers below
+}
+
+# Bayesian stabilization: number of pitches at which the observed score
+# receives 50 % weight (the other 50 % comes from the league-average prior).
+BAYESIAN_N = 150
+
+
+def _outcome_weight_series(ptd):
+    """Per-pitch outcome weights.  InPlay pitches are further split by EV."""
+    w = ptd["PitchCall"].map(_OUTCOME_WEIGHTS).fillna(1.0).copy()
+    if "ExitSpeed" in ptd.columns:
+        inplay = ptd["PitchCall"] == "InPlay"
+        ev = pd.to_numeric(ptd["ExitSpeed"], errors="coerce")
+        w.loc[inplay & (ev >= 98)]              = 2.0   # barrel-level
+        w.loc[inplay & (ev >= 95) & (ev < 98)]  = 1.5   # hard hit
+        w.loc[inplay & (ev < 85)]               = 0.8   # weak contact
+    return w
+
+
+def _weighted_spread(ptd, weights):
+    """Outcome-weighted location spread: sqrt( sum(w·d²) / sum(w) )."""
+    h = ptd["PlateLocHeight"].values.astype(float)
+    s = ptd["PlateLocSide"].values.astype(float)
+    w = weights.values.astype(float)
+    wsum = w.sum()
+    if wsum == 0:
+        return np.nan
+    mean_h = np.average(h, weights=w)
+    mean_s = np.average(s, weights=w)
+    dev_sq = (h - mean_h) ** 2 + (s - mean_s) ** 2
+    return np.sqrt(np.average(dev_sq, weights=w))
 
 
 def _build_fallback_spreads(data, pitch_types):
@@ -46,7 +105,7 @@ def _compute_command_plus(pdf, data=None):
     Pitch, Pitches, Loc Spread (ft), Zone%, Edge%, CSW%, Chase%, Command+, Percentile.
     Returns empty DataFrame if insufficient data."""
     cmd_rows = []
-    for pt in sorted(pdf["TaggedPitchType"].unique()):
+    for pt in sorted(pdf["TaggedPitchType"].dropna().unique()):
         ptd = pdf[pdf["TaggedPitchType"] == pt].dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
         # Filter to valid location bounds to avoid outlier bias
         ptd = ptd[
@@ -55,9 +114,11 @@ def _compute_command_plus(pdf, data=None):
         ]
         if len(ptd) < 10:
             continue
-        loc_std_h = ptd["PlateLocHeight"].std()
-        loc_std_s = ptd["PlateLocSide"].std()
-        loc_spread = np.sqrt(loc_std_h**2 + loc_std_s**2)
+
+        # Outcome-weighted location spread
+        weights = _outcome_weight_series(ptd)
+        loc_spread = _weighted_spread(ptd, weights)
+
         in_zone = in_zone_mask(ptd)
         zone_pct = in_zone.mean() * 100
         edge = (
@@ -75,7 +136,7 @@ def _compute_command_plus(pdf, data=None):
         cmd_rows.append({
             "Pitch": pt,
             "Pitches": len(ptd),
-            "Loc Spread (ft)": round(loc_spread, 2),
+            "Loc Spread (ft)": round(loc_spread, 2) if np.isfinite(loc_spread) else np.nan,
             "Zone%": round(zone_pct, 1),
             "Edge%": round(edge_pct, 1),
             "CSW%": round(csw, 1),
@@ -85,6 +146,9 @@ def _compute_command_plus(pdf, data=None):
         return pd.DataFrame()
     cmd_df = pd.DataFrame(cmd_rows)
     # NCAA D1 baseline via population table (DuckDB)
+    # Population uses unweighted spreads — our pitcher's outcome-weighted
+    # spread is compared against this, so pitchers who "get away with" misses
+    # (called strikes on borderline pitches) are rewarded.
     pitch_types = sorted(cmd_df["Pitch"].unique())
     if pitch_types:
         pt_sql = ", ".join(f"'{p.replace(chr(39), chr(39)+chr(39))}'" for p in pitch_types)
@@ -128,6 +192,7 @@ def _compute_command_plus(pdf, data=None):
     cmd_pctls = []
     for _, row in cmd_df.iterrows():
         pt = row["Pitch"]
+        n_pitches = row["Pitches"]
         my_spread = row["Loc Spread (ft)"]
         if pd.isna(my_spread):
             cmd_scores.append(100.0)
@@ -153,9 +218,15 @@ def _compute_command_plus(pdf, data=None):
             cmd_pctls.append(50.0)
             continue
 
-        pctl = 100 - percentileofscore(spreads, my_spread, kind="rank")
-        cmd_scores.append(round(100 + (pctl - 50) * 0.4, 0))
-        cmd_pctls.append(round(pctl, 1))
+        raw_pctl = 100 - percentileofscore(spreads, my_spread, kind="rank")
+
+        # Bayesian stabilization: regress toward league-average (50th pctl)
+        alpha = n_pitches / (n_pitches + BAYESIAN_N)
+        stab_pctl = alpha * raw_pctl + (1 - alpha) * 50.0
+        stab_cmd = 100 + (stab_pctl - 50) * 0.4
+
+        cmd_scores.append(round(stab_cmd, 0))
+        cmd_pctls.append(round(stab_pctl, 1))
 
     cmd_df["Command+"] = cmd_scores
     cmd_df["Percentile"] = cmd_pctls
