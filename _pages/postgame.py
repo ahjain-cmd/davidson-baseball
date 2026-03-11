@@ -2358,7 +2358,7 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
     """Compute pitch call grade using 4-pillar system.
 
     Pillars (25% each, or 33% each if no opponent data):
-      1. Count Strategy — situational decision quality by count
+      1. Count Strategy — FPS, behind-count recovery, putaway, waste chase
       2. Pitch Selection — arsenal usage and sequencing
       3. Location Execution — zone targeting quality
       4. Opponent Exploitation — attacking known weaknesses (when available)
@@ -2427,6 +2427,25 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
                              breakpoints[i][0], breakpoints[i][1])
         return breakpoints[-1][1]
 
+    def _pa_ended_in_out(row):
+        """Whether a plate appearance ended in an out for the defense."""
+        korbb = str(row.get("KorBB", "")).strip()
+        if korbb == "Strikeout":
+            return True
+
+        play_result = str(row.get("PlayResult", "")).strip()
+        if play_result in {"Out", "Strikeout", "SacBunt", "SacFly", "FieldersChoice"}:
+            return True
+
+        outs_on_play = row.get("OutsOnPlay", np.nan)
+        if pd.notna(outs_on_play):
+            try:
+                if float(outs_on_play) > 0 and play_result not in {"Single", "Double", "Triple", "HomeRun", "Error"}:
+                    return True
+            except (TypeError, ValueError):
+                pass
+        return False
+
     # ── Pitch mix ──
     pitch_mix = {}
     if "TaggedPitchType" in pitcher_pdf.columns:
@@ -2449,8 +2468,10 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
         _sorted = pitcher_pdf.sort_values(sort_cols)
         first_pitch_mask = ~_sorted.duplicated(subset=pa_cols, keep="first")
         first_pitch_idx = _sorted.index[first_pitch_mask]
+        pa_last = _sorted.drop_duplicates(subset=pa_cols, keep="last")
     else:
         first_pitch_idx = pitcher_pdf.index[:0]  # empty
+        pa_last = pd.DataFrame()
 
     # ================================================================
     # PILLAR 1: COUNT STRATEGY (25%)
@@ -2468,15 +2489,26 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
         fps_pct = 58.0  # neutral
     fps_score = _piecewise(fps_pct, [(50, 0), (58, 50), (65, 80), (72, 100)])
 
-    # --- Ahead-After-1 Rate (0-1 count after first pitch) ---
-    if n_pa > 0 and "PitchCall" in pitcher_pdf.columns:
-        ahead_count = first_pitches["PitchCall"].isin(
-            list(_STRIKE_CALLS) + ["InPlay"]
-        ).sum()  # same as FPS but conceptually distinct
-        ahead_after_1_pct = ahead_count / n_pa * 100
-    else:
-        ahead_after_1_pct = 55.0
-    ahead_score = _piecewise(ahead_after_1_pct, [(45, 0), (55, 50), (65, 100)])
+    # --- Behind-Count Recovery Rate ---
+    # When pitcher falls behind (1-0, 2-0, 2-1, 3-0, 3-1), what % of those PAs end in outs?
+    behind_counts = {(1, 0), (2, 0), (2, 1), (3, 0), (3, 1)}
+    behind_recovery_pct = None
+    behind_score = 50.0  # neutral default
+    if has_count and "KorBB" in pitcher_pdf.columns and pa_cols and sort_cols:
+        behind_mask = pd.Series(False, index=pitcher_pdf.index)
+        for b, s in behind_counts:
+            behind_mask |= (balls == b) & (strikes == s)
+        behind_pitches = pitcher_pdf[behind_mask]
+        if len(behind_pitches) > 0:
+            # Unique PAs that had at least one behind-count pitch
+            behind_pa_keys = behind_pitches[pa_cols].drop_duplicates()
+            n_behind_pas = len(behind_pa_keys)
+            if n_behind_pas >= 3:
+                behind_pa_outcomes = pa_last.merge(behind_pa_keys, on=pa_cols, how="inner")
+                recovered = behind_pa_outcomes.apply(_pa_ended_in_out, axis=1).sum()
+                behind_recovery_pct = recovered / len(behind_pa_outcomes) * 100
+                behind_score = _piecewise(behind_recovery_pct,
+                                          [(50, 0), (65, 40), (75, 70), (85, 100)])
 
     # --- 2-Strike Putaway % ---
     two_strike_mask = strikes == 2
@@ -2487,7 +2519,7 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
         putaway_pct = k_on_2k / n_2k * 100
     else:
         putaway_pct = 30.0
-    putaway_score = _piecewise(putaway_pct, [(20, 0), (30, 50), (40, 80), (50, 100)])
+    putaway_score = _piecewise(putaway_pct, [(15, 10), (25, 40), (35, 70), (45, 90), (55, 100)])
 
     # --- Waste Pitch Efficiency (0-2 count chase rate) ---
     waste_chase_pct = None
@@ -2495,23 +2527,23 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
     oh_two_mask = (balls == 0) & (strikes == 2)
     oh_two_pitches = pitcher_pdf[oh_two_mask]
     if len(oh_two_pitches) > 0 and "PitchCall" in oh_two_pitches.columns:
-        # Waste pitches = balls thrown in 0-2 counts
-        oh_two_balls = oh_two_pitches[oh_two_pitches["PitchCall"].isin(["BallCalled", "BallinDirt", "BallIntentional"])]
-        if len(oh_two_balls) > 0:
-            # Check if those waste pitches had location data for chase assessment
-            waste_loc = oh_two_balls.dropna(subset=["PlateLocSide", "PlateLocHeight"])
-            if len(waste_loc) > 0:
-                # Out-of-zone waste pitches that got swings = chases
-                oz_mask = ~in_zone_mask(waste_loc)
-                oz_waste = waste_loc[oz_mask]
-                if len(oz_waste) > 0:
-                    chases = oz_waste["PitchCall"].isin(list(SWING_CALLS)).sum()
-                    waste_chase_pct = chases / len(oz_waste) * 100
-                    waste_score = _piecewise(waste_chase_pct, [(15, 20), (25, 50), (40, 90)])
-                # else: all waste was in zone, neutral
-            # else: no location data, neutral
+        # All 0-2 pitches with location data
+        waste_loc = oh_two_pitches.dropna(subset=["PlateLocSide", "PlateLocHeight"])
+        if len(waste_loc) > 0:
+            oz_mask = ~in_zone_mask(waste_loc)
+            oz_waste = waste_loc[oz_mask]
+            if len(oz_waste) >= 3:
+                chases = oz_waste["PitchCall"].isin(list(SWING_CALLS)).sum()
+                waste_chase_pct = chases / len(oz_waste) * 100
+                waste_score = _piecewise(waste_chase_pct, [(15, 20), (25, 50), (40, 90)])
 
-    count_score = 0.30 * fps_score + 0.25 * ahead_score + 0.30 * putaway_score + 0.15 * waste_score
+    count_score = 0.25 * fps_score + 0.20 * behind_score + 0.30 * putaway_score + 0.25 * waste_score
+    count_subscores = {
+        "First-Pitch Strike": fps_score if n_pa > 0 else None,
+        "Behind-Count Recovery": behind_score if behind_recovery_pct is not None else None,
+        "2-Strike Putaway": putaway_score if n_2k > 0 else None,
+        "0-2 Waste Chase": waste_score if waste_chase_pct is not None else None,
+    }
 
     # ================================================================
     # PILLAR 2: PITCH SELECTION (25%)
@@ -2574,6 +2606,12 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
 
     selection_score = (0.35 * pair_usage_score + 0.25 * offspeed_2k_score
                        + 0.20 * diversity_score + 0.20 * seq_quality_score)
+    selection_subscores = {
+        "Top-Pair Usage": pair_usage_score if top_pairs else None,
+        "Off-Speed in 2K": offspeed_2k_score if n_2k > 0 and "TaggedPitchType" in pitcher_pdf.columns else None,
+        "Pitch Diversity": diversity_score if len(pitch_mix) >= 2 else None,
+        "Sequence Quality": seq_quality_score if top_sequences else None,
+    }
 
     # ================================================================
     # PILLAR 3: LOCATION EXECUTION (25%)
@@ -2616,10 +2654,11 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
         zone_when_ahead_pct = in_zone_ahead / len(ahead_pitches) * 100
     else:
         zone_when_ahead_pct = 60.0
-    zone_ahead_score = _piecewise(zone_when_ahead_pct, [(50, 20), (60, 50), (70, 80), (80, 100)])
+    zone_ahead_score = _piecewise(zone_when_ahead_pct, [(40, 15), (55, 45), (65, 70), (75, 90), (85, 100)])
 
     # --- Chase-Eligible % (2-strike out-of-zone chase rate) ---
     two_strike_loc = loc_df.loc[loc_df.index.intersection(pitcher_pdf[two_strike_mask].index)]
+    oz_2k = pd.DataFrame()
     if len(two_strike_loc) > 0:
         oz_2k_mask = ~in_zone_mask(two_strike_loc)
         oz_2k = two_strike_loc[oz_2k_mask]
@@ -2661,6 +2700,12 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
 
     location_score = (0.30 * zone_ahead_score + 0.25 * chase_score
                       + 0.25 * edge_score + 0.20 * heart_score)
+    location_subscores = {
+        "Zone% When Ahead": zone_ahead_score if len(ahead_pitches) > 0 else None,
+        "2-Strike Chase": chase_score if len(oz_2k) > 0 else None,
+        "Edge%": edge_score if len(loc_df) > 0 else None,
+        "Heart% Avoidance": heart_score if len(loc_df) > 0 else None,
+    }
 
     # Backward compat aliases
     loc_exec_score = location_score
@@ -2673,6 +2718,9 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
     opp_overall_hole_pct = None
     opp_high_hole_csw_pct = None
     has_opponent_data = False
+    two_strike_hole_score = None
+    overall_hole_score = None
+    high_hole_csw_score = None
 
     try:
         opp_teams = pitcher_pdf["BatterTeam"].dropna().unique().tolist() if "BatterTeam" in pitcher_pdf.columns else []
@@ -2681,6 +2729,11 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
         _PACK_LOADERS = {
             "FAI_STA": ("data.fairfield_combined", "load_fairfield_combined_pack"),
             "BRY_BUL": ("data.bryant_combined", "load_bryant_combined_pack"),
+            "FOR_RAM": ("data.fordham_combined", "load_fordham_combined_pack"),
+            "GAR_RUN": ("data.gw_combined", "load_gw_combined_pack"),
+            "LEH_MOU": ("data.lehigh_combined", "load_lehigh_combined_pack"),
+            "WAK_DEA": ("data.wakeforest_combined", "load_wf_combined_pack"),
+            "WOF_TER": ("data.wofford_combined", "load_wofford_combined_pack"),
         }
 
         pack = None
@@ -2693,7 +2746,6 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
         if pack:
             hole_scores_df = pack.get("hitting", {}).get("hole_scores", pd.DataFrame())
             if not hole_scores_df.empty and has_count:
-                has_opponent_data = True
                 agg_holes = hole_scores_df[
                     (hole_scores_df["pitcher_throws"] == "ALL") & (hole_scores_df["pitch_type"] == "ALL")
                 ]
@@ -2763,30 +2815,40 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
                     opp_weakness_pct = attacked_2k / total_matched_2k * 100
                     two_strike_hole_score = _piecewise(opp_weakness_pct,
                                                        [(15, 20), (22, 40), (30, 60), (40, 80), (50, 100)])
-                else:
-                    opp_weakness_pct = None
-                    two_strike_hole_score = 40.0  # neutral-low
 
                 if total_matched_all >= 10:
                     opp_overall_hole_pct = in_top3_all / total_matched_all * 100
                     overall_hole_score = _piecewise(opp_overall_hole_pct,
                                                     [(25, 20), (33, 45), (40, 65), (50, 85), (60, 100)])
-                else:
-                    opp_overall_hole_pct = None
-                    overall_hole_score = 45.0
 
                 if high_hole_attempts >= 5:
                     opp_high_hole_csw_pct = high_hole_csw / high_hole_attempts * 100
                     high_hole_csw_score = _piecewise(opp_high_hole_csw_pct,
                                                      [(30, 20), (40, 50), (55, 80), (70, 100)])
-                else:
-                    opp_high_hole_csw_pct = None
-                    high_hole_csw_score = 50.0
-
-                opp_score = (0.40 * two_strike_hole_score + 0.35 * overall_hole_score
-                             + 0.25 * high_hole_csw_score)
     except Exception:
         pass
+
+    opp_components = []
+    if opp_weakness_pct is not None and two_strike_hole_score is not None:
+        opp_components.append((two_strike_hole_score, 0.40))
+    if opp_overall_hole_pct is not None and overall_hole_score is not None:
+        opp_components.append((overall_hole_score, 0.35))
+    if opp_high_hole_csw_pct is not None and high_hole_csw_score is not None:
+        opp_components.append((high_hole_csw_score, 0.25))
+
+    if opp_components:
+        total_w = sum(w for _, w in opp_components)
+        opp_score = sum(score * w for score, w in opp_components) / total_w
+        has_opponent_data = True
+    else:
+        opp_score = None
+        has_opponent_data = False
+
+    opp_subscores = {
+        "2-Strike Hole Attack": two_strike_hole_score if opp_weakness_pct is not None else None,
+        "Overall Hole Targeting": overall_hole_score if opp_overall_hole_pct is not None else None,
+        "High-Hole Conversion": high_hole_csw_score if opp_high_hole_csw_pct is not None else None,
+    }
 
     # ================================================================
     # COMBINED GRADE
@@ -2838,7 +2900,8 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
 
         # Count Strategy detail
         "fps_pct": fps_pct,
-        "ahead_after_1_pct": ahead_after_1_pct,
+        "behind_recovery_pct": behind_recovery_pct,
+        "ahead_after_1_pct": behind_recovery_pct,  # backward-compat alias
         "putaway_pct": putaway_pct,
         "waste_chase_pct": waste_chase_pct,
 
@@ -2854,6 +2917,10 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
         "chase_eligible_pct": chase_eligible_pct,
         "edge_pct": edge_pct,
         "heart_pct": heart_pct,
+        "count_subscores": count_subscores,
+        "selection_subscores": selection_subscores,
+        "location_subscores": location_subscores,
+        "opp_subscores": opp_subscores,
 
         # Opponent Exploitation detail
         "opp_weakness_pct": opp_weakness_pct,
@@ -2873,6 +2940,100 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
         "in_best_pct": 0.0,
         "loc_by_pitch": {},
     }
+
+
+def _lowest_call_grade_submetric(subscores):
+    """Return (label, score) for the lowest observed call-grade submetric."""
+    if not isinstance(subscores, dict):
+        return None, None
+    valid = [(label, score) for label, score in subscores.items() if score is not None and pd.notna(score)]
+    if not valid:
+        return None, None
+    return min(valid, key=lambda x: x[1])
+
+
+def _build_call_grade_recommendations(grade_info):
+    """Generate game-call recommendations from the actual weakest observed sub-metrics."""
+    if not grade_info or grade_info.get("grade_score", 100) >= 70:
+        return []
+
+    pair_names = grade_info.get("top_pair_names", [])
+    pillar_specs = [
+        ("Count Strategy", grade_info.get("count_score"), grade_info.get("count_subscores", {})),
+        ("Pitch Selection", grade_info.get("selection_score"), grade_info.get("selection_subscores", {})),
+        ("Location Execution", grade_info.get("location_score"), grade_info.get("location_subscores", {})),
+    ]
+    if grade_info.get("opp_score") is not None:
+        pillar_specs.append(("Opponent Exploitation", grade_info.get("opp_score"), grade_info.get("opp_subscores", {})))
+    pillar_specs = [(name, score, subs) for name, score, subs in pillar_specs if score is not None and pd.notna(score)]
+    pillar_specs.sort(key=lambda x: x[1])
+
+    recs = []
+    seen = set()
+
+    def _add(text):
+        if text and text not in seen:
+            seen.add(text)
+            recs.append(text)
+
+    def _rec_for(pillar_name, metric_name):
+        if pillar_name == "Count Strategy":
+            if metric_name == "First-Pitch Strike":
+                return "Get ahead earlier. First-pitch strike execution was the biggest count-management leak."
+            if metric_name == "Behind-Count Recovery":
+                return "Once behind, compete for outs instead of just avoiding walks. Too many behind-count plate appearances still ended favorably for hitters."
+            if metric_name == "2-Strike Putaway":
+                return "Finish more hitters once you get to two strikes. Sharpen the putaway pitch instead of letting at-bats extend."
+            if metric_name == "0-2 Waste Chase":
+                return "On 0-2, waste pitches were not getting enough chase. Expand with better conviction off the plate or below the zone."
+            return "Count management needs work. Win strike one and close counts more efficiently."
+
+        if pillar_name == "Pitch Selection":
+            if metric_name == "Top-Pair Usage":
+                if pair_names:
+                    return f"Lean more on the {pair_names[0]} pairing. It profiled as the best game sequence and was underused."
+                return "Lean into your best pitch pairings more often instead of spreading usage too evenly."
+            if metric_name == "Off-Speed in 2K":
+                return "Show more non-fastballs with two strikes. The 2-strike mix was too easy to sit on."
+            if metric_name == "Pitch Diversity":
+                return "Expand the pitch mix. The game plan became too narrow and easier to predict."
+            if metric_name == "Sequence Quality":
+                return "Sequence quality lagged. Build better pitch-to-pitch contrast so tunnels finish in tougher decision windows."
+            return "Pitch selection was too predictable. Vary the mix and sequencing more within at-bats."
+
+        if pillar_name == "Location Execution":
+            if metric_name == "Heart% Avoidance":
+                return "Too many misses leaked into the heart of the zone. Prioritize edge misses over middle misses."
+            if metric_name == "Edge%":
+                return "Live on the edges more consistently. Too few pitches finished on the boundary where misses are harder to damage."
+            if metric_name == "2-Strike Chase":
+                return "With two strikes, create more chase. Finish farther off the plate or under the zone instead of leaving hittable misses."
+            if metric_name == "Zone% When Ahead":
+                return "When ahead in the count, attack the strike zone with intent. You gave away leverage by nibbling too often."
+            return "Location quality needs to tighten. Hit edges more consistently and avoid middle misses."
+
+        if pillar_name == "Opponent Exploitation":
+            if metric_name == "2-Strike Hole Attack":
+                return "In two-strike counts, target the hitter's known hole more often instead of defaulting to generic finish locations."
+            if metric_name == "Overall Hole Targeting":
+                return "The game plan did not consistently attack the opponent's weakest zones. Align location intent more closely to scouting."
+            if metric_name == "High-Hole Conversion":
+                return "When you did attack clear weakness zones, the finish quality still lagged. Pair hole targets with better chase or called-strike shapes."
+            return "Use opponent scouting more deliberately. The outing did not consistently exploit known hitter weaknesses."
+
+        return None
+
+    if pillar_specs:
+        worst_name, _, worst_subscores = pillar_specs[0]
+        worst_metric, _ = _lowest_call_grade_submetric(worst_subscores)
+        _add(_rec_for(worst_name, worst_metric))
+
+    if len(pillar_specs) > 1 and pillar_specs[1][1] < 50:
+        second_name, _, second_subscores = pillar_specs[1]
+        second_metric, _ = _lowest_call_grade_submetric(second_subscores)
+        _add(_rec_for(second_name, second_metric))
+
+    return recs[:3]
 
 
 def _render_call_grade_section(pitcher_pdf, data, pitcher, key_suffix):
@@ -2940,18 +3101,21 @@ def _render_call_grade_section(pitcher_pdf, data, pitcher, key_suffix):
         st.markdown("**Count Strategy + Pitch Selection**")
         detail_lines = []
         fps = grade_info.get("fps_pct", 0)
-        detail_lines.append(f"First Pitch Strike: **{fps:.0f}%** (D1 avg ~58%)")
-        detail_lines.append(f"2-Strike Putaway: **{grade_info.get('putaway_pct', 0):.0f}%**")
+        detail_lines.append(f"First Pitch Strike: <strong>{fps:.0f}%</strong> (D1 avg ~58%)")
+        detail_lines.append(f"2-Strike Putaway: <strong>{grade_info.get('putaway_pct', 0):.0f}%</strong>")
+        br = grade_info.get("behind_recovery_pct")
+        if br is not None:
+            detail_lines.append(f"Behind-Count Recovery: <strong>{br:.0f}%</strong>")
         wc = grade_info.get("waste_chase_pct")
         if wc is not None:
-            detail_lines.append(f"0-2 Waste Chase Rate: **{wc:.0f}%**")
-        detail_lines.append(f"Off-Speed in 2K: **{grade_info.get('offspeed_2k_pct', 0):.0f}%**")
+            detail_lines.append(f"0-2 Waste Chase Rate: <strong>{wc:.0f}%</strong>")
+        detail_lines.append(f"Off-Speed in 2K: <strong>{grade_info.get('offspeed_2k_pct', 0):.0f}%</strong>")
         pair_names = grade_info.get("top_pair_names", [])
         usage_p = grade_info.get("pair_usage_pct", 0)
         if pair_names:
             detail_lines.append(f"Top Pairs: {', '.join(pair_names)} (used {usage_p:.0f}% of transitions)")
         di = grade_info.get("diversity_index", 0)
-        detail_lines.append(f"Pitch Diversity: **{di:.2f}** (1.0 = perfect entropy)")
+        detail_lines.append(f"Pitch Diversity: <strong>{di:.2f}</strong> (1.0 = perfect entropy)")
 
         mix = grade_info.get("pitch_mix", {})
         if mix:
@@ -2977,74 +3141,28 @@ def _render_call_grade_section(pitcher_pdf, data, pitcher, key_suffix):
     with col_right:
         st.markdown("**Location + Opponent**")
         loc_lines = []
-        loc_lines.append(f"Zone% When Ahead: **{grade_info.get('zone_when_ahead_pct', 0):.0f}%**")
-        loc_lines.append(f"Edge%: **{grade_info.get('edge_pct', 0):.0f}%** | Heart%: **{grade_info.get('heart_pct', 0):.0f}%**")
-        loc_lines.append(f"2K Chase Rate: **{grade_info.get('chase_eligible_pct', 0):.0f}%**")
+        loc_lines.append(f"Zone% When Ahead: <strong>{grade_info.get('zone_when_ahead_pct', 0):.0f}%</strong>")
+        loc_lines.append(f"Edge%: <strong>{grade_info.get('edge_pct', 0):.0f}%</strong> | Heart%: <strong>{grade_info.get('heart_pct', 0):.0f}%</strong>")
+        loc_lines.append(f"2K Chase Rate: <strong>{grade_info.get('chase_eligible_pct', 0):.0f}%</strong>")
 
         if grade_info.get("opp_weakness_pct") is not None:
-            loc_lines.append(f"Attacked opponent holes **{grade_info['opp_weakness_pct']:.0f}%** of 2-strike pitches")
+            loc_lines.append(f"Attacked opponent holes <strong>{grade_info['opp_weakness_pct']:.0f}%</strong> of 2-strike pitches")
         if grade_info.get("opp_overall_hole_pct") is not None:
-            loc_lines.append(f"Overall hole targeting: **{grade_info['opp_overall_hole_pct']:.0f}%**")
+            loc_lines.append(f"Overall hole targeting: <strong>{grade_info['opp_overall_hole_pct']:.0f}%</strong>")
         if grade_info.get("opp_high_hole_csw_pct") is not None:
-            loc_lines.append(f"High-hole CSW: **{grade_info['opp_high_hole_csw_pct']:.0f}%**")
+            loc_lines.append(f"High-hole CSW: <strong>{grade_info['opp_high_hole_csw_pct']:.0f}%</strong>")
 
         for line in loc_lines:
             st.markdown(f'<div style="font-size:13px;padding:2px 0;">{line}</div>', unsafe_allow_html=True)
 
         # Best location summary
         if grade_info["best_locations"]:
-            loc_parts = [f"**{pt}** -> {loc}" for pt, loc in grade_info["best_locations"].items()]
-            st.markdown("**Target Zones:** " + "  |  ".join(loc_parts))
+            loc_parts = [f"<strong>{pt}</strong> -> {loc}" for pt, loc in grade_info["best_locations"].items()]
+            st.markdown(f'<div style="font-size:13px;padding:2px 0;"><strong>Target Zones:</strong> {"  |  ".join(loc_parts)}</div>', unsafe_allow_html=True)
 
     # ── Recommendations (only if grade < B, i.e. combined < 70) ──
     if gs < 70:
-        pillar_scores = [
-            ("Count Strategy", grade_info["count_score"]),
-            ("Pitch Selection", grade_info["selection_score"]),
-            ("Location Execution", grade_info["location_score"]),
-        ]
-        if grade_info.get("opp_score") is not None:
-            pillar_scores.append(("Opponent Exploitation", grade_info["opp_score"]))
-        pillar_scores.sort(key=lambda x: x[1])
-
-        recs = []
-        worst_name, worst_val = pillar_scores[0]
-        if worst_name == "Count Strategy":
-            if grade_info.get("fps_pct", 100) < 55:
-                recs.append("Get ahead early — first-pitch strike rate was below average. Prioritize fastball command for strike one.")
-            elif grade_info.get("putaway_pct", 100) < 25:
-                recs.append("Improve 2-strike putaway — focus on expanding the zone with breaking balls to finish at-bats.")
-            else:
-                recs.append("Be more aggressive in favorable counts — avoid falling behind with passive pitch selection.")
-        elif worst_name == "Pitch Selection":
-            if grade_info.get("diversity_index", 1) < 0.5:
-                recs.append("Expand the pitch mix — too reliant on limited pitch types. Keep hitters guessing with more arsenal variety.")
-            elif pair_names:
-                recs.append(f"Increase use of {pair_names[0]} pairing — it showed the best tunnel/whiff profile.")
-            else:
-                recs.append("Work on establishing consistent pitch pairings with effective tunnel differentials.")
-        elif worst_name == "Location Execution":
-            if grade_info.get("heart_pct", 0) > 25:
-                recs.append("Too many pitches in the heart of the zone — work to hit edges and expand off the plate.")
-            elif grade_info.get("zone_when_ahead_pct", 100) < 55:
-                recs.append("Attack the zone more aggressively when ahead in the count — don't nibble from favorable positions.")
-            else:
-                recs.append("Improve overall location quality — focus on painting corners and expanding off the plate edge.")
-        elif worst_name == "Opponent Exploitation":
-            recs.append("Better target known opponent weaknesses — review scouting report hole zones before next outing.")
-
-        # Second-worst pillar rec (if score < 50)
-        if len(pillar_scores) > 1 and pillar_scores[1][1] < 50:
-            second_name, _ = pillar_scores[1]
-            if second_name == "Count Strategy":
-                recs.append("Count management needs work — too often falling behind or failing to finish with 2 strikes.")
-            elif second_name == "Pitch Selection":
-                recs.append("Pitch sequencing was predictable — vary approach more within at-bats.")
-            elif second_name == "Location Execution":
-                recs.append("Location command was inconsistent — focus on repeating delivery for more precise targeting.")
-            elif second_name == "Opponent Exploitation":
-                recs.append("Missed opportunities to attack known hitter weaknesses.")
-
+        recs = _build_call_grade_recommendations(grade_info)
         if recs:
             st.markdown("**Recommendations**")
             for r in recs[:3]:
