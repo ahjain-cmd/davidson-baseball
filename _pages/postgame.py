@@ -2732,6 +2732,7 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
             "FOR_RAM": ("data.fordham_combined", "load_fordham_combined_pack"),
             "GAR_RUN": ("data.gw_combined", "load_gw_combined_pack"),
             "LEH_MOU": ("data.lehigh_combined", "load_lehigh_combined_pack"),
+            "UNC_SPA": ("data.uncg_combined", "load_uncg_combined_pack"),
             "WAK_DEA": ("data.wakeforest_combined", "load_wf_combined_pack"),
             "WOF_TER": ("data.wofford_combined", "load_wofford_combined_pack"),
         }
