@@ -40,6 +40,10 @@ from config import (
     JERSEY,
 )
 from analytics.zone_vulnerability import compute_hole_scores_3x3, compute_grouped_pitch_type_holes, convert_holes_to_percentiles, convert_hole_detail_to_percentiles
+from analytics.offensive_scoring import (
+    _compute_offensive_edge, _compute_offensive_edge_fallback,
+    _D1_BASELINES,
+)
 from data.stats import compute_swing_path_metrics
 from _pages.scouting import (
     _get_our_pitcher_arsenal,
@@ -83,13 +87,14 @@ _DAV_STARTERS = ["Perkins, Wilson", "Cavanaugh, Cooper", "Vokal, Jacob"]
 _DAV_RELIEVERS = [
     "Hall, Edward", "Yochum, Simon", "Hoyt, Ivan", "Champey, Brycen",
     "Furr, Keely", "Jones, Parker", "Marenghi, Will", "Papciak, Will",
-    "Taggart, Carson", "Smith, Daniel", "Wille, Tyler",
-    "Pyne, Garrett", "Howard, Jed",
+    "Taggart, Carson", "Smith, Daniel",
+    "Pyne, Garrett", "Howard, Jed", "Banks, Will",
 ]
 
-_DAV_INJURED = ["Banks, Will", "Whelan, Thomas", "Hamilton, Matthew"]
+_DAV_INJURED = []
 
-_DAV_DNP = {"Hultquist, Henry", "Ban, Jason", "Ludwig, Landon"}
+_DAV_DNP = {"Hultquist, Henry", "Ban, Jason", "Ludwig, Landon",
+            "Whelan, Thomas", "Hamilton, Matthew", "Wille, Tyler"}
 
 # Alias mapping: some names appear differently in arsenal dicts vs role lists
 _PITCHER_ALIASES = {
@@ -2526,12 +2531,30 @@ def _render_pitcher_page(pitcher, pack, all_pitcher_pp):
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def _score_to_grade(score):
+def _score_to_grade(score, all_scores=None):
     """Convert composite matchup score to letter grade.
 
-    Thresholds calibrated to the 24-factor composite scorer which
-    naturally produces scores in the ~48-72 range.
+    When all_scores is provided, grades are assigned by percentile rank
+    within the distribution, ensuring a spread of grades regardless of
+    absolute score level.
     """
+    if all_scores and len(all_scores) >= 5:
+        from scipy.stats import percentileofscore
+        pct = percentileofscore(all_scores, score, kind="rank")
+        if pct >= 95:
+            return "A+"
+        if pct >= 85:
+            return "A"
+        if pct >= 70:
+            return "B+"
+        if pct >= 50:
+            return "B"
+        if pct >= 30:
+            return "C"
+        if pct >= 15:
+            return "D"
+        return "F"
+    # Fallback: hardcoded thresholds
     if score >= 66:
         return "A+"
     if score >= 63:
@@ -2613,199 +2636,6 @@ def _score_all_offensive_matchups(dav_hitter_profiles, bryant_pitcher_profiles):
     return matchups
 
 
-def _compute_offensive_edge(hitter_prof, pitcher_prof):
-    """Continuous 0-100 offensive edge score using Trackman pitch-type cross-reference.
-
-    Cross-references our hitter's per-pitch-type Trackman metrics (EV, whiff%,
-    barrel%, hard-hit%, contact depth) against the opponent pitcher's arsenal
-    (pitch_mix %).  Usage-weighted, with adjustments for platoon, pitcher
-    command/vulnerability, zone coverage, and count leverage.
-
-    50 = neutral.  >60 = advantage.  <40 = disadvantage.
-    """
-    if not hitter_prof or not pitcher_prof:
-        return None
-
-    by_pt = hitter_prof.get("by_pitch_type", {})
-    overall = hitter_prof.get("overall", {})
-    zones = hitter_prof.get("zones", {})
-    by_count = hitter_prof.get("by_count", {})
-    pitch_mix = pitcher_prof.get("pitch_mix", {})
-
-    if not pitch_mix:
-        return None
-
-    # ── 1. Per-pitch cross-reference (usage-weighted) ──────────────────
-    components = []
-    total_usage = 0
-
-    for pt_name, usage_pct in pitch_mix.items():
-        if usage_pct < 5:
-            continue
-
-        h_data = by_pt.get(pt_name)
-        weight = usage_pct / 100.0
-        total_usage += weight
-
-        if h_data and h_data.get("seen", 0) >= 10:
-            factors = []
-
-            # EV component (40% of pitch score) — higher = better for hitter
-            ev = h_data.get("avg_ev")
-            if pd.notna(ev) and ev > 0:
-                # 78→20, 85→45, 90→60, 95→75, 100→90
-                ev_score = np.clip((ev - 78) / 22 * 70 + 20, 15, 90)
-                factors.append(("ev", ev_score, 0.35))
-
-            # Whiff component (25%) — lower = better for hitter
-            whiff = h_data.get("whiff_pct")
-            if pd.notna(whiff):
-                # 0%→82, 15%→60, 30%→38, 50%→15
-                whiff_score = np.clip(82 - whiff * 1.34, 15, 85)
-                factors.append(("whiff", whiff_score, 0.25))
-
-            # Barrel component (15%) — higher = better
-            barrel = h_data.get("barrel_pct")
-            if pd.notna(barrel):
-                # 0%→30, 5%→45, 10%→60, 20%→80
-                barrel_score = np.clip(30 + barrel * 2.5, 20, 85)
-                factors.append(("barrel", barrel_score, 0.15))
-
-            # Hard-hit% component (10%)
-            hh = h_data.get("hard_hit_pct")
-            if pd.notna(hh):
-                # 0→30, 20→46, 40→62, 60→78
-                hh_score = np.clip(30 + hh * 0.8, 20, 82)
-                factors.append(("hh", hh_score, 0.10))
-
-            # Contact depth component (7.5%) — more negative = out in front = good
-            cd = h_data.get("contact_depth")
-            if pd.notna(cd):
-                # -3→70 (well out front), 0→50 (on time), +3→30 (late)
-                cd_score = np.clip(50 - cd * 6.67, 25, 80)
-                factors.append(("cd", cd_score, 0.075))
-
-            # Swing% component (7.5%) — moderate swing rate is best
-            sw_pct = h_data.get("swing_pct")
-            if pd.notna(sw_pct):
-                # sweet spot ~55-65%, penalize extremes
-                swing_dist = abs(sw_pct - 60)
-                sw_score = np.clip(70 - swing_dist * 1.0, 30, 75)
-                factors.append(("sw", sw_score, 0.075))
-
-            if factors:
-                w_total = sum(w for _, _, w in factors)
-                pitch_score = sum(s * w for _, s, w in factors) / w_total
-            else:
-                pitch_score = 50
-        else:
-            # No pitch-specific data — use overall quality, dampened
-            ov_ev = overall.get("avg_ev")
-            ov_barrel = overall.get("barrel_pct")
-            sub_factors = []
-            if pd.notna(ov_ev) and ov_ev > 0:
-                sub_factors.append(np.clip((ov_ev - 78) / 22 * 70 + 20, 20, 80))
-            if pd.notna(ov_barrel):
-                sub_factors.append(np.clip(30 + ov_barrel * 2.5, 25, 75))
-            if sub_factors:
-                pitch_score = np.mean(sub_factors) * 0.65 + 50 * 0.35  # dampen
-            else:
-                pitch_score = 50
-
-        components.append((pitch_score, weight))
-
-    if not components or total_usage <= 0:
-        return None
-
-    raw = sum(s * w for s, w in components) / total_usage
-
-    # ── 2. Platoon adjustment (±6-8%) ─────────────────────────────────
-    bats = hitter_prof.get("bats", "")
-    throws = pitcher_prof.get("throws", "")
-    if bats and throws:
-        b = bats[0] if len(bats) > 1 else bats
-        t = throws[0] if len(throws) > 1 else throws
-        if b in ("S", "B"):
-            # Switch hitter always bats opposite — full platoon advantage
-            raw *= 1.07
-        elif (b == "L" and t == "R") or (b == "R" and t == "L"):
-            raw *= 1.07
-        elif b == t:
-            raw *= 0.93
-
-    # ── 3. Pitcher vulnerability adjustments ──────────────────────────
-    # High walk rate — hitters benefit from free bases / hitter's counts
-    bb_pct = pitcher_prof.get("bb_pct")
-    if pd.notna(bb_pct) and bb_pct > 8:
-        raw += (bb_pct - 8) * 0.6
-
-    # High EV-against — pitcher is hittable
-    ev_against = pitcher_prof.get("ev_against")
-    if pd.notna(ev_against) and ev_against > 87:
-        raw += (ev_against - 87) * 0.8
-
-    # Low chase rate — pitcher can't get hitters to expand
-    chase = pitcher_prof.get("chase_pct")
-    if pd.notna(chase) and chase < 25:
-        raw += (25 - chase) * 0.3
-
-    # High K rate — pitcher is tough
-    k_pct = pitcher_prof.get("k_pct")
-    if pd.notna(k_pct) and k_pct > 22:
-        raw -= (k_pct - 22) * 0.5
-
-    # Low contact% — pitcher creates whiffs
-    contact = pitcher_prof.get("contact_pct")
-    if pd.notna(contact) and contact < 75:
-        raw -= (75 - contact) * 0.3
-
-    # ── 4. Zone coverage bonus ────────────────────────────────────────
-    # If pitcher goes to zones where our hitter is strong
-    loc_high = pitcher_prof.get("loc_uphalf_pct")
-    loc_low = pitcher_prof.get("loc_lowhalf_pct")
-    loc_in = pitcher_prof.get("loc_inhalf_pct")
-    loc_out = pitcher_prof.get("loc_outhalf_pct")
-
-    if zones:
-        # Check if pitcher throws to our hitter's strong zones
-        up_in = zones.get("up_in", {})
-        up_away = zones.get("up_away", {})
-        down_in = zones.get("down_in", {})
-        down_away = zones.get("down_away", {})
-
-        # Find our hitter's strongest zone by EV
-        zone_evs = {}
-        for zn, zd in zones.items():
-            if zn.startswith("chase"):
-                continue
-            zev = zd.get("avg_ev")
-            if pd.notna(zev) and zd.get("n", 0) >= 5:
-                zone_evs[zn] = zev
-
-        if zone_evs:
-            best_zone = max(zone_evs, key=zone_evs.get)
-            best_ev = zone_evs[best_zone]
-            # Bonus if pitcher throws to our hot zone
-            if "up" in best_zone and pd.notna(loc_high) and loc_high > 30:
-                raw += min((loc_high - 30) * 0.15, 3)
-            if "down" in best_zone and pd.notna(loc_low) and loc_low > 40:
-                raw += min((loc_low - 40) * 0.15, 3)
-
-    # ── 5. Count leverage bonus ───────────────────────────────────────
-    # If our hitter performs well when ahead in the count
-    ahead = by_count.get("ahead", {})
-    behind = by_count.get("behind", {})
-    if ahead and behind:
-        ahead_ev = ahead.get("avg_ev")
-        behind_ev = behind.get("avg_ev")
-        if pd.notna(ahead_ev) and pd.notna(behind_ev) and ahead_ev > behind_ev + 3:
-            # Our hitter is a count-leverager — bonus if pitcher walks people
-            if pd.notna(bb_pct) and bb_pct > 8:
-                raw += 1.5
-
-    return float(np.clip(raw, 15, 85))
-
-
 def _pick_top_note(result_dict, max_len=28):
     """Extract the most useful short note from a matchup result."""
     recs = result_dict.get("recommendations", [])
@@ -2840,7 +2670,8 @@ def _draw_matchup_header(ax):
 
 
 def _draw_pitching_matchups(ax, pitching_matchups, pack, dav_arsenals,
-                            offensive_matchups=None, bryant_pitcher_profiles=None):
+                            offensive_matchups=None, bryant_pitcher_profiles=None,
+                            all_pitching_scores=None):
     """Draw the 'OUR PITCHING vs THEIR LINEUP' table."""
     ax.axis("off")
     ax.set_title("OUR PITCHING vs THEIR LINEUP", fontsize=10, fontweight="bold",
@@ -2874,7 +2705,7 @@ def _draw_pitching_matchups(ax, pitching_matchups, pack, dav_arsenals,
     for h_name in sorted_hitters[:11]:
         best_pitcher, best_res = pitching_matchups[h_name][0]
         score = best_res["overall_score"]
-        grade = _score_to_grade(score)
+        grade = _score_to_grade(score, all_pitching_scores)
         bats = best_res.get("bats", "?")
         if bats and len(bats) > 1:
             bats = bats[0]
@@ -3361,7 +3192,7 @@ def _build_pitching_matrix(dav_arsenals, bryant_hitter_profiles):
         for p_name, ars in dav_arsenals.items():
             try:
                 res = _score_pitcher_vs_hitter(ars, h_prof)
-                if res and "overall_score" in res:
+                if res and "overall_score" in res and pd.notna(res["overall_score"]):
                     matrix[h_name][p_name] = res
             except Exception:
                 pass
@@ -3451,7 +3282,8 @@ def _render_pitching_matrix_page(pack, pitching_matrix, ordered_pitchers,
                                  dav_arsenals, bryant_hitter_profiles,
                                  pitching_matchups, offensive_matrix,
                                  bryant_pitcher_profiles,
-                                 dav_hitter_profiles=None):
+                                 dav_hitter_profiles=None,
+                                 all_pitching_scores=None):
     """Full-page color-coded pitching matchup matrix.
 
     Rows = Bryant hitters, Columns = Davidson pitchers (ordered by role).
@@ -3540,7 +3372,7 @@ def _render_pitching_matrix_page(pack, pitching_matrix, ordered_pitchers,
             res = pitching_matrix[h_name].get(p_name)
             if res:
                 score = res["overall_score"]
-                grade = _score_to_grade(score)
+                grade = _score_to_grade(score, all_pitching_scores)
                 row.append(grade)
                 if is_injured:
                     colors.append("#e0e0e0")  # muted gray for injured
@@ -3718,9 +3550,9 @@ def _render_pitching_matrix_page(pack, pitching_matrix, ordered_pitchers,
     # Grade methodology note
     y_meth = y - 0.16
     ax_footer.text(0.02, y_meth,
-        "METHODOLOGY:  24-factor composite per pitch type — Stuff+ 13%, Usage 18%, Tunnel 10%, "
-        "Our Whiff/CSW/Chase 25%, Their 2K Whiff 8%, Command+ 8%, Zone Exploit 5%, Platoon 4%, "
-        "wOBA Split 6%, IVB/Velo/Break 10%, Hitter K-prone/Contact/Barrel/Swing 12%.  "
+        "METHODOLOGY: 8-factor composite per pitch type — Whiff Generation 18%, Stuff Quality 15%, Command 15%, "
+        "Contact Suppression 14%, Chase Exploitation 12%, Tunnel/Deception 10%, Platoon/Split 8%, Zone Exploitation 8%.  "
+        "Usage% weights pitches in overall score but is not a scored factor.  "
         "Grades reflect relative matchup edge, not absolute pitcher quality.  "
         "Larger pitch samples yield more reliable grades.",
         fontsize=5, color="#999", transform=ax_footer.transAxes, va="top",
@@ -5613,20 +5445,27 @@ def main():
     print("\n--- Generating MATCHUP STRATEGY page ---")
     try:
         dav_data = load_davidson_data()
-        print(f"  Davidson data: {len(dav_data)} rows")
+        # Filter out scrimmage/intrasquad data (DAV vs DAV) — games only
+        dav_data = dav_data[~((dav_data["PitcherTeam"] == "DAV_WIL") & (dav_data["BatterTeam"] == "DAV_WIL"))].copy()
+        print(f"  Davidson data: {len(dav_data)} rows (games only, no scrimmages)")
     except Exception as e:
         print(f"  WARNING: Could not load Davidson data: {e}")
         dav_data = pd.DataFrame()
 
-    # Build Davidson pitcher arsenals
+    # Build Davidson pitcher arsenals (last 2 seasons only)
     dav_arsenals = {}
     if not dav_data.empty:
+        if "Season" in dav_data.columns:
+            available_seasons = sorted(dav_data["Season"].dropna().unique())
+            recent_seasons = available_seasons[-2:] if len(available_seasons) >= 2 else available_seasons
+        else:
+            recent_seasons = None
         for name in ROSTER_2026:
             pos = POSITION.get(name, "")
             if "RHP" not in pos and "LHP" not in pos:
                 continue
             try:
-                ars = _get_our_pitcher_arsenal(dav_data, name)
+                ars = _get_our_pitcher_arsenal(dav_data, name, season_filter=recent_seasons)
                 if ars:
                     dav_arsenals[name] = ars
             except Exception:
@@ -5705,6 +5544,14 @@ def main():
     offensive_matrix, sorted_bp_pitchers, hitter_avg_scores = _build_offensive_matrix(
         dav_hitter_profiles, bryant_pitcher_profiles)
 
+    # Collect all pitching scores for percentile-based grading
+    all_pitch_scores = []
+    for h_name, h_res in pitching_matrix.items():
+        all_pitch_scores.extend(
+            r["overall_score"] for r in h_res.values()
+            if isinstance(r, dict) and "overall_score" in r
+            and pd.notna(r["overall_score"]))
+
     print(f"  Pitching matrix: {len(pitching_matrix)} hitters × {len(ordered_pitchers)} pitchers")
     print(f"  Offensive matrix: {len(offensive_matrix)} hitters × {len(sorted_bp_pitchers)} pitchers")
 
@@ -5717,7 +5564,8 @@ def main():
         pack, pitching_matrix, ordered_pitchers,
         dav_arsenals, bryant_hitter_profiles,
         pitching_matchups, offensive_matrix, bryant_pitcher_profiles,
-        dav_hitter_profiles=dav_hitter_profiles)
+        dav_hitter_profiles=dav_hitter_profiles,
+        all_pitching_scores=all_pitch_scores)
     if fig1:
         matchup_pdf.savefig(fig1, bbox_inches="tight")
         plt.close(fig1)

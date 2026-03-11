@@ -1634,201 +1634,266 @@ def _top_sequences(seq_df, pitch_metrics=None, length=3, top_n=2):
     return results[:top_n]
 
 
-def _pitch_score_composite(pt_name, pt_data, hd, tun_df, platoon_label="Neutral", arsenal_data=None):
-    """Unified composite score (0-100) for one pitch vs one hitter.
-    Combines all available pitcher Trackman + hitter TrueMedia factors.
+_PITCHING_WEIGHTS_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "models", "pitching_scoring_weights.json",
+)
 
-    pt_data: dict with our_whiff, our_csw, our_chase, our_ev_against, stuff_plus, etc.
-    hd: dict with hitter data (whiff_2k_hard, whiff_2k_os, chase_pct, k_pct, etc.)
-    tun_df: DataFrame of tunnel grades
-    arsenal_data: dict with per-pitch arsenal info (for EffVelo, IVB, zone_eff)
+# Hardcoded fallback weights (sum to 100) — used when JSON not found.
+_PITCHING_WEIGHTS_FALLBACK = {
+    "stuff_quality": 15.0,
+    "whiff_generation": 18.0,
+    "contact_suppression": 14.0,
+    "command": 15.0,
+    "chase_exploitation": 12.0,
+    "platoon_split": 8.0,
+    "tunnel_deception": 10.0,
+    "zone_exploitation": 8.0,
+}
+
+_pitching_weights_cache = None
+
+
+def _load_pitching_weights():
+    """Load empirical weights from JSON, with hardcoded fallback."""
+    global _pitching_weights_cache
+    if _pitching_weights_cache is not None:
+        return _pitching_weights_cache
+    try:
+        import json
+        with open(_PITCHING_WEIGHTS_PATH, "r") as f:
+            _pitching_weights_cache = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        _pitching_weights_cache = _PITCHING_WEIGHTS_FALLBACK.copy()
+    return _pitching_weights_cache
+
+
+def _log5_whiff_rate(h_whiff, p_whiff, avg_whiff=0.22):
+    """Log5 method for combining hitter and pitcher whiff rates."""
+    h = max(min(h_whiff, 0.95), 0.05)
+    p = max(min(p_whiff, 0.95), 0.05)
+    a = max(min(avg_whiff, 0.95), 0.05)
+    num = h * p / a
+    den = num + (1 - h) * (1 - p) / (1 - a)
+    return num / den if den > 0 else avg_whiff
+
+
+def _pitch_score_composite(pt_name, pt_data, hd, tun_df,
+                           platoon_label="Neutral", arsenal_data=None):
+    """Empirically-weighted 8-factor composite (0-100) for one pitch vs one hitter.
+
+    Weights from ridge regression on D1 Trackman data (loaded from JSON).
+    Same signature as the previous 24-factor version — drop-in replacement.
+
+    Usage% is NOT a scored factor; it remains the weighting mechanism when
+    _score_pitcher_vs_hitter() aggregates per-pitch scores into the overall.
+
+    Factors:
+      1. Stuff Quality       — velo/IVB/HB z-scores + Stuff+
+      2. Whiff Generation    — Log5(pitcher_whiff, hitter_whiff_tendency)
+      3. Contact Suppression — EV/barrel against + hitter weakness
+      4. Command             — Command+ and/or CSW%
+      5. Chase Exploitation  — pitcher chase gen × hitter chase tendency + K-prone
+      6. Platoon/Split       — platoon advantage + wOBA split
+      7. Tunnel/Deception    — best tunnel score + EffVelo deviation
+      8. Zone Exploitation   — zone quality (CSW/whiff) × PZM × hitter exposure
     """
+    from config import STUFF_WEIGHTS, STUFF_WEIGHTS_DEFAULT
+
+    weights_dict = _load_pitching_weights()
     components, weights = [], []
     is_hard = pt_name in _hard_pitches
+    ars_pt = arsenal_data or {}
 
-    # 1. Stuff+ (13%) — raw pitch quality: 70-130 → 0-100
+    # ── 1. Stuff Quality ──────────────────────────────────────────────────
     sp = pt_data.get("stuff_plus", np.nan)
+    ivb_val = ars_pt.get("ivb", pt_data.get("ivb", np.nan))
+    raw_velo = ars_pt.get("avg_velo", pt_data.get("velo", np.nan))
+    hb_val = ars_pt.get("hb", pt_data.get("hb", np.nan))
+    ext = ars_pt.get("extension", np.nan)
+
+    stuff_score = np.nan
+    sw = STUFF_WEIGHTS.get(pt_name, STUFF_WEIGHTS_DEFAULT)
+    _d1 = {
+        "Fastball":  (89.5, 3.0, 14.0, 3.5, -7.0, 3.0),
+        "Sinker":    (88.0, 3.0, 8.0, 3.0, -14.0, 3.5),
+        "Cutter":    (85.0, 3.0, 4.0, 3.0, 1.0, 3.0),
+        "Slider":    (81.0, 3.0, 1.0, 3.0, 3.0, 3.5),
+        "Curveball": (77.0, 3.0, -5.0, 4.0, 6.0, 3.5),
+        "Changeup":  (82.0, 3.0, 8.0, 3.5, -14.0, 3.5),
+        "Sweeper":   (78.0, 3.0, -2.0, 3.5, 14.0, 4.0),
+        "Splitter":  (84.0, 3.0, 3.0, 3.0, -10.0, 3.0),
+    }
+    bl = _d1.get(pt_name)
+    if bl:
+        z_parts, z_wts = [], []
+        if not pd.isna(raw_velo):
+            z_parts.append((raw_velo - bl[0]) / bl[1])
+            z_wts.append(abs(sw.get("RelSpeed", 1.0)))
+        if not pd.isna(ivb_val):
+            z_parts.append((ivb_val - bl[2]) / bl[3])
+            z_wts.append(abs(sw.get("InducedVertBreak", 1.0)))
+        if not pd.isna(hb_val):
+            z_parts.append((hb_val - bl[4]) / bl[5])
+            z_wts.append(abs(sw.get("HorzBreak", 1.0)))
+        if z_parts:
+            wz = sum(z * w for z, w in zip(z_parts, z_wts)) / sum(z_wts)
+            stuff_score = min(max(50 + wz * 25, 0), 100)
+
     if not pd.isna(sp):
-        components.append(min(max((sp - 70) / 60 * 100, 0), 100)); weights.append(13)
+        sp_score = min(max((sp - 70) / 60 * 100, 0), 100)
+        if not pd.isna(stuff_score):
+            stuff_score = 0.4 * stuff_score + 0.6 * sp_score
+        else:
+            stuff_score = sp_score
 
-    # 2. Our Whiff% (10%) — 0-50% → 0-100
+    if not pd.isna(stuff_score):
+        components.append(stuff_score)
+        weights.append(weights_dict.get("stuff_quality", 15.0))
+
+    # ── 2. Whiff Generation ───────────────────────────────────────────────
     wh = pt_data.get("our_whiff", pt_data.get("whiff_pct", np.nan))
-    if not pd.isna(wh):
-        components.append(min(wh / 50 * 100, 100)); weights.append(10)
-
-    # 3. Our CSW% (7%) — 0-40% → 0-100
-    csw = pt_data.get("our_csw", pt_data.get("csw_pct", np.nan))
-    if not pd.isna(csw):
-        components.append(min(csw / 40 * 100, 100)); weights.append(7)
-
-    # 4. Their 2K Whiff Rate (8%) — matched to pitch class (hard/offspeed) + our hand
     their_2k = hd.get("whiff_2k_hard" if is_hard else "whiff_2k_os", np.nan)
-    if not pd.isna(their_2k):
-        components.append(min(their_2k / 40 * 100, 100)); weights.append(8)
+    their_sw_key = _swing_map.get(pt_name, "")
+    their_sw = hd.get(their_sw_key, np.nan) if their_sw_key else np.nan
 
-    # 5. Chase Exploitation (8%) — our chase generation × their chase tendency
+    if not pd.isna(wh):
+        p_whiff_rate = wh / 100.0
+        # Build hitter whiff tendency from 2K whiff + swing rate blend
+        h_whiff_tendency = np.nan
+        if not pd.isna(their_2k):
+            h_whiff_tendency = their_2k / 100.0
+        if not pd.isna(their_sw):
+            sw_tendency = their_sw / 100.0 * 0.4  # scale down
+            if not pd.isna(h_whiff_tendency):
+                h_whiff_tendency = 0.7 * h_whiff_tendency + 0.3 * sw_tendency
+            else:
+                h_whiff_tendency = sw_tendency
+        if pd.isna(h_whiff_tendency):
+            # Fallback: contact% → whiff tendency
+            contact = hd.get("contact_pct", np.nan)
+            if not pd.isna(contact):
+                h_whiff_tendency = (100 - contact) / 100.0
+            else:
+                h_whiff_tendency = 0.22
+
+        expected = _log5_whiff_rate(p_whiff_rate, h_whiff_tendency)
+        whiff_score = min(max(expected / 0.50 * 100, 0), 100)
+        components.append(whiff_score)
+        weights.append(weights_dict.get("whiff_generation", 18.0))
+
+    # ── 3. Contact Suppression ────────────────────────────────────────────
+    ev_ag = pt_data.get("our_ev_against", pt_data.get("ev_against", np.nan))
+    brl_ag = ars_pt.get("barrel_pct_against", np.nan)
+    h_ev = hd.get("ev", np.nan)
+    h_brl = hd.get("barrel_pct", np.nan)
+
+    cs_parts, cs_wts = [], []
+    if not pd.isna(ev_ag):
+        cs_parts.append(min(max((96 - ev_ag) / 18 * 100, 0), 100))
+        cs_wts.append(0.35)
+    if not pd.isna(brl_ag):
+        cs_parts.append(min(max((15 - brl_ag) / 15 * 100, 0), 100))
+        cs_wts.append(0.35)
+    if not pd.isna(h_ev):
+        ev_weak = min(max((95 - h_ev) / 17 * 100, 0), 100)
+        if not pd.isna(h_brl):
+            brl_weak = min(max((15 - h_brl) / 13 * 100, 0), 100)
+            cs_parts.append((ev_weak + brl_weak) / 2)
+        else:
+            cs_parts.append(ev_weak)
+        cs_wts.append(0.30)
+    if cs_parts:
+        cs_score = sum(c * w for c, w in zip(cs_parts, cs_wts)) / sum(cs_wts)
+        components.append(cs_score)
+        weights.append(weights_dict.get("contact_suppression", 14.0))
+
+    # ── 4. Command ────────────────────────────────────────────────────────
+    cmd_plus = ars_pt.get("command_plus", np.nan)
+    csw = pt_data.get("our_csw", pt_data.get("csw_pct", np.nan))
+
+    cmd_score_val, csw_score_val = np.nan, np.nan
+    if not pd.isna(cmd_plus):
+        cmd_score_val = min(max((cmd_plus - 70) / 60 * 100, 0), 100)
+        if is_hard:
+            cmd_score_val = min(cmd_score_val * 1.15, 100)
+    if not pd.isna(csw):
+        csw_score_val = min(csw / 40 * 100, 100)
+
+    if not pd.isna(cmd_score_val) and not pd.isna(csw_score_val):
+        components.append(0.6 * cmd_score_val + 0.4 * csw_score_val)
+        weights.append(weights_dict.get("command", 15.0))
+    elif not pd.isna(cmd_score_val):
+        components.append(cmd_score_val)
+        weights.append(weights_dict.get("command", 15.0))
+    elif not pd.isna(csw_score_val):
+        components.append(csw_score_val)
+        weights.append(weights_dict.get("command", 15.0))
+
+    # ── 5. Chase Exploitation ─────────────────────────────────────────────
     our_chase = pt_data.get("our_chase", pt_data.get("chase_pct", np.nan))
     their_chase = hd.get("chase_pct", np.nan)
-    if not pd.isna(our_chase) and not pd.isna(their_chase):
-        components.append(min((our_chase * their_chase) / (30 * 30) * 100, 100)); weights.append(8)
-
-    # 6. Their Swing Rate vs Pitch Class (5%)
-    sw_key = _swing_map.get(pt_name, "")
-    their_sw = hd.get(sw_key, np.nan) if sw_key else np.nan
-    if not pd.isna(their_sw):
-        components.append(min(their_sw / 70 * 100, 100)); weights.append(5)
-
-    # 7. Tunnel Score (7%) — BEST tunnel score involving this pitch (not average)
-    if isinstance(tun_df, pd.DataFrame) and not tun_df.empty:
-        t_m = tun_df[(tun_df["Pitch A"] == pt_name) | (tun_df["Pitch B"] == pt_name)]
-        if not t_m.empty:
-            components.append(t_m["Tunnel Score"].max()); weights.append(10)
-
-    # 8. EV Against (5%) — penalize pitches we get hit hard on
-    ev_ag = pt_data.get("our_ev_against", pt_data.get("ev_against", np.nan))
-    if not pd.isna(ev_ag):
-        components.append(min(max((96 - ev_ag) / 18 * 100, 0), 100)); weights.append(5)
-
-    # 9. K-Prone Factor (4%) — high K hitters are exploitable (equal for all pitches)
     k_pct = hd.get("k_pct", np.nan)
-    if not pd.isna(k_pct):
-        k_score = min(max((k_pct - 10) / 25 * 100, 0), 100)
-        components.append(k_score); weights.append(4)
+    contact_pct = hd.get("contact_pct", np.nan)
 
-    # 10. Platoon Factor (4%)
+    if not pd.isna(our_chase) and not pd.isna(their_chase):
+        baseline_sq = 28 * 28
+        raw_chase = (our_chase * their_chase) / baseline_sq * 50
+        if not pd.isna(k_pct):
+            raw_chase += min(max((k_pct - 15) / 20 * 15, 0), 15)
+        if not pd.isna(contact_pct) and contact_pct < 80:
+            raw_chase += (80 - contact_pct) / 20 * 10
+        components.append(min(max(raw_chase, 0), 100))
+        weights.append(weights_dict.get("chase_exploitation", 12.0))
+
+    # ── 6. Platoon/Split ──────────────────────────────────────────────────
+    plat_parts, plat_wts = [], []
     plat_score = 50
     if "Adv" in platoon_label:
         plat_score = 80
     elif "Disadv" in platoon_label:
         plat_score = 25
-    components.append(plat_score); weights.append(4)
+    plat_parts.append(plat_score); plat_wts.append(0.4)
 
-    # 11. wOBA Split (6%) — how well hitter performs vs our hand
     woba_split = hd.get("woba_split", np.nan)
     if not pd.isna(woba_split):
-        components.append(min(max((0.450 - woba_split) / 0.250 * 100, 0), 100)); weights.append(6)
+        split_score = min(max((0.450 - woba_split) / 0.250 * 100, 0), 100)
+        plat_parts.append(split_score); plat_wts.append(0.6)
 
-    # 12. Hitter Contact% (3%) — LOW contact = more exploitable
-    contact = hd.get("contact_pct", np.nan)
-    if not pd.isna(contact):
-        components.append(min(max((95 - contact) / 35 * 100, 0), 100)); weights.append(3)
+    components.append(sum(c * w for c, w in zip(plat_parts, plat_wts)) / sum(plat_wts))
+    weights.append(weights_dict.get("platoon_split", 8.0))
 
-    # 13. Hitter EV + Barrel weakness (3%)
-    h_ev = hd.get("ev", np.nan)
-    h_brl = hd.get("barrel_pct", np.nan)
-    if not pd.isna(h_ev):
-        ev_weak = min(max((95 - h_ev) / 17 * 100, 0), 100)
-        if not pd.isna(h_brl):
-            brl_weak = min(max((15 - h_brl) / 13 * 100, 0), 100)
-            components.append((ev_weak + brl_weak) / 2); weights.append(3)
-        else:
-            components.append(ev_weak); weights.append(3)
+    # ── 7. Tunnel/Deception ───────────────────────────────────────────────
+    tun_score = np.nan
+    if isinstance(tun_df, pd.DataFrame) and not tun_df.empty:
+        t_m = tun_df[(tun_df["Pitch A"] == pt_name) | (tun_df["Pitch B"] == pt_name)]
+        if not t_m.empty:
+            tun_score = t_m["Tunnel Score"].max()
 
-    # 14. IVB (4%) — fastball-only: high IVB = harder to square up
-    ars_pt = arsenal_data or {}
-    ivb_val = ars_pt.get("ivb", pt_data.get("ivb", np.nan))
-    if is_hard and not pd.isna(ivb_val):
-        # 10" IVB → 0, 16" → 50, 22"+ → 100
-        components.append(min(max((ivb_val - 10) / 12 * 100, 0), 100)); weights.append(4)
-
-    # 15. EffVelo (3%) — higher effective velocity = harder to catch up
     eff_velo = ars_pt.get("eff_velo", np.nan)
-    if not pd.isna(eff_velo):
-        # 82 → 0, 88 → 50, 94+ → 100
-        components.append(min(max((eff_velo - 82) / 12 * 100, 0), 100)); weights.append(3)
+    if not pd.isna(tun_score) and not pd.isna(eff_velo):
+        ev_score = min(max((eff_velo - 82) / 12 * 100, 0), 100)
+        components.append(0.75 * tun_score + 0.25 * ev_score)
+        weights.append(weights_dict.get("tunnel_deception", 10.0))
+    elif not pd.isna(tun_score):
+        components.append(tun_score)
+        weights.append(weights_dict.get("tunnel_deception", 10.0))
+    elif not pd.isna(eff_velo):
+        components.append(min(max((eff_velo - 82) / 12 * 100, 0), 100))
+        weights.append(weights_dict.get("tunnel_deception", 10.0))
 
-    # 16. Our Usage (18%) — pitches we actually throw should rank higher; low-usage pitches
-    #     have small samples and unreliable metrics. Steeper scaling separates mid-usage better.
-    usage_pct = ars_pt.get("usage_pct", pt_data.get("usage", np.nan))
-    if not pd.isna(usage_pct):
-        # Steeper scaling: 0% → 0, 10% → 25, 20% → 50, 40%+ → 100
-        # Floor of 30 for any pitch >= 15% usage so true secondaries aren't crushed
-        # Ceiling of 15 for pitches < 5% usage (rarely thrown = unreliable)
-        raw_usage = min(max(usage_pct / 40 * 100, 0), 100)
-        if usage_pct < 5:
-            raw_usage = min(raw_usage, 15)
-        elif usage_pct >= 15:
-            raw_usage = max(raw_usage, 30)
-        components.append(raw_usage); weights.append(18)
-
-    # 18. Raw Velo (3%) — 93 mph FB should score higher than 86 mph; harder to react to
-    raw_velo = ars_pt.get("avg_velo", pt_data.get("velo", np.nan))
-    if not pd.isna(raw_velo):
-        if is_hard:
-            # Hard: 82 → 0, 88 → 50, 94+ → 100
-            components.append(min(max((raw_velo - 82) / 12 * 100, 0), 100)); weights.append(3)
-        else:
-            # Offspeed: big velo diff from hard stuff is good; 70 → 30, 78 → 55, 85+ → 80
-            components.append(min(max((85 - raw_velo) / 15 * 100, 10), 90)); weights.append(2)
-
-    # 19. Barrel% Against (3%) — low barrel rate = effective pitch, penalize hittable pitches
-    brl_ag = ars_pt.get("barrel_pct_against", np.nan)
-    if not pd.isna(brl_ag):
-        # 0% → 100, 5% → 67, 10% → 33, 15%+ → 0
-        components.append(min(max((15 - brl_ag) / 15 * 100, 0), 100)); weights.append(3)
-
-    # 20. Horizontal Break (3%) — offspeed only: more HB = more sweep/run = harder to barrel
-    hb_val = ars_pt.get("hb", pt_data.get("hb", np.nan))
-    if not is_hard and not pd.isna(hb_val):
-        abs_hb = abs(hb_val)
-        # 2" → 0, 8" → 50, 14"+ → 100
-        components.append(min(max((abs_hb - 2) / 12 * 100, 0), 100)); weights.append(3)
-
-    # 21. InZoneSwing% (2%) — aggressive in-zone swingers are more exploitable
-    iz_swing = hd.get("iz_swing_pct", np.nan)
-    if not pd.isna(iz_swing):
-        # 55% → 0, 65% → 50, 75%+ → 100  (high = they swing a lot in zone = exploitable)
-        components.append(min(max((iz_swing - 55) / 20 * 100, 0), 100)); weights.append(2)
-
-    # 22. Extension (2%) — longer extension = closer release = more deception
-    ext = ars_pt.get("extension", np.nan)
-    if not pd.isna(ext):
-        # 5.0 ft → 0, 6.0 → 50, 7.0+ → 100
-        components.append(min(max((ext - 5.0) / 2.0 * 100, 0), 100)); weights.append(2)
-
-    # 23. Command+ (8%) — high command = more accurate; especially valuable for hard pitches
-    #     that need precise location to avoid getting hit hard
-    cmd_plus = ars_pt.get("command_plus", np.nan)
-    if not pd.isna(cmd_plus):
-        # 70 → 0, 100 → 50, 130+ → 100
-        cmd_score = min(max((cmd_plus - 70) / 60 * 100, 0), 100)
-        if is_hard:
-            cmd_score = min(cmd_score * 1.2, 100)
-        components.append(cmd_score); weights.append(8)
-
-    # 24. Swing Hole Match (4%) — pitch type matched to hitter's zone vulnerability
-    zone_vuln = hd.get("zone_vuln", {}) if hd else {}
-    if zone_vuln.get("available"):
-        _zvmap = {
-            "Fastball": "vuln_up",
-            "Sinker": "vuln_down",
-            "Slider": lambda zv: np.nanmean([zv.get("vuln_down", np.nan), zv.get("vuln_away", np.nan)]),
-            "Curveball": "vuln_chase_low",
-            "Changeup": "vuln_down",
-            "Sweeper": lambda zv: np.nanmean([zv.get("vuln_away", np.nan), zv.get("vuln_chase_away", np.nan)]),
-            "Cutter": lambda zv: np.nanmean([zv.get("vuln_away", np.nan), zv.get("vuln_inside", np.nan)]),
-            "Splitter": "vuln_chase_low",
-            "Knuckle Curve": "vuln_chase_low",
-        }
-        zv_lookup = _zvmap.get(pt_name)
-        zv_score = np.nan
-        if callable(zv_lookup):
-            zv_score = zv_lookup(zone_vuln)
-        elif isinstance(zv_lookup, str):
-            zv_score = zone_vuln.get(zv_lookup, np.nan)
-        if not pd.isna(zv_score):
-            components.append(min(max(zv_score, 0), 100)); weights.append(4)
-
-    # 17. Zone Exploitation (5%) — cross our best zone with their zone weakness
-    #     Formula: csw*0.6 + whiff*0.4, pitch-design multipliers (PZM),
-    #     hitter exposure boosts from TrueMedia pitch location data.
+    # ── 8. Zone Exploitation ──────────────────────────────────────────────
     ze = ars_pt.get("zone_eff", {})
+    zone_vuln = hd.get("zone_vuln", {}) if hd else {}
+
+    ze_score = np.nan
+
+    # A) Zone-eff approach: cross our best zone with PZM and hitter exposure
     if ze and hd:
         hitter_high = hd.get("high_pct", np.nan)
         hitter_low = hd.get("low_pct", np.nan)
         hitter_in = hd.get("inside_pct", np.nan)
         hitter_out = hd.get("outside_pct", np.nan)
-        # Pitch-design zone multipliers — mirrors _get_pzm exactly (incl glove/arm)
         _ze_ivb = ars_pt.get("ivb", np.nan)
         if is_hard:
             if pt_name == "Sinker":
@@ -1846,16 +1911,15 @@ def _pitch_score_composite(pt_name, pt_data, hd, tun_df, platoon_label="Neutral"
                 _ze_pzm = {"up": 0.2, "down": 1.4, "chase_low": 1.4, "glove": 1.1, "arm": 1.0}
             else:
                 _ze_pzm = {"up": 0.3, "down": 1.2, "chase_low": 1.3, "glove": 1.3, "arm": 0.8}
-        # Map hitter inside/outside to pitcher arm/glove based on platoon
         _same = "Adv" in platoon_label
         _in_z = "arm" if _same else "glove"
         _out_z = "glove" if _same else "arm"
         best_exploit = 0
-        for zn, zd in ze.items():
-            if zd.get("n", 0) < 5:
+        for zn, zd_item in ze.items():
+            if zd_item.get("n", 0) < 5:
                 continue
-            zone_whiff = zd.get("whiff_pct", 0) or 0
-            zone_csw = zd.get("csw_pct", 0) or 0
+            zone_whiff = zd_item.get("whiff_pct", 0) or 0
+            zone_csw = zd_item.get("csw_pct", 0) or 0
             zone_quality = (zone_csw * 0.6 + zone_whiff * 0.4) * _ze_pzm.get(zn, 1.0)
             exposure_boost = 1.0
             if zn == "up" and not pd.isna(hitter_high) and hitter_high > 30:
@@ -1872,8 +1936,35 @@ def _pitch_score_composite(pt_name, pt_data, hd, tun_df, platoon_label="Neutral"
                     exposure_boost = 1.3
             best_exploit = max(best_exploit, zone_quality * exposure_boost)
         if best_exploit > 0:
-            components.append(min(best_exploit / 40 * 100, 100)); weights.append(5)
+            ze_score = min(best_exploit / 40 * 100, 100)
 
+    # B) Zone vulnerability match: pitch type → hitter's zone weakness
+    if pd.isna(ze_score) and zone_vuln.get("available"):
+        _zvmap = {
+            "Fastball": "vuln_up",
+            "Sinker": "vuln_down",
+            "Slider": lambda zv: np.nanmean([zv.get("vuln_down", np.nan), zv.get("vuln_away", np.nan)]),
+            "Curveball": "vuln_chase_low",
+            "Changeup": "vuln_down",
+            "Sweeper": lambda zv: np.nanmean([zv.get("vuln_away", np.nan), zv.get("vuln_chase_away", np.nan)]),
+            "Cutter": lambda zv: np.nanmean([zv.get("vuln_away", np.nan), zv.get("vuln_inside", np.nan)]),
+            "Splitter": "vuln_chase_low",
+            "Knuckle Curve": "vuln_chase_low",
+        }
+        zv_lookup = _zvmap.get(pt_name)
+        zv_val = np.nan
+        if callable(zv_lookup):
+            zv_val = zv_lookup(zone_vuln)
+        elif isinstance(zv_lookup, str):
+            zv_val = zone_vuln.get(zv_lookup, np.nan)
+        if not pd.isna(zv_val):
+            ze_score = min(max(zv_val, 0), 100)
+
+    if not pd.isna(ze_score):
+        components.append(ze_score)
+        weights.append(weights_dict.get("zone_exploitation", 8.0))
+
+    # ── Weighted sum with NaN redistribution ──
     if not weights:
         return 50
     return sum(c * w for c, w in zip(components, weights)) / sum(weights)

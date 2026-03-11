@@ -22,7 +22,7 @@ _CG_MAP = {
     (0, 0): "first_pitch",
     (2, 0): "ahead", (3, 0): "ahead", (3, 1): "ahead", (2, 1): "ahead",
     (0, 1): "behind", (0, 2): "behind", (1, 2): "behind",
-    (1, 1): "even", (2, 2): "even",
+    (1, 0): "even", (1, 1): "even", (2, 2): "even",
     (3, 2): "full",
 }
 
@@ -438,19 +438,21 @@ def _safe_hd(v) -> float:
         return float("nan")
 
 
-def _hitter_gametheory_delta(
+def _hitter_overlay_adjustments(
     pitch_name: str,
     hd: Dict,
     b: int,
     s: int,
-    on1b: bool,
-    on2b: bool,
-    on3b: bool,
-    outs: int,
+    on1b: bool = False,
+    on2b: bool = False,
+    on3b: bool = False,
+    outs: int = 0,
 ) -> Tuple[float, List[str]]:
-    """Hitter-specific game-theory adjustments shared by ΔRE and ΔWPA recommenders.
+    """Single source of truth for hitter-specific adjustments.
 
-    Returns (delta, reasons) in old-system points; caller converts to ΔRE/ΔWP units.
+    Called by both the composite path (_count_adjustments) and the ΔRE/ΔWP
+    path (_recommend_pitch_core).  Returns (delta, reasons) in old-system
+    points; the ΔRE/ΔWP caller converts via overlay_scale.
     """
     delta = 0.0
     reasons: List[str] = []
@@ -489,7 +491,9 @@ def _hitter_gametheory_delta(
             delta += boost
             reasons.append(f"FP: hitter attacks hard {h_fp_swing_hard:.0f}%, offspeed boost")
         if not np.isnan(h_fp_swing_ch) and h_fp_swing_ch > 35 and pitch_name in {"Changeup", "Splitter"}:
-            delta += min((h_fp_swing_ch - 35) / 15 * 2.0, 2.0)
+            ch_boost = min((h_fp_swing_ch - 35) / 15 * 2.0, 2.0)
+            delta += ch_boost
+            reasons.append(f"FP: hitter swings at CH {h_fp_swing_ch:.0f}%")
 
     # Hitter chase at hitter's counts (not 3-ball)
     if b >= 2 and b > s and b < 3 and is_offspeed:
@@ -525,7 +529,7 @@ def _hitter_gametheory_delta(
                         delta -= 1.0
                         reasons.append(f"hitter rakes in {cg} counts (EV {cg_ev:.0f})")
 
-    # GB hitter DP boost
+    # GB hitter DP boost (only in DP situation: R1 only, <2 outs)
     if on1b and not on2b and not on3b and outs < 2:
         if not np.isnan(h_gb) and h_gb > 50 and pitch_name in _GB_PITCHES:
             boost = min((h_gb - 50) / 15 * 3.0, 3.0)

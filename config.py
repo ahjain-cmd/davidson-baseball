@@ -331,6 +331,359 @@ WOFFORD_POSITION = {
     "Rembish, Logan": "RHP", "Vargo, Lucas": "RHP",
 }
 
+# ── LMU (Loyola Marymount) 2026 Roster ────────
+LMU_TEAM_NAME = "Loyola Marymount"
+LMU_COMBINED_TEAM_ID = "LMU_COMBINED_2026"
+LMU_TM_TEAM_ID = 730149120
+
+LMU_TRANSFERS = {
+    # D1 transfers (new in 2026, previous D1 school for 2025 data)
+    "Whitton, Cooper": "Washington",
+    "Wadas, Zach": "TCU",
+    "Stiveson, Nate": "Stanford",
+    "Riera, Niko": "UC Irvine",
+    "Champion, Matt": "Oregon",
+    "Estrella, Andrew": "UCF",
+    "Gallegos, Elliot": "UC Santa Barbara",
+}
+
+LMU_ROSTER_2026 = {
+    # Returning from 2025
+    "Behrens, Adam", "Laine, Avery", "Ghiorso, DJ", "Dunn, JD",
+    "Fried, Jacob", "Geis, Jake", "Lyall, Jake", "Johnson, Jonah",
+    "Moreno, Matthew", "Malone, Noah", "Warady, Tanner", "Bender, Zach",
+    "Williams, Zion", "Jacobsen, Gavin", "Casale, Johnny", "Danos, Luca",
+    "Chavez, Alex", "Stucky, Cole",
+    # New in 2026 — D1 transfers
+    "Whitton, Cooper", "Wadas, Zach", "Stiveson, Nate", "Riera, Niko",
+    "Champion, Matt", "Estrella, Andrew", "Gallegos, Elliot",
+    # New in 2026 — JC / other transfers
+    "Singh, Dylan", "Wall, Jaxson", "Elward, Luke", "Johnson, Alec",
+    "Yamanaka, Eli", "DenDekker, Zach", "Carmona Jr., Jose", "Gabay, Lucas",
+    # New in 2026 — freshmen
+    "Schneider, Max", "Sweeney, Caleb", "Klosek, Richie", "Friend, Travis",
+    "Gamboa, Alex", "Mhoon, Andrew", "Ortiz, Jordan", "Gurney, Win",
+    "Erdmann, Eric", "Aguirre, David",
+}
+
+LMU_JERSEY = {
+    "Moreno, Matthew": 0, "Wall, Jaxson": 2, "Singh, Dylan": 3,
+    "Malone, Noah": 4, "Dunn, JD": 5, "Estrella, Andrew": 6,
+    "Williams, Zion": 7, "Jacobsen, Gavin": 8, "Casale, Johnny": 9,
+    "Stiveson, Nate": 11, "Schneider, Max": 12, "Sweeney, Caleb": 13,
+    "DenDekker, Zach": 14, "Klosek, Richie": 15, "Lyall, Jake": 16,
+    "Gallegos, Elliot": 17, "Ghiorso, DJ": 18, "Danos, Luca": 19,
+    "Geis, Jake": 20, "Riera, Niko": 21, "Erdmann, Eric": 22,
+    "Johnson, Jonah": 23, "Behrens, Adam": 24, "Elward, Luke": 25,
+    "Champion, Matt": 26, "Warady, Tanner": 27, "Aguirre, David": 28,
+    "Yamanaka, Eli": 29, "Friend, Travis": 30, "Johnson, Alec": 31,
+    "Gamboa, Alex": 32, "Mhoon, Andrew": 33, "Wadas, Zach": 34,
+    "Ortiz, Jordan": 35, "Chavez, Alex": 36, "Fried, Jacob": 37,
+    "Whitton, Cooper": 41, "Bender, Zach": 42, "Stucky, Cole": 45,
+    "Carmona Jr., Jose": 46, "Gabay, Lucas": 47, "Laine, Avery": 55,
+    "Gurney, Win": 99,
+}
+
+LMU_POSITION = {
+    # Hitters / position players
+    "Moreno, Matthew": "INF/RHP", "Wall, Jaxson": "UTL", "Malone, Noah": "OF",
+    "Dunn, JD": "OF", "Estrella, Andrew": "INF", "Williams, Zion": "OF",
+    "Casale, Johnny": "OF/LHP", "Stiveson, Nate": "UTL", "Lyall, Jake": "C",
+    "Ghiorso, DJ": "INF", "Danos, Luca": "INF", "Klosek, Richie": "OF/1B",
+    "Whitton, Cooper": "OF", "Wadas, Zach": "OF/1B", "Gamboa, Alex": "INF",
+    "Mhoon, Andrew": "INF", "Friend, Travis": "OF", "Ortiz, Jordan": "C",
+    "Gurney, Win": "OF/1B", "Erdmann, Eric": "1B/RHP", "Aguirre, David": "INF",
+    "Carmona Jr., Jose": "C", "Gabay, Lucas": "INF",
+    # Pitchers
+    "Behrens, Adam": "RHP", "Laine, Avery": "RHP", "Geis, Jake": "RHP",
+    "Johnson, Jonah": "RHP", "Warady, Tanner": "RHP", "Fried, Jacob": "RHP",
+    "Bender, Zach": "RHP", "Singh, Dylan": "LHP", "Elward, Luke": "RHP",
+    "Riera, Niko": "RHP", "Johnson, Alec": "LHP", "Champion, Matt": "INF/RHP",
+    "Schneider, Max": "RHP", "DenDekker, Zach": "RHP", "Sweeney, Caleb": "LHP",
+    "Yamanaka, Eli": "RHP", "Jacobsen, Gavin": "LHP", "Chavez, Alex": "RHP",
+    "Stucky, Cole": "RHP", "Gallegos, Elliot": "RHP",
+}
+
+# ── Lehigh 2026 Roster ────────
+LEHIGH_TEAM_NAME = "Lehigh"
+LEHIGH_COMBINED_TEAM_ID = "LEHIGH_COMBINED_2026"
+LEHIGH_TM_TEAM_ID = 730333184
+
+# Transfers: "Last, First" -> previous school search name.
+# Players NOT in this dict are assumed to have been at Lehigh for 2025.
+LEHIGH_TRANSFERS = {
+    "Fairhurst, Sam": "Catholic University",
+    "Esposito, Joey": "Rutgers",
+    # Remaining new pitchers (freshmen / JC — no D1 2025 data):
+    # Coughlin, Brandon; Nell, Christopher; Wilkes, Declan;
+    # Shepelsky, Jackson; Holman, Ryan; ONeill, Shane
+}
+
+LEHIGH_ROSTER_2026 = {
+    # Returning pitchers (on 2025 roster)
+    "Kochanowicz, Cole", "Leaman, Cole", "Andolina, David",
+    "Mulvehill, Jake", "O'Hearen, Liam", "Treonze, Max",
+    "Gyauch-Quirk, Noah", "Gariano, Ralph",
+    # New pitchers in 2026
+    "Coughlin, Brandon", "Nell, Christopher", "Wilkes, Declan",
+    "Shepelsky, Jackson", "Holman, Ryan", "Fairhurst, Sam", "ONeill, Shane",
+    "Ermigiotti, Julio", "Correll, Logan", "Hayden, Nick",
+    # Returning hitters
+    "Quinn, Aidan", "Patrizi, Dom", "Betances, Edwin", "Golier, Grady",
+    "Wirtz, Ian", "Frankovic, Jack", "Adelman, Jasper", "Esposito, Joey",
+    "Tsiaras, Matt", "Walewander, Owen", "Rogers, Raffaele", "Carvelli, Robbie",
+    "Cochran, Ryan", "Davis, Ryan", "Crawford, Trystan", "Lamar, Tommy",
+    "Kleckner, Bobby",
+    # New hitters in 2026
+    "Dantoni, Max", "Ivy, Parker", "Grasso, Robby", "Giardina, Silvio",
+    # Two-way players
+    "Ahearn, Cadeyrn",
+}
+
+LEHIGH_JERSEY = {
+    "Quinn, Aidan": 1, "Patrizi, Dom": 2, "Cochran, Ryan": 3,
+    "Giardina, Silvio": 4, "Walewander, Owen": 5, "Crawford, Trystan": 6,
+    "Coughlin, Brandon": 7, "ONeill, Shane": 8, "Frankovic, Jack": 9,
+    "Dantoni, Max": 10, "Lamar, Tommy": 11, "Adelman, Jasper": 12,
+    "Fairhurst, Sam": 13, "Golier, Grady": 14, "Rogers, Raffaele": 15,
+    "Kleckner, Bobby": 16, "Grasso, Robby": 17, "Carvelli, Robbie": 18,
+    "Holman, Ryan": 19, "O'Hearen, Liam": 20, "Leaman, Cole": 21,
+    "Esposito, Joey": 22, "Davis, Ryan": 23, "Shepelsky, Jackson": 24,
+    "Ermigiotti, Julio": 25, "Betances, Edwin": 27, "Treonze, Max": 28,
+    "Wilkes, Declan": 29, "Ivy, Parker": 30, "Correll, Logan": 31,
+    "Hayden, Nick": 32, "Wirtz, Ian": 34, "Gariano, Ralph": 37,
+    "Tsiaras, Matt": 38, "Kochanowicz, Cole": 40, "Andolina, David": 41,
+    "Gyauch-Quirk, Noah": 42, "Mulvehill, Jake": 43, "Ahearn, Cadeyrn": 44,
+    "Nell, Christopher": 45,
+}
+
+LEHIGH_POSITION = {
+    # Pure pitchers
+    "Kochanowicz, Cole": "RHP", "Leaman, Cole": "RHP", "Andolina, David": "RHP",
+    "Mulvehill, Jake": "LHP", "O'Hearen, Liam": "RHP", "Treonze, Max": "RHP",
+    "Gariano, Ralph": "LHP", "Nell, Christopher": "RHP", "Wilkes, Declan": "RHP",
+    "Shepelsky, Jackson": "RHP", "Holman, Ryan": "RHP", "Fairhurst, Sam": "RHP",
+    "ONeill, Shane": "RHP", "Ermigiotti, Julio": "RHP", "Correll, Logan": "LHP",
+    "Hayden, Nick": "RHP",
+    # Two-way / utility (get hitter reports)
+    "Gyauch-Quirk, Noah": "P/OF/DH", "Coughlin, Brandon": "RHP/OF",
+    "Frankovic, Jack": "UT/RHP", "Ahearn, Cadeyrn": "P/IF",
+    "Golier, Grady": "RHP/UTL", "Lamar, Tommy": "RHP/UTL",
+    "Grasso, Robby": "OF/INF/P",
+    # Hitters / position players
+    "Quinn, Aidan": "IF", "Patrizi, Dom": "IF", "Betances, Edwin": "IF",
+    "Wirtz, Ian": "C", "Adelman, Jasper": "OF/1B", "Esposito, Joey": "C",
+    "Tsiaras, Matt": "C", "Walewander, Owen": "C", "Rogers, Raffaele": "IF",
+    "Carvelli, Robbie": "OF", "Cochran, Ryan": "IF", "Davis, Ryan": "OF",
+    "Crawford, Trystan": "IF/OF", "Dantoni, Max": "INF", "Ivy, Parker": "C",
+    "Giardina, Silvio": "INF", "Kleckner, Bobby": "OF",
+}
+
+# ── Gardner-Webb 2026 Roster ────────
+GW_TEAM_NAME = "Gardner Webb"
+GW_COMBINED_TEAM_ID = "GW_COMBINED_2026"
+
+# D1 transfers: "Last, First" -> previous school search name.
+# Players NOT in this dict are assumed to have been at Gardner-Webb for 2025.
+GW_TRANSFERS = {
+    "Carter, Merik": "Alabama-Huntsville",
+    "Thompson, Zack": "Mercer",
+    "Ector, Thad": "UNC Charlotte",
+    "Mako, Chance": "North Carolina State",
+    "Ellison, Oliver": "Coastal Carolina",
+    "Ripepi, Drew": "Pittsburgh",
+    "Umbach, Anthony": "Southern Indiana",
+    "Agosto, Kelvin": "Alabama State",
+    "Hobb, Jerek": "Stony Brook",
+    "Shealor, Bennett": "George Mason",
+    "Stockton, Jaden": "Florida State",
+    "Paz, Sebastian": "Delaware State",
+    "Manley, Matt": "Samford",
+    "Hausner, Anthony": "The Citadel",
+    "Iannibelli, Jack": "Stonehill",
+    "Bitter, Jaden": "Ball State",
+    "Lysik, Brendan": "Texas Tech",
+    "Eldridge, Brandon": "Western Carolina",
+}
+
+GW_ROSTER_2026 = {
+    "Carter, Merik", "Rossow, Ethan", "Camarillo, Allan", "Thompson, Zack",
+    "Putnam, Colby", "Niehus, Patrick", "Ector, Thad", "Mako, Chance",
+    "Bertram, Reid", "Ellison, Oliver", "Liao, Ethan", "Ripepi, Drew",
+    "Dixon, Parker", "Kennell, Ryan", "Stanzione, Joe", "Ilgenfritz, Matt",
+    "Umbach, Anthony", "Stuart, Matt", "Agosto, Kelvin", "Hobb, Jerek",
+    "Shealor, Bennett", "Humphries, Colby", "Smith, Daniel", "Stockton, Jaden",
+    "Littrell, Jude", "Pressley, Devin", "Paz, Sebastian", "Busson, Connor",
+    "Manley, Matt", "Gentile, Josh", "Hausner, Anthony", "Rawlings, Burton",
+    "Graydon, Trey", "Winters, Dean", "Robinson, Zachary", "Guevara, Diego",
+    "Iannibelli, Jack", "Blaszczak, Nick", "Lopez, Marco", "Bitter, Jaden",
+    "Sanchez, Alejandro", "Murcer, Holden", "Murcer, Jackson", "Maurer, Abe",
+    "Lysik, Brendan", "Acuna, Jesus", "Angelakos, Nicholas", "Cox, Miller",
+    "Creech, Marion", "Eldridge, Brandon", "Emswiler, Caleb",
+}
+
+GW_JERSEY = {
+    "Carter, Merik": 1, "Rossow, Ethan": 2, "Camarillo, Allan": 3,
+    "Thompson, Zack": 4, "Putnam, Colby": 5, "Niehus, Patrick": 6,
+    "Ector, Thad": 7, "Mako, Chance": 8, "Bertram, Reid": 10,
+    "Ellison, Oliver": 11, "Liao, Ethan": 12, "Ripepi, Drew": 13,
+    "Dixon, Parker": 14, "Kennell, Ryan": 15, "Stanzione, Joe": 16,
+    "Ilgenfritz, Matt": 18, "Umbach, Anthony": 20, "Stuart, Matt": 21,
+    "Agosto, Kelvin": 23, "Hobb, Jerek": 24, "Shealor, Bennett": 25,
+    "Humphries, Colby": 26, "Smith, Daniel": 28, "Stockton, Jaden": 29,
+    "Littrell, Jude": 30, "Pressley, Devin": 31, "Paz, Sebastian": 32,
+    "Busson, Connor": 33, "Manley, Matt": 34, "Gentile, Josh": 35,
+    "Hausner, Anthony": 36, "Rawlings, Burton": 37, "Graydon, Trey": 38,
+    "Winters, Dean": 40, "Robinson, Zachary": 41, "Guevara, Diego": 44,
+    "Iannibelli, Jack": 45, "Blaszczak, Nick": 46, "Lopez, Marco": 47,
+    "Bitter, Jaden": 48, "Sanchez, Alejandro": 49, "Murcer, Holden": 51,
+    "Murcer, Jackson": 52, "Maurer, Abe": 54, "Lysik, Brendan": 55,
+}
+
+GW_POSITION = {
+    # Hitters / position players
+    "Carter, Merik": "SS", "Rossow, Ethan": "UTL", "Camarillo, Allan": "INF",
+    "Thompson, Zack": "C", "Niehus, Patrick": "INF", "Ector, Thad": "OF",
+    "Liao, Ethan": "UTL", "Ripepi, Drew": "INF", "Kennell, Ryan": "INF",
+    "Stanzione, Joe": "INF", "Ilgenfritz, Matt": "INF", "Umbach, Anthony": "INF",
+    "Agosto, Kelvin": "OF", "Shealor, Bennett": "C", "Smith, Daniel": "OF",
+    "Littrell, Jude": "OF", "Paz, Sebastian": "UTL", "Hausner, Anthony": "INF",
+    "Robinson, Zachary": "UTL", "Guevara, Diego": "OF", "Lopez, Marco": "C",
+    "Sanchez, Alejandro": "OF", "Murcer, Holden": "C", "Maurer, Abe": "C",
+    "Acuna, Jesus": "OF", "Cox, Miller": "UTL",
+    # Pitchers
+    "Putnam, Colby": "RHP", "Mako, Chance": "RHP", "Bertram, Reid": "LHP",
+    "Ellison, Oliver": "RHP", "Dixon, Parker": "RHP", "Stuart, Matt": "RHP",
+    "Hobb, Jerek": "LHP", "Humphries, Colby": "RHP", "Stockton, Jaden": "RHP",
+    "Pressley, Devin": "RHP", "Busson, Connor": "RHP", "Manley, Matt": "RHP",
+    "Gentile, Josh": "RHP", "Rawlings, Burton": "RHP", "Graydon, Trey": "RHP",
+    "Winters, Dean": "LHP", "Iannibelli, Jack": "LHP", "Blaszczak, Nick": "RHP",
+    "Bitter, Jaden": "RHP", "Murcer, Jackson": "RHP", "Lysik, Brendan": "LHP",
+    "Angelakos, Nicholas": "RHP", "Creech, Marion": "LHP",
+    "Eldridge, Brandon": "RHP", "Emswiler, Caleb": "RHP",
+}
+
+# ── Wake Forest 2026 Roster ────────
+WF_TEAM_NAME = "Wake Forest"
+WF_COMBINED_TEAM_ID = "WF_COMBINED_2026"
+WF_TM_TEAM_ID = 730373376
+
+WF_TRANSFERS = {
+    # D1 transfers (new in 2026, previous D1 school for 2025 data)
+    "Schaaf, Blake": "Georgetown",
+    "Figueroa, Tyler": "Appalachian State",
+    "Bagwell, Cam": "UNC Wilmington",
+    "Miller, Jackson": "Ole Miss",
+    "Torres, Boston": "VMI",
+}
+
+WF_ROSTER_2026 = {
+    # Returning from 2025
+    "Baxter, Cuyler", "Wentz, Dalton", "Ray, Will", "Morningstar, Blake",
+    "Lewis, Kade", "Conte, Matt", "Hawke, Austin", "Dallas, Matthew",
+    "Costello, Luke", "Williams, Javar", "Whysong, Nate", "Johnston, Zach",
+    "Levonas, Chris", "Dressler, Troy", "Schmolke, Luke", "Bowie, Rhys",
+    "Marsten, Duncan", "Keenan, Jimmy", "Billings, Luke", "Preisano, Ryan",
+    # New in 2026 — D1 transfers
+    "Schaaf, Blake", "Figueroa, Tyler", "Bagwell, Cam", "Miller, Jackson",
+    "Torres, Boston",
+    # New in 2026 — freshmen / prep
+    "Stein, JD", "Harsch, Marcelo", "Jones, Evan", "Roper, Jackson",
+    "Brennecke, Ryan", "Nicholson, Grant", "Costello, Andrew",
+    "Wood, Tyler", "Serrano, Jordan", "Bosch, Ryan",
+    "Rubino, Nick",
+}
+
+WF_JERSEY = {
+    "Baxter, Cuyler": 0, "Wentz, Dalton": 1, "Ray, Will": 2,
+    "Stein, JD": 3, "Morningstar, Blake": 4, "Harsch, Marcelo": 5,
+    "Lewis, Kade": 6, "Schaaf, Blake": 7, "Conte, Matt": 8,
+    "Hawke, Austin": 9, "Dallas, Matthew": 10, "Costello, Luke": 11,
+    "Figueroa, Tyler": 12, "Bagwell, Cam": 13, "Williams, Javar": 14,
+    "Whysong, Nate": 15, "Jones, Evan": 16, "Johnston, Zach": 17,
+    "Levonas, Chris": 18, "Dressler, Troy": 19, "Miller, Jackson": 21,
+    "Roper, Jackson": 22, "Brennecke, Ryan": 23, "Nicholson, Grant": 24,
+    "Torres, Boston": 25, "Costello, Andrew": 26, "Schmolke, Luke": 27,
+    "Bowie, Rhys": 28, "Wood, Tyler": 29, "Marsten, Duncan": 30,
+    "Rubino, Nick": 33, "Keenan, Jimmy": 34, "Billings, Luke": 35,
+    "Serrano, Jordan": 40, "Preisano, Ryan": 51, "Bosch, Ryan": 99,
+}
+
+WF_POSITION = {
+    # Hitters / position players
+    "Baxter, Cuyler": "INF", "Wentz, Dalton": "INF", "Lewis, Kade": "INF",
+    "Schaaf, Blake": "INF", "Conte, Matt": "C", "Hawke, Austin": "INF",
+    "Costello, Luke": "INF", "Figueroa, Tyler": "INF/OF",
+    "Williams, Javar": "OF", "Miller, Jackson": "OF", "Roper, Jackson": "INF",
+    "Torres, Boston": "OF", "Costello, Andrew": "C", "Rubino, Nick": "INF",
+    "Keenan, Jimmy": "C", "Serrano, Jordan": "OF", "Preisano, Ryan": "INF",
+    "Stein, JD": "INF",
+    # Pitchers
+    "Ray, Will": "RHP", "Morningstar, Blake": "RHP", "Harsch, Marcelo": "RHP",
+    "Dallas, Matthew": "LHP", "Whysong, Nate": "RHP", "Jones, Evan": "RHP",
+    "Johnston, Zach": "LHP", "Levonas, Chris": "RHP", "Dressler, Troy": "RHP",
+    "Brennecke, Ryan": "LHP", "Nicholson, Grant": "RHP", "Schmolke, Luke": "RHP",
+    "Bowie, Rhys": "LHP", "Wood, Tyler": "RHP", "Marsten, Duncan": "RHP",
+    "Billings, Luke": "RHP", "Bosch, Ryan": "LHP", "Bagwell, Cam": "RHP",
+}
+
+# ── Fordham 2026 Roster ────────
+FORDHAM_TEAM_NAME = "Fordham"
+FORDHAM_COMBINED_TEAM_ID = "FORDHAM_COMBINED_2026"
+
+# D1 transfers: "Last, First" -> previous school search name.
+FORDHAM_TRANSFERS = {
+    "Donnelly, Joey": "California",
+}
+
+FORDHAM_ROSTER_2026 = {
+    "Dieguez, Matt", "Scarlata, Anthony", "Beaudreau, Bradley", "Pino, A.J.",
+    "Ocko, Madden", "Little, Ernie", "Berg, Aric", "Stewart, Robbie",
+    "Forney, Colden", "Elson, Beau", "Kirk, Taylor", "Chavez, Carson",
+    "Vieira, Will", "Markey, Tommy", "Dowd, Aidan", "Cawley, Declan",
+    "Smith, Koen", "Chavez, Caden", "Rodarte, Jordan", "Kapica, Andrew",
+    "Egan, Ryan", "Young, Caden", "Redick, James", "Grabau, Anthony",
+    "Donnelly, Joey", "Murray, Alec", "Rubin, Jack", "Reilly-Bell, Diego",
+    "Morello, Mason", "Dean, Mason", "Travaglia, Giacomo", "Swaim, Carson",
+    "Hanawalt, Chase", "Osterhus, Eric", "McAndrews, Tommy",
+    "O'Brien-Gonzalez, Aidan", "Ford, Tim",
+}
+
+FORDHAM_JERSEY = {
+    "Dieguez, Matt": 1, "Scarlata, Anthony": 3, "Beaudreau, Bradley": 4,
+    "Pino, A.J.": 5, "Ocko, Madden": 6, "Little, Ernie": 7,
+    "Berg, Aric": 8, "Stewart, Robbie": 9, "Forney, Colden": 10,
+    "Elson, Beau": 11, "Kirk, Taylor": 12, "Chavez, Carson": 13,
+    "Vieira, Will": 14, "Markey, Tommy": 15, "Dowd, Aidan": 16,
+    "Cawley, Declan": 17, "Smith, Koen": 18, "Chavez, Caden": 19,
+    "Rodarte, Jordan": 20, "Kapica, Andrew": 22, "Egan, Ryan": 23,
+    "Young, Caden": 24, "Redick, James": 25, "Grabau, Anthony": 26,
+    "Donnelly, Joey": 27, "Murray, Alec": 28, "Rubin, Jack": 29,
+    "Reilly-Bell, Diego": 30, "Morello, Mason": 31, "Dean, Mason": 32,
+    "Travaglia, Giacomo": 33, "Swaim, Carson": 34, "Hanawalt, Chase": 35,
+    "Osterhus, Eric": 36, "McAndrews, Tommy": 37,
+    "O'Brien-Gonzalez, Aidan": 40, "Ford, Tim": 46,
+}
+
+FORDHAM_POSITION = {
+    # Hitters / position players
+    "Dieguez, Matt": "IF", "Beaudreau, Bradley": "IF", "Ocko, Madden": "IF",
+    "Little, Ernie": "OF", "Forney, Colden": "IF", "Kirk, Taylor": "IF/OF",
+    "Chavez, Carson": "C", "Markey, Tommy": "OF", "Young, Caden": "C",
+    "Grabau, Anthony": "IF", "Donnelly, Joey": "OF", "Rubin, Jack": "OF/1B",
+    "Dean, Mason": "OF", "McAndrews, Tommy": "C", "Ford, Tim": "IF",
+    # Pitchers
+    "Scarlata, Anthony": "RHP", "Pino, A.J.": "LHP", "Berg, Aric": "RHP",
+    "Stewart, Robbie": "RHP", "Elson, Beau": "RHP", "Vieira, Will": "RHP",
+    "Dowd, Aidan": "RHP", "Cawley, Declan": "RHP", "Smith, Koen": "RHP",
+    "Chavez, Caden": "LHP", "Rodarte, Jordan": "RHP", "Kapica, Andrew": "RHP",
+    "Egan, Ryan": "RHP", "Redick, James": "RHP", "Murray, Alec": "RHP",
+    "Reilly-Bell, Diego": "RHP", "Morello, Mason": "RHP",
+    "Travaglia, Giacomo": "RHP", "Swaim, Carson": "RHP",
+    "Hanawalt, Chase": "LHP", "Osterhus, Eric": "RHP",
+    "O'Brien-Gonzalez, Aidan": "RHP",
+}
+
 NAME_MAP = {
     "Laughlin, Theo": "Loughlin, Theo",
     "Laughlin , Theo": "Loughlin, Theo",

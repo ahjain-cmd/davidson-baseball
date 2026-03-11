@@ -59,26 +59,26 @@ _POP_AVG_PULL = {             # fallback if baselines unavailable
     "Left": 49.5,
 }
 
-# Per-pitch-type movement → pull% rates (OLS regression on 493K GBs from trackman view).
+# Per-pitch-type movement → pull% rates (OLS regression on 474K GBs from trackman parquet).
 # HB is arm-side-normalized (positive = arm-side run for all pitcher hands).
 # Rates: % change in pull rate per unit of pitcher deviation from population mean.
-# Tuple order: (hb_rate_per_inch, ivb_rate_per_inch, velo_rate_per_mph, rel_height_rate_per_ft, rel_side_rate_per_ft)
+# Tuple order: (hb_rate, ivb_rate, velo_rate, rel_height_rate, rel_side_rate, vaa_rate)
 # Positive rate = more of that metric → higher pull%.
 _MOVEMENT_PULL_RATES = {
-    # RHB: n=71K FB, 65K SI, 61K SL, 69K CH, 43K CB, 6K CT
-    ("Right", "Fastball"):  (-0.23, -0.24, +0.58, -1.41, +0.33),
-    ("Right", "Sinker"):    (-0.18, +0.09, +0.14, -2.85, +0.81),
-    ("Right", "Slider"):    (-0.24, +0.34, +0.49, -1.32, -0.31),
-    ("Right", "Changeup"):  (-0.14, +0.20, +0.33, -3.12, +0.28),
-    ("Right", "Curveball"): (-0.23, +0.15, +0.30, -0.48, -0.37),
-    ("Right", "Cutter"):    (-0.43, +1.49, +2.58, -3.58, +0.83),
-    # LHB: n=44K FB, 39K SI, 24K SL, 47K CH, 18K CB, 3K CT
-    ("Left", "Fastball"):   (-0.20, -0.06, -0.29, +0.85, -0.42),
-    ("Left", "Sinker"):     (+0.17, -0.22, -0.70, +2.53, -0.55),
-    ("Left", "Slider"):     (-0.04, +0.17, +0.45, +1.19, -0.80),
-    ("Left", "Changeup"):   (-0.09, -0.29, +0.14, +2.97, +0.07),
-    ("Left", "Curveball"):  (+0.06, -0.16, +0.02, -0.19, -1.14),
-    ("Left", "Cutter"):     (-0.26, +0.33, +0.99, -2.90, -2.58),
+    # RHB: n=146K FB, 26K SI, 65K SL, 32K CH, 18K CB, 13K CT
+    ("Right", "Fastball"):  (+0.34, +0.66, -0.55, -1.53, -0.71, -4.39),
+    ("Right", "Sinker"):    (+0.33, +0.90, +0.13, -4.76, +0.23, -9.55),
+    ("Right", "Slider"):    (+0.23, +0.37, -0.38, -1.91, +0.72, -3.43),
+    ("Right", "Changeup"):  (+0.28, +0.20, -0.19, +1.12, -0.61, -1.30),
+    ("Right", "Curveball"): (+0.20, +0.21, -0.21, -4.93, +0.94, -3.34),
+    ("Right", "Cutter"):    (+0.50, -0.02, -0.90, +2.09, +1.85, -2.56),
+    # LHB: n=85K FB, 16K SI, 26K SL, 28K CH, 9K CB, 6K CT
+    ("Left", "Fastball"):   (-0.08, +0.41, -0.59, -0.40, -1.98, -2.98),
+    ("Left", "Sinker"):     (-0.04, +0.07, -0.61, +0.55, -1.06, -3.88),
+    ("Left", "Slider"):     (+0.00, +0.51, +0.63, -4.73, -0.94, -4.02),
+    ("Left", "Changeup"):   (-0.03, +0.34, +0.20, -1.12, +0.21, -2.67),
+    ("Left", "Curveball"):  (-0.36, +0.19, +0.32, +0.71, -1.96, -2.88),
+    ("Left", "Cutter"):     (+0.21, +0.52, +0.67, -4.13, -0.44, -6.20),
 }
 _MAX_MOVEMENT_PULL_ADJ = 8.0  # cap total movement pull% adjustment
 
@@ -134,7 +134,7 @@ class MatchupPositioning:
     confidence: str
     gb_pct: float = 44.0  # actual batter GB%
     warnings: List[str] = field(default_factory=list)
-    movement_detail: dict = field(default_factory=dict)  # per-pitch HB/IVB/Velo adjustments
+    movement_detail: dict = field(default_factory=dict)  # per-pitch movement adjustments
 
 
 # ──────────────────────────────────────────────
@@ -209,6 +209,7 @@ def load_pitch_movement_baselines() -> pd.DataFrame:
                AVG(RelHeight) AS pop_rel_height_mean, STDDEV(RelHeight) AS pop_rel_height_std,
                AVG(CASE WHEN PitcherThrows IN ('Left','L') THEN -RelSide ELSE RelSide END) AS pop_rel_side_mean,
                STDDEV(CASE WHEN PitcherThrows IN ('Left','L') THEN -RelSide ELSE RelSide END) AS pop_rel_side_std,
+               AVG(VertApprAngle) AS pop_vaa_mean, STDDEV(VertApprAngle) AS pop_vaa_std,
                COUNT(*) AS n
         FROM trackman
         WHERE TaggedPitchType IS NOT NULL AND TaggedPitchType NOT IN ('Other','Undefined','Knuckleball')
@@ -521,8 +522,50 @@ def get_batter_air_spray(
 
 
 # ──────────────────────────────────────────────
+# BATTER/PITCHER HAND NORMALIZATION
+# ──────────────────────────────────────────────
+
+def normalize_batter_side(batter_side: Optional[str], pitcher_hand: Optional[str] = "Right") -> str:
+    """Normalize handedness to Left/Right and resolve switch hitters by pitcher hand."""
+    side = str(batter_side or "").strip()
+    if side.startswith("L"):
+        return "Left"
+    if side.startswith("S"):
+        hand = str(pitcher_hand or "Right").strip()
+        return "Right" if hand.startswith("L") else "Left"
+    return "Right"
+
+
+# ──────────────────────────────────────────────
 # PITCHER MOVEMENT PROFILE
 # ──────────────────────────────────────────────
+
+@st.cache_data(show_spinner=False, ttl=600)
+def get_pitcher_throwing_hand(
+    pitcher: str, season_filter: Optional[Tuple[int, ...]] = None
+) -> Optional[str]:
+    """Return the pitcher's throwing hand as Left/Right when available."""
+    pitcher_esc = pitcher.replace("'", "''")
+    season_clause = ""
+    if season_filter:
+        season_clause = f"AND EXTRACT(YEAR FROM CAST(\"Date\" AS DATE)) IN ({','.join(str(int(s)) for s in season_filter)})"
+
+    sql = f"""
+        SELECT MODE(PitcherThrows) AS throws
+        FROM trackman
+        WHERE Pitcher = '{pitcher_esc}'
+          AND PitcherThrows IS NOT NULL
+          {season_clause}
+    """
+    df = query_population(sql)
+    if df.empty:
+        return None
+    throws = str(df.iloc[0].get("throws") or "").strip()
+    if throws.startswith("L"):
+        return "Left"
+    if throws.startswith("R"):
+        return "Right"
+    return None
 
 @st.cache_data(show_spinner=False, ttl=600)
 def get_pitcher_movement_profile(
@@ -546,6 +589,7 @@ def get_pitcher_movement_profile(
                AVG(Extension) AS ext,
                AVG(RelHeight) AS rel_height,
                AVG(CASE WHEN PitcherThrows IN ('Left','L') THEN -RelSide ELSE RelSide END) AS rel_side,
+               AVG(VertApprAngle) AS vaa,
                COUNT(*) AS n
         FROM trackman
         WHERE Pitcher = '{pitcher_esc}'
@@ -570,6 +614,7 @@ def get_pitcher_movement_profile(
             "ext": float(row["ext"]) if pd.notna(row["ext"]) else None,
             "rel_height": float(row["rel_height"]) if pd.notna(row.get("rel_height")) else None,
             "rel_side": float(row["rel_side"]) if pd.notna(row.get("rel_side")) else None,
+            "vaa": float(row["vaa"]) if pd.notna(row.get("vaa")) else None,
             "n": int(row["n"]),
             "usage_pct": float(row["n"]) / total * 100 if total > 0 else 0,
         }
@@ -587,6 +632,48 @@ def _safe_float(v, default=None):
         return float(v)
     except (ValueError, TypeError):
         return default
+
+
+def _normalize_directional_distribution(
+    pull_pct: Optional[float],
+    center_pct: Optional[float],
+    oppo_pct: Optional[float],
+    *,
+    fallback_pull: float,
+    fallback_center: float,
+    fallback_oppo: float,
+) -> Tuple[float, float, float]:
+    """Return a clipped pull/center/oppo triple that sums to 100."""
+    vals = {
+        "pull": _safe_float(pull_pct),
+        "center": _safe_float(center_pct),
+        "oppo": _safe_float(oppo_pct),
+    }
+    fallbacks = {
+        "pull": float(fallback_pull),
+        "center": float(fallback_center),
+        "oppo": float(fallback_oppo),
+    }
+
+    missing = [k for k, v in vals.items() if v is None]
+    for key, value in list(vals.items()):
+        if value is not None:
+            vals[key] = float(np.clip(value, 0.0, 100.0))
+
+    if len(missing) == 1:
+        present_sum = sum(vals[k] for k in vals if vals[k] is not None)
+        vals[missing[0]] = float(np.clip(100.0 - present_sum, 0.0, 100.0))
+    elif len(missing) > 1:
+        for key in missing:
+            vals[key] = fallbacks[key]
+
+    total = sum(vals.values())
+    if total <= 0:
+        vals = dict(fallbacks)
+        total = sum(vals.values())
+
+    scale = 100.0 / total
+    return tuple(round(vals[key] * scale, 6) for key in ("pull", "center", "oppo"))
 
 
 def shrink_gb_spray(
@@ -845,7 +932,7 @@ def _compute_weighted_fielder_positions(
     if w_sum > 0:
         weighted_pull /= w_sum
 
-    # Step 2: Movement pull% adjustment (HB + IVB + Velo + RelHeight + RelSide rates per pitch type)
+    # Step 2: Movement pull% adjustment (HB + IVB + Velo + RelHeight + RelSide + VAA)
     movement_pull_adj = 0.0
     movement_detail = {"per_pitch": {}, "total_adj": 0.0}
     if pitcher_profile and pop_movement:
@@ -857,12 +944,15 @@ def _compute_weighted_fielder_positions(
             rates = _MOVEMENT_PULL_RATES.get((batter_side, pt))
             if not rates:
                 continue
-            # Support both 3-tuple (legacy) and 5-tuple (with release metrics)
-            if len(rates) == 5:
+            # Support 3-tuple (legacy), 5-tuple, or 6-tuple (including VAA).
+            if len(rates) == 6:
+                hb_rate, ivb_rate, velo_rate, rh_rate, rs_rate, vaa_rate = rates
+            elif len(rates) == 5:
                 hb_rate, ivb_rate, velo_rate, rh_rate, rs_rate = rates
+                vaa_rate = 0.0
             else:
-                hb_rate, ivb_rate, velo_rate = rates
-                rh_rate, rs_rate = 0.0, 0.0
+                hb_rate, ivb_rate, velo_rate = rates[:3]
+                rh_rate, rs_rate, vaa_rate = 0.0, 0.0, 0.0
             p_mov = pitcher_profile.get(pt, {})
             pop_mov = pop_movement.get(pt, {})
             p_hb = _safe_float(p_mov.get("hb"))
@@ -870,20 +960,23 @@ def _compute_weighted_fielder_positions(
             p_velo = _safe_float(p_mov.get("velo"))
             p_rh = _safe_float(p_mov.get("rel_height"))
             p_rs = _safe_float(p_mov.get("rel_side"))
+            p_vaa = _safe_float(p_mov.get("vaa"))
             pop_hb = _safe_float(pop_mov.get("pop_hb_mean"))
             pop_ivb = _safe_float(pop_mov.get("pop_ivb_mean"))
             pop_velo = _safe_float(pop_mov.get("pop_velo_mean"))
             pop_rh = _safe_float(pop_mov.get("pop_rel_height_mean"))
             pop_rs = _safe_float(pop_mov.get("pop_rel_side_mean"))
+            pop_vaa = _safe_float(pop_mov.get("pop_vaa_mean"))
 
             hb_dev = (p_hb - pop_hb) if (p_hb is not None and pop_hb is not None) else 0.0
             ivb_dev = (p_ivb - pop_ivb) if (p_ivb is not None and pop_ivb is not None) else 0.0
             velo_dev = (p_velo - pop_velo) if (p_velo is not None and pop_velo is not None) else 0.0
             rh_dev = (p_rh - pop_rh) if (p_rh is not None and pop_rh is not None) else 0.0
             rs_dev = (p_rs - pop_rs) if (p_rs is not None and pop_rs is not None) else 0.0
+            vaa_dev = (p_vaa - pop_vaa) if (p_vaa is not None and pop_vaa is not None) else 0.0
 
             pt_adj = (hb_rate * hb_dev + ivb_rate * ivb_dev + velo_rate * velo_dev
-                      + rh_rate * rh_dev + rs_rate * rs_dev)
+                      + rh_rate * rh_dev + rs_rate * rs_dev + vaa_rate * vaa_dev)
             movement_pull_adj += w * pt_adj
             mvt_w_sum += w
 
@@ -891,11 +984,13 @@ def _compute_weighted_fielder_positions(
                 "hb_dev": round(hb_dev, 1), "ivb_dev": round(ivb_dev, 1),
                 "velo_dev": round(velo_dev, 1),
                 "rh_dev": round(rh_dev, 2), "rs_dev": round(rs_dev, 2),
+                "vaa_dev": round(vaa_dev, 2),
                 "hb_contrib": round(hb_rate * hb_dev, 2),
                 "ivb_contrib": round(ivb_rate * ivb_dev, 2),
                 "velo_contrib": round(velo_rate * velo_dev, 2),
                 "rh_contrib": round(rh_rate * rh_dev, 2),
                 "rs_contrib": round(rs_rate * rs_dev, 2),
+                "vaa_contrib": round(vaa_rate * vaa_dev, 2),
                 "pt_adj": round(pt_adj, 2), "mix_w": round(w, 3),
             }
 
@@ -1029,6 +1124,169 @@ def _safe_row_to_dict(row, columns):
 
 
 # ──────────────────────────────────────────────
+# EXTERNAL PROFILE ENTRY POINT
+# ──────────────────────────────────────────────
+
+def compute_positioning_from_external_profile(
+    *,
+    batter_side: str,
+    raw_pull_pct: Optional[float],
+    raw_center_pct: Optional[float],
+    raw_oppo_pct: Optional[float],
+    gb_pct: float = 44.0,
+    sample_size: int = 0,
+    pitcher_profile: Optional[Dict[str, dict]] = None,
+    pop_movement: Optional[Dict[str, dict]] = None,
+    population_pull_pct: Optional[float] = None,
+    confidence: Optional[str] = None,
+) -> MatchupPositioning:
+    """Compute positioning from an external spray profile using the shared engine."""
+    batter_side = normalize_batter_side(batter_side)
+    raw_pull, raw_center, raw_oppo = _normalize_directional_distribution(
+        raw_pull_pct,
+        raw_center_pct,
+        raw_oppo_pct,
+        fallback_pull=_POP_AVG_PULL.get(batter_side, 40.0),
+        fallback_center=100.0 - _POP_AVG_PULL.get(batter_side, 40.0) - 25.0,
+        fallback_oppo=25.0,
+    )
+    pop_pull = float(population_pull_pct if population_pull_pct is not None else _POP_AVG_PULL.get(batter_side, 40.0))
+
+    pitch_types = list((pitcher_profile or {}).keys()) or ["All"]
+    pitch_mix_weights = {
+        pt: (pitcher_profile or {}).get(pt, {}).get("usage_pct", 0.0) for pt in pitch_types
+    }
+    if sum(pitch_mix_weights.values()) <= 0:
+        even_w = 100.0 / len(pitch_types)
+        pitch_mix_weights = {pt: even_w for pt in pitch_types}
+
+    adjusted_sprays = {
+        pt: {
+            "n_gb": float(sample_size),
+            "pull_pct": raw_pull,
+            "center_pct": raw_center,
+            "oppo_pct": raw_oppo,
+            "movement_shift_deg": 0.0,
+        }
+        for pt in pitch_types
+    }
+    per_pt_summary = {}
+    warnings = ["Using external hitter spray profile; pitch-type GB splits are not available."] if sample_size <= 0 else []
+    movement_detail = {"per_pitch": {}, "total_adj": 0.0}
+    ml_used = False
+
+    if USE_ML_GB and pitcher_profile:
+        try:
+            from analytics.gb_model import predict_adj_pull
+
+            ml_result = predict_adj_pull(
+                hitter={
+                    "raw_pull": raw_pull,
+                    "raw_oppo": raw_oppo,
+                    "pa": int(sample_size or 0),
+                    "side": batter_side,
+                },
+                pitcher_profile=pitcher_profile,
+            )
+            ml_used = True
+            movement_detail["total_adj"] = round(float(ml_result.get("mvt_adj", 0.0)), 2)
+            for pt in pitch_types:
+                pitch_ml = ml_result.get("per_pitch", {}).get(pt, {})
+                pt_pull = _safe_float(pitch_ml.get("pull_prob"), raw_pull)
+                pull_delta = pt_pull - raw_pull
+                pt_pull, pt_center, pt_oppo = _normalize_directional_distribution(
+                    pt_pull,
+                    raw_center,
+                    raw_oppo - pull_delta,
+                    fallback_pull=raw_pull,
+                    fallback_center=raw_center,
+                    fallback_oppo=raw_oppo,
+                )
+                adjusted_sprays[pt].update({
+                    "pull_pct": pt_pull,
+                    "center_pct": pt_center,
+                    "oppo_pct": pt_oppo,
+                })
+                movement_detail["per_pitch"][pt] = {
+                    "pull_prob": round(pt_pull, 2),
+                    "pull_delta": round(pt_pull - raw_pull, 2),
+                    "mix_w": round(pitch_mix_weights.get(pt, 0.0) / 100.0, 3),
+                    "source": pitch_ml.get("source", "ml"),
+                }
+        except (FileNotFoundError, ImportError):
+            ml_used = False
+
+    positions, computed_movement = _compute_weighted_fielder_positions(
+        adjusted_sprays,
+        pitch_mix_weights,
+        batter_side,
+        confidence or confidence_tier(int(sample_size or 0), low=15, high=40),
+        pop_baselines={(batter_side, pt): {"gb_pull_pct": pop_pull} for pt in pitch_types},
+        gb_pct=float(gb_pct),
+        pitcher_profile=None if ml_used else pitcher_profile,
+        pop_movement=None if ml_used else pop_movement,
+    )
+    if not ml_used:
+        movement_detail = computed_movement
+
+    mix_total = sum(pitch_mix_weights.get(pt, 0.0) for pt in adjusted_sprays)
+    overall_pull, overall_center, overall_oppo = 0.0, 0.0, 0.0
+    for pt, spray in adjusted_sprays.items():
+        w = pitch_mix_weights.get(pt, 0.0) / mix_total if mix_total > 0 else 0.0
+        overall_pull += w * (_safe_float(spray.get("pull_pct"), raw_pull) or raw_pull)
+        overall_center += w * (_safe_float(spray.get("center_pct"), raw_center) or raw_center)
+        overall_oppo += w * (_safe_float(spray.get("oppo_pct"), raw_oppo) or raw_oppo)
+
+    if not ml_used:
+        total_adj = float(movement_detail.get("total_adj", 0.0))
+        overall_pull, overall_center, overall_oppo = _normalize_directional_distribution(
+            overall_pull + total_adj,
+            overall_center,
+            overall_oppo - total_adj,
+            fallback_pull=raw_pull,
+            fallback_center=raw_center,
+            fallback_oppo=raw_oppo,
+        )
+
+    conf = confidence or confidence_tier(int(sample_size or 0), low=15, high=40)
+    shift = classify_shift(
+        pull_pct=overall_pull,
+        center_pct=overall_center,
+        oppo_pct=overall_oppo,
+        gb_pct=gb_pct,
+        gb_pull_pct=overall_pull,
+    )
+
+    source_tag = "external+ml" if ml_used else "external+ols"
+    for pt in pitch_types:
+        per_pt_summary[pt] = {
+            "n_batter": int(sample_size or 0),
+            "mix_pct": pitch_mix_weights.get(pt, 0.0),
+            "pull_pct": adjusted_sprays[pt].get("pull_pct"),
+            "center_pct": adjusted_sprays[pt].get("center_pct"),
+            "oppo_pct": adjusted_sprays[pt].get("oppo_pct"),
+            "movement_shift_deg": adjusted_sprays[pt].get("movement_shift_deg", 0.0),
+            "batter_weight": 1.0,
+            "pop_weight": 0.0,
+            "source": source_tag,
+        }
+
+    return MatchupPositioning(
+        positions=positions,
+        pitch_mix_weights=pitch_mix_weights,
+        per_pitch_type=per_pt_summary,
+        shift_type=shift,
+        overall_pull_pct=round(overall_pull, 1),
+        overall_center_pct=round(overall_center, 1),
+        overall_oppo_pct=round(overall_oppo, 1),
+        confidence=conf,
+        gb_pct=round(float(gb_pct), 1),
+        warnings=warnings,
+        movement_detail=movement_detail,
+    )
+
+
+# ──────────────────────────────────────────────
 # MAIN ENTRY POINT
 # ──────────────────────────────────────────────
 
@@ -1049,6 +1307,8 @@ def compute_pitcher_batter_positioning(
     6. Classify shift
     7. Return MatchupPositioning
     """
+    pitcher_hand = get_pitcher_throwing_hand(pitcher, pitcher_season_filter)
+    batter_side = normalize_batter_side(batter_side, pitcher_hand)
     warnings = []
 
     # Step 1: Batter spray
@@ -1220,9 +1480,9 @@ def compute_pitcher_batter_positioning(
         pitch_mix_weights=pitch_mix,
         per_pitch_type=per_pt_summary,
         shift_type=shift,
-        overall_pull_pct=round(overall_pull, 1),
+        overall_pull_pct=round(adjusted_overall_pull, 1),
         overall_center_pct=round(overall_center, 1),
-        overall_oppo_pct=round(overall_oppo, 1),
+        overall_oppo_pct=round(adjusted_overall_oppo, 1),
         confidence=conf,
         gb_pct=round(float(gb_pct_est), 1),
         warnings=warnings,

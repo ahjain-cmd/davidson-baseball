@@ -404,6 +404,8 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
         p_side, p_h = _pos_at(t_total)
         return (c_side, c_h), (p_side, p_h), t_total
 
+    DRAG_FACTOR = 0.95  # avg speed ≈ 95% of release speed (v² drag, Cd≈0.33)
+
     def _commit_plate_ivb(rel_h, rel_s, loc_h, loc_s, ivb, hb, velo_mph, ext):
         """Compute commit/plate positions using IVB/HB constant-accel model."""
         ext = ext if not pd.isna(ext) else 6.0
@@ -411,7 +413,7 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
         velo_fps = velo_mph * 5280.0 / 3600.0
         if velo_fps < 50:
             velo_fps = 50.0
-        t_total = actual_dist / velo_fps
+        t_total = actual_dist / (velo_fps * DRAG_FACTOR)
         T = t_total
         ivb_ft = ivb / 12.0
         hb_ft = hb / 12.0

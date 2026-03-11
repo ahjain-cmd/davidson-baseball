@@ -852,10 +852,16 @@ def main():
                         help="Train ML xwOBA model (XGBoost multi-class) from Trackman data")
     parser.add_argument("--train-matchup-model", action="store_true",
                         help="Train ML pitcher-batter matchup model (XGBoost) from Trackman data")
+    parser.add_argument("--train-matchup-models", action="store_true",
+                        help="Train both pitching and offensive XGBoost matchup models")
     parser.add_argument("--train-gb-model", action="store_true",
                         help="Train ML GB direction model (XGBoost) from Trackman data")
+    parser.add_argument("--train-adj-pull-model", action="store_true",
+                        help="Train ML adj-pull model (XGBClassifier P(pull)) from Trackman data")
     parser.add_argument("--train-spatial-hole-model", action="store_true",
                         help="Train spatial hole score model (3 XGBoost sub-models) from Trackman data")
+    parser.add_argument("--backtest-scoring", action="store_true",
+                        help="Run scoring formula backtest and derive empirical weights")
     args = parser.parse_args()
 
     if args.train_hole_model:
@@ -876,16 +882,36 @@ def main():
         train_matchup_model(parquet_path=args.parquet)
         return
 
+    if args.train_matchup_models:
+        from analytics.matchup_model import train_pitching_matchup_model, train_offensive_matchup_model
+        print("Training pitching matchup model...")
+        train_pitching_matchup_model(parquet_path=args.parquet)
+        print("\nTraining offensive matchup model...")
+        train_offensive_matchup_model(parquet_path=args.parquet)
+        return
+
     if args.train_gb_model:
         print("Training ML GB direction model...")
         from analytics.gb_model import train_gb_direction_model
         train_gb_direction_model(parquet_path=args.parquet)
         return
 
+    if args.train_adj_pull_model:
+        print("Training ML adj-pull model...")
+        from analytics.gb_model import train_adj_pull_model
+        train_adj_pull_model(parquet_path=args.parquet)
+        return
+
     if args.train_spatial_hole_model:
         print("Training spatial hole score model...")
         from analytics.spatial_hole_model import train_spatial_hole_model
         train_spatial_hole_model(parquet_path=args.parquet)
+        return
+
+    if args.backtest_scoring:
+        print("Running scoring formula backtest...")
+        from scripts.backtest_scoring_weights import run_backtest
+        run_backtest(parquet_path=args.parquet)
         return
 
     run(args.parquet, args.out, overwrite=args.overwrite)
