@@ -442,4 +442,3 @@ def pitch_defense_mismatch(
         )
 
     return None
-

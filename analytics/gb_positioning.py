@@ -573,7 +573,8 @@ def get_pitcher_movement_profile(
 ) -> Dict[str, dict]:
     """Query pitcher's per-pitch-type movement profile.
 
-    Returns dict: PitchType → {velo, ivb, hb, spin, ext, n, usage_pct}
+    Returns dict: PitchType → {velo, ivb, hb, spin, ext, plate_loc_side,
+    plate_loc_height, n, usage_pct}
     """
     pitcher_esc = pitcher.replace("'", "''")
     season_clause = ""
@@ -590,6 +591,8 @@ def get_pitcher_movement_profile(
                AVG(RelHeight) AS rel_height,
                AVG(CASE WHEN PitcherThrows IN ('Left','L') THEN -RelSide ELSE RelSide END) AS rel_side,
                AVG(VertApprAngle) AS vaa,
+               AVG(PlateLocSide) AS plate_loc_side,
+               AVG(PlateLocHeight) AS plate_loc_height,
                COUNT(*) AS n
         FROM trackman
         WHERE Pitcher = '{pitcher_esc}'
@@ -615,6 +618,8 @@ def get_pitcher_movement_profile(
             "rel_height": float(row["rel_height"]) if pd.notna(row.get("rel_height")) else None,
             "rel_side": float(row["rel_side"]) if pd.notna(row.get("rel_side")) else None,
             "vaa": float(row["vaa"]) if pd.notna(row.get("vaa")) else None,
+            "plate_loc_side": float(row["plate_loc_side"]) if pd.notna(row.get("plate_loc_side")) else None,
+            "plate_loc_height": float(row["plate_loc_height"]) if pd.notna(row.get("plate_loc_height")) else None,
             "n": int(row["n"]),
             "usage_pct": float(row["n"]) / total * 100 if total > 0 else 0,
         }
@@ -897,6 +902,7 @@ def _compute_weighted_fielder_positions(
     gb_pct: float = 44.0,
     pitcher_profile: Optional[Dict[str, dict]] = None,
     pop_movement: Optional[Dict[str, dict]] = None,
+    movement_pitch_types: Optional[set[str]] = None,
 ) -> Tuple[Dict[str, FielderPosition], dict]:
     """Compute fielder positions using deviation-from-standard positioning.
 
@@ -938,6 +944,8 @@ def _compute_weighted_fielder_positions(
     if pitcher_profile and pop_movement:
         mvt_w_sum = 0.0
         for pt in adjusted_sprays:
+            if movement_pitch_types is not None and pt not in movement_pitch_types:
+                continue
             w = pitch_mix.get(pt, 0) / total_weight if total_weight > 0 else 0
             if w <= 0:
                 continue
@@ -1136,6 +1144,7 @@ def compute_positioning_from_external_profile(
     gb_pct: float = 44.0,
     sample_size: int = 0,
     pitcher_profile: Optional[Dict[str, dict]] = None,
+    pitcher_hand: Optional[str] = None,
     pop_movement: Optional[Dict[str, dict]] = None,
     population_pull_pct: Optional[float] = None,
     confidence: Optional[str] = None,
@@ -1174,8 +1183,66 @@ def compute_positioning_from_external_profile(
     warnings = ["Using external hitter spray profile; pitch-type GB splits are not available."] if sample_size <= 0 else []
     movement_detail = {"per_pitch": {}, "total_adj": 0.0}
     ml_used = False
+    defense_v2_used = False
 
-    if USE_ML_GB and pitcher_profile:
+    if USE_ML_GB and pitcher_profile and pitcher_hand:
+        try:
+            from analytics.defense_positioning_model import predict_matchup_distribution
+
+            v2_result = predict_matchup_distribution(
+                hitter={
+                    "raw_pull": raw_pull,
+                    "raw_center": raw_center,
+                    "raw_oppo": raw_oppo,
+                    "gb_pct": gb_pct,
+                    "pa": int(sample_size or 0),
+                    "side": batter_side,
+                },
+                pitcher_profile=pitcher_profile,
+                pitcher_hand=pitcher_hand,
+            )
+            defense_v2_used = True
+            ml_used = True
+            movement_detail["total_adj"] = round(float(v2_result.get("mvt_adj", 0.0)), 2)
+            movement_detail["broad_model"] = {
+                "stage1_prior": v2_result.get("stage1_prior", {}),
+                "stage2_pitcher_adjustment": v2_result.get("stage2_pitcher_adjustment", {}),
+                "matchup_distribution": {
+                    "pull_pct": round(float(v2_result.get("pull_pct", raw_pull)), 2),
+                    "center_pct": round(float(v2_result.get("center_pct", raw_center)), 2),
+                    "oppo_pct": round(float(v2_result.get("oppo_pct", raw_oppo)), 2),
+                },
+                "source": "defense_v2",
+            }
+            raw_pull = float(v2_result.get("prior_pull_pct", raw_pull))
+            raw_center = float(v2_result.get("prior_center_pct", raw_center))
+            raw_oppo = float(v2_result.get("prior_oppo_pct", raw_oppo))
+            for pt in pitch_types:
+                pt_pred = v2_result.get("per_pitch", {}).get(pt, {})
+                pt_pull, pt_center, pt_oppo = _normalize_directional_distribution(
+                    pt_pred.get("pull_pct"),
+                    pt_pred.get("center_pct"),
+                    pt_pred.get("oppo_pct"),
+                    fallback_pull=raw_pull,
+                    fallback_center=raw_center,
+                    fallback_oppo=raw_oppo,
+                )
+                adjusted_sprays[pt].update({
+                    "pull_pct": pt_pull,
+                    "center_pct": pt_center,
+                    "oppo_pct": pt_oppo,
+                })
+                movement_detail["per_pitch"][pt] = {
+                    "pull_prob": round(pt_pull, 2),
+                    "pull_delta": round(pt_pull - raw_pull, 2),
+                    "mix_w": round(pitch_mix_weights.get(pt, 0.0) / 100.0, 3),
+                    "source": pt_pred.get("source", "defense_v2"),
+                }
+        except (FileNotFoundError, ImportError):
+            defense_v2_used = False
+            ml_used = False
+
+    if USE_ML_GB and pitcher_profile and not defense_v2_used:
         try:
             from analytics.gb_model import predict_adj_pull
 
@@ -1361,10 +1428,12 @@ def compute_pitcher_batter_positioning(
 
     # ML GB path: use XGBoost model for spray prediction if enabled
     ml_spray_override = None
+    ml_pitch_types = set()
     if USE_ML_GB and not pitcher_not_found:
         try:
             from analytics.gb_model import predict_gb_spray
             ml_spray_override = predict_gb_spray(pitcher_profile, batter_side)
+            ml_pitch_types = set(ml_spray_override.get("per_pitch", {}))
         except (FileNotFoundError, ImportError):
             pass  # Fall back to linear model
 
@@ -1437,6 +1506,7 @@ def compute_pitcher_batter_positioning(
     # movement effects — skip OLS movement inside _compute_weighted_fielder_positions
     ml_covered_all = (ml_spray_override is not None and
                       all(pt in ml_spray_override.get("per_pitch", {}) for pt in adjusted_sprays))
+    movement_pitch_types = None if ml_spray_override is None else (set(adjusted_sprays) - ml_pitch_types)
 
     if adjusted_sprays:
         positions, movement_detail = _compute_weighted_fielder_positions(
@@ -1444,6 +1514,7 @@ def compute_pitcher_batter_positioning(
             pop_baselines=pop_baselines, gb_pct=float(gb_pct_est),
             pitcher_profile=None if ml_covered_all else (pitcher_profile if not pitcher_not_found else None),
             pop_movement=None if ml_covered_all else (pop_movement if not pitcher_not_found else None),
+            movement_pitch_types=movement_pitch_types,
         )
     else:
         positions = {}

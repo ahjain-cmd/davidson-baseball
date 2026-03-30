@@ -246,8 +246,8 @@ def _rank_sequences_from_pdf(pdf, pitch_metrics, tunnel_df=None, length=3, top_n
     if pdf.empty:
         return []
 
-    sort_cols = [c for c in ["GameID", "Batter", "PAofInning", "PitchNo"] if c in pdf.columns]
-    group_cols = [c for c in ["GameID", "Batter", "PAofInning"] if c in pdf.columns]
+    sort_cols = [c for c in ["GameID", "Pitcher", "Batter", "Inning", "PAofInning", "PitchNo"] if c in pdf.columns]
+    group_cols = [c for c in ["GameID", "Pitcher", "Batter", "Inning", "PAofInning"] if c in pdf.columns]
     if len(sort_cols) < 2 or len(group_cols) < 2:
         return []
 
@@ -2077,6 +2077,22 @@ def page_pitching(data):
         pitching = pitching[pitching["BatterTeam"] != DAVIDSON_TEAM_ID]
     elif game_mode == "Scrimmages Only":
         pitching = pitching[pitching["BatterTeam"] == DAVIDSON_TEAM_ID]
+
+    # ── Self Scout PDF Export ──
+    _ss_col1, _ss_col2 = st.columns([3, 1])
+    with _ss_col2:
+        if st.button("Generate Self Scout PDF", key="pitching_self_scout_gen"):
+            with st.spinner("Building Self Scout PDF..."):
+                from generate_self_scout_pdf import generate_self_scout_pdf_bytes
+                st.session_state.self_scout_pdf = generate_self_scout_pdf_bytes(data, season_filter)
+        if st.session_state.get("self_scout_pdf"):
+            st.download_button(
+                "Download Self Scout PDF",
+                data=st.session_state.self_scout_pdf,
+                file_name=f"davidson_self_scout_{'-'.join(str(s) for s in season_filter)}.pdf",
+                mime="application/pdf",
+                key="pitching_self_scout_dl",
+            )
 
     pitchers = sorted(pitching["Pitcher"].unique())
     with c1:

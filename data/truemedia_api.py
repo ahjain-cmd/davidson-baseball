@@ -10,7 +10,9 @@ import logging
 import os
 import time
 from io import StringIO
+from urllib.parse import quote
 
+import numpy as np
 import pandas as pd
 import requests
 import streamlit as st
@@ -208,6 +210,28 @@ def _query_csv(endpoint, params, tok, timeout=30):
         return pd.DataFrame()
 
 
+def _query_csv_with_retries(endpoint, params, tok, *, timeouts=(30, 60, 120), retry_on_empty=False):
+    """Run a CSV query with escalating timeouts for unstable endpoints."""
+    last_df = pd.DataFrame()
+    total_attempts = len(timeouts)
+    for attempt_idx, timeout in enumerate(timeouts, start=1):
+        df = _query_csv(endpoint, params, tok, timeout=timeout)
+        if not df.empty:
+            return df
+        last_df = df
+        if not retry_on_empty or attempt_idx == total_attempts:
+            continue
+        logger.info(
+            "Retrying TrueMedia %s query (%s/%s) after empty response; params=%s",
+            endpoint,
+            attempt_idx + 1,
+            total_attempts,
+            params,
+        )
+        time.sleep(min(1.5 * attempt_idx, 3.0))
+    return last_df
+
+
 # ── High-level fetchers ──────────────────────────────────────────────────────
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -325,6 +349,188 @@ def fetch_hitter_spray_vs_hand(team_id, season_year, hand="R"):
         return df
     except Exception:
         return pd.DataFrame()
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_hitter_spray(season_year, team_id=None, pitcher_hand=None, season_type="REG", min_pa=0):
+    """Fetch hitter spray data for a season.
+
+    Returns one row per hitter with PA, Pull%, Center%, Oppo%, and batted-ball mix.
+    If pitcher_hand is provided, TrueMedia's pitcherHand split parameter is used.
+    """
+    tok = get_temp_token()
+    if not tok:
+        return pd.DataFrame()
+    cols = _dedup_cols(
+        "[PA]",
+        _HIT_LOCATION_COLS,
+        _HIT_BATTEDBALL_COLS,
+    )
+    params = {
+        "seasonYear": season_year,
+        "columns": cols,
+        "format": "RAW",
+    }
+    if team_id is not None:
+        params["teamId"] = team_id
+    if season_type:
+        params["seasonType"] = season_type
+    if pitcher_hand:
+        params["pitcherHand"] = pitcher_hand
+    timeout = 120 if team_id is None else 30
+    df = _query_csv("PlayerTotals", params, tok, timeout=timeout)
+    if df.empty:
+        return df
+    _normalize_tm_df(df)
+    for col in ["PA", "HPull%", "HCtr%", "HOppFld%", "Ground%", "Fly%", "Line%", "Popup%"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    if min_pa:
+        df = df[df.get("PA", 0).fillna(0) >= float(min_pa)].copy()
+    sort_cols = [c for c in ["PA", "HPull%"] if c in df.columns]
+    if sort_cols:
+        df = df.sort_values(sort_cols, ascending=[False] * len(sort_cols), kind="mergesort")
+    return df.reset_index(drop=True)
+ 
+
+def _player_filter_clause(player_name=None, player_id=None):
+    if player_id is not None:
+        return f"playerId%20%3D%20{int(player_id)}"
+    if not player_name:
+        raise ValueError("player_name or player_id is required")
+    safe_name = str(player_name).replace("'", "''")
+    quoted_name = quote(f"'{safe_name}'", safe="")
+    return f"fullName%20%3D%20{quoted_name}"
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_team_hitter_spray_vs_hand(team_id, season_year, hand="R"):
+    """Fetch one team's hitter spray rows for a season vs a pitcher hand."""
+    tok = get_temp_token()
+    if not tok or team_id is None:
+        return pd.DataFrame()
+    cols = _dedup_cols("[PA],[KnownBBL]", _HIT_LOCATION_COLS, _HIT_BATTEDBALL_COLS)
+    params = {
+        "teamId": int(team_id),
+        "seasonYear": season_year,
+        "columns": cols,
+        "format": "RAW",
+        "pitcherHand": hand,
+    }
+    try:
+        df = _query_csv("PlayerTotals", params, tok, timeout=45)
+        if not df.empty:
+            _normalize_tm_df(df)
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_all_hitter_spray_vs_hand(season_year, hand="R"):
+    """Fetch all hitter spray rows for one season vs a pitcher hand."""
+    tok = get_temp_token()
+    if not tok:
+        return pd.DataFrame()
+    cols = _dedup_cols("[PA],[KnownBBL]", _HIT_LOCATION_COLS, _HIT_BATTEDBALL_COLS)
+    params = {
+        "seasonYear": season_year,
+        "columns": cols,
+        "format": "RAW",
+        "pitcherHand": hand,
+    }
+    try:
+        df = _query_csv("PlayerTotals", params, tok, timeout=60)
+        if not df.empty:
+            _normalize_tm_df(df)
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_player_spray_vs_hand(player_name, season_year, hand="R", player_id=None, team_id=None):
+    """Fetch spray profile for one hitter in one season vs a specific pitcher hand."""
+    df = fetch_team_hitter_spray_vs_hand(team_id, season_year, hand=hand) if team_id is not None else pd.DataFrame()
+    if df.empty:
+        df = fetch_all_hitter_spray_vs_hand(season_year, hand=hand)
+    if df.empty:
+        return pd.DataFrame()
+    out = df
+    if player_id is not None and "playerId" in out.columns:
+        pid = pd.to_numeric(out["playerId"], errors="coerce")
+        out = out[pid == int(player_id)]
+    if out.empty and player_name:
+        target = str(player_name).strip().lower()
+        if "playerFullName" in df.columns:
+            out = df[df["playerFullName"].astype(str).str.strip().str.lower() == target]
+        elif "fullName" in df.columns:
+            out = df[df["fullName"].astype(str).str.strip().str.lower() == target]
+    return out.reset_index(drop=True)
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_player_spray_history(player_name, seasons, hand="R", player_id=None, team_id=None, recency_decay=0.7):
+    """Blend a hitter's spray history vs a pitcher hand across multiple seasons.
+
+    The blend is PA-weighted with a recency decay so recent seasons carry more influence.
+    Returns a dict with percentage values on a 0-100 scale.
+    """
+    seasons = tuple(sorted({int(s) for s in seasons if s is not None}))
+    if not seasons:
+        return {}
+
+    season_rows = []
+    max_season = max(seasons)
+    for season in seasons:
+        df = fetch_player_spray_vs_hand(player_name, season, hand=hand, player_id=player_id, team_id=team_id)
+        if df.empty:
+            continue
+        row = df.iloc[0]
+        pa = float(pd.to_numeric(row.get("PA"), errors="coerce") or 0.0)
+        if pa <= 0:
+            continue
+        known_bbl = float(pd.to_numeric(row.get("KnownBBL"), errors="coerce") or 0.0)
+        weight_base = known_bbl if known_bbl > 0 else pa
+        season_rows.append({
+            "season": season,
+            "PA": pa,
+            "KnownBBL": known_bbl,
+            "HPull%": pd.to_numeric(row.get("HPull%"), errors="coerce"),
+            "HCtr%": pd.to_numeric(row.get("HCtr%"), errors="coerce"),
+            "HOppFld%": pd.to_numeric(row.get("HOppFld%"), errors="coerce"),
+            "HFarLft%": pd.to_numeric(row.get("HFarLft%"), errors="coerce"),
+            "HLftCtr%": pd.to_numeric(row.get("HLftCtr%"), errors="coerce"),
+            "HDeadCtr%": pd.to_numeric(row.get("HDeadCtr%"), errors="coerce"),
+            "HRtCtr%": pd.to_numeric(row.get("HRtCtr%"), errors="coerce"),
+            "HFarRt%": pd.to_numeric(row.get("HFarRt%"), errors="coerce"),
+            "Ground%": pd.to_numeric(row.get("Ground%"), errors="coerce"),
+            "weight": weight_base * (recency_decay ** (max_season - season)),
+        })
+
+    if not season_rows:
+        return {}
+
+    hist_df = pd.DataFrame(season_rows)
+    out = {
+        "playerFullName": player_name,
+        "hand": hand,
+        "PA": int(hist_df["PA"].sum()),
+        "KnownBBL": int(hist_df["KnownBBL"].sum()),
+        "seasons": seasons,
+        "seasons_used": tuple(int(v) for v in hist_df["season"].tolist()),
+    }
+    for col in [
+        "HPull%", "HCtr%", "HOppFld%", "Ground%",
+        "HFarLft%", "HLftCtr%", "HDeadCtr%", "HRtCtr%", "HFarRt%",
+    ]:
+        valid = hist_df[col].notna() & hist_df["weight"].gt(0)
+        if not valid.any():
+            out[col] = None
+            continue
+        weights = hist_df.loc[valid, "weight"]
+        out[col] = float(np.average(hist_df.loc[valid, col], weights=weights))
+    return out
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -846,22 +1052,36 @@ def fetch_team_all_pitches_trackman(team_id, season_year=2026):
     if not game_ids:
         return pd.DataFrame()
 
-    # Batch fetch — API allows up to 100 game IDs per request
-    batch_size = 50
+    # Smaller batches with escalating timeouts reduce dropped requests on larger schedules.
+    batch_size = 20
     all_dfs = []
+    failed_batches = []
     for i in range(0, len(game_ids), batch_size):
         batch = game_ids[i:i + batch_size]
         batch_str = ",".join(str(g) for g in batch)
-        df = _query_csv("GamePitchesTrackman", {"gameId": batch_str}, tok)
+        df = _query_csv_with_retries(
+            "GamePitchesTrackman",
+            {"gameId": batch_str},
+            tok,
+            timeouts=(45, 90, 150),
+            retry_on_empty=True,
+        )
         if not df.empty:
             all_dfs.append(df)
+        else:
+            failed_batches.append(batch_str)
 
     if not all_dfs:
         return pd.DataFrame()
 
     combined = pd.concat(all_dfs, ignore_index=True)
-
-    combined = pd.concat(all_dfs, ignore_index=True)
+    if failed_batches:
+        logger.warning(
+            "GamePitchesTrackman returned no data for %d batch(es) for team %s season %s",
+            len(failed_batches),
+            team_id,
+            season_year,
+        )
 
     logger.info("GamePitchesTrackman raw columns (%d): %s", len(combined.columns), list(combined.columns))
     combined["__source"] = "truemedia"
@@ -1026,13 +1246,13 @@ def _normalize_tm_df(df):
 _COUNT_SPLIT_COLS = "[PA],[AB],[AVG],[SLG],[OPS],[WOBA],[K%],[BB%],[Chase%],[SwStrk%],[Contact%],[Swing%],[ExitVel],[Barrel%],[HardHit%]"
 
 _COUNT_FILTERS = {
-    "first_pitch": "event.balls%20%3D%200%20AND%20event.strikes%20%3D%200",
-    "two_strike": "event.strikes%20%3D%202",
-    "ahead": "event.balls%20%3C%20event.strikes",
-    "behind": "event.balls%20%3E%20event.strikes",
-    "two_zero": "event.balls%20%3D%202%20AND%20event.strikes%20%3D%200",
-    "two_one": "event.balls%20%3D%202%20AND%20event.strikes%20%3D%201",
-    "three_one": "event.balls%20%3D%203%20AND%20event.strikes%20%3D%201",
+    "first_pitch": "event.balls = 0 AND event.strikes = 0",
+    "two_strike": "event.strikes = 2",
+    "ahead": "event.balls < event.strikes",
+    "behind": "event.balls > event.strikes",
+    "two_zero": "event.balls = 2 AND event.strikes = 0",
+    "two_one": "event.balls = 2 AND event.strikes = 1",
+    "three_one": "event.balls = 3 AND event.strikes = 1",
 }
 
 
@@ -1054,12 +1274,12 @@ def fetch_hitter_count_splits(team_id, season_year=2026):
             "seasonYear": season_year,
             "columns": _COUNT_SPLIT_COLS,
             "format": "RAW",
+            "filters": f"(({filt}))",
+            "token": tok,
         }
-        # Build URL with filter manually (brackets need to stay unencoded)
-        parts = "&".join(f"{k}={v}" for k, v in params.items())
-        url = f"{_DQ_BASE}/PlayerTotals.csv?{parts}&filters=(({filt}))&token={tok}"
         try:
-            res = requests.get(url, timeout=30)
+            # Let requests encode the filter expression exactly once.
+            res = requests.get(f"{_DQ_BASE}/PlayerTotals.csv", params=params, timeout=30)
             res.raise_for_status()
             df = pd.read_csv(StringIO(res.text))
             if not df.empty:

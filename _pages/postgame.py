@@ -2461,14 +2461,28 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
         balls = pd.Series(0, index=pitcher_pdf.index)
         strikes = pd.Series(0, index=pitcher_pdf.index)
 
-    # Identify first pitch of each PA
-    pa_cols = [c for c in ["GameID", "Batter", "PAofInning", "Inning"] if c in pitcher_pdf.columns]
-    sort_cols = [c for c in ["Inning", "PAofInning", "PitchNo"] if c in pitcher_pdf.columns]
+    # Identify first/last pitch of each PA and build PA-level outcome summaries.
+    pa_cols = [c for c in ["GameID", "Pitcher", "Batter", "Inning", "PAofInning"] if c in pitcher_pdf.columns]
+    sort_cols = [c for c in ["GameID", "Inning", "PAofInning", "PitchNo"] if c in pitcher_pdf.columns]
+    pa_summary_df = pd.DataFrame()
     if pa_cols and sort_cols:
         _sorted = pitcher_pdf.sort_values(sort_cols)
         first_pitch_mask = ~_sorted.duplicated(subset=pa_cols, keep="first")
         first_pitch_idx = _sorted.index[first_pitch_mask]
         pa_last = _sorted.drop_duplicates(subset=pa_cols, keep="last")
+        pa_rows = []
+        for _, pa_grp in _sorted.groupby(pa_cols, sort=False, dropna=False):
+            pa_balls = balls.reindex(pa_grp.index).fillna(0).astype(int)
+            pa_strikes = strikes.reindex(pa_grp.index).fillna(0).astype(int)
+            last_row = pa_grp.iloc[-1]
+            ended_in_k = str(last_row.get("KorBB", "")).strip() == "Strikeout"
+            pa_rows.append({
+                "reached_2k": bool((pa_strikes == 2).any()),
+                "ended_in_out": bool(_pa_ended_in_out(last_row)),
+                "ended_in_k": ended_in_k,
+            })
+        if pa_rows:
+            pa_summary_df = pd.DataFrame(pa_rows)
     else:
         first_pitch_idx = pitcher_pdf.index[:0]  # empty
         pa_last = pd.DataFrame()
@@ -2511,15 +2525,30 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
                                           [(50, 0), (65, 40), (75, 70), (85, 100)])
 
     # --- 2-Strike Putaway % ---
+    # Use unique PAs that reached two strikes instead of raw 2-strike pitch count.
+    # Full credit goes to strikeouts; balls in play outs get half-credit because the
+    # pitcher still finished the PA after gaining leverage, but with less dominance.
     two_strike_mask = strikes == 2
     two_strike_pitches = pitcher_pdf[two_strike_mask]
     n_2k = len(two_strike_pitches)
-    if n_2k > 0 and "KorBB" in pitcher_pdf.columns:
+    n_2k_pa = 0
+    if not pa_summary_df.empty:
+        two_strike_pas = pa_summary_df[pa_summary_df["reached_2k"]]
+        n_2k_pa = len(two_strike_pas)
+        if n_2k_pa > 0:
+            putaway_credit = (
+                two_strike_pas["ended_in_k"].sum()
+                + 0.5 * ((two_strike_pas["ended_in_out"]) & (~two_strike_pas["ended_in_k"])).sum()
+            )
+            putaway_pct = putaway_credit / n_2k_pa * 100
+        else:
+            putaway_pct = 30.0
+    elif n_2k > 0 and "KorBB" in pitcher_pdf.columns:
         k_on_2k = (two_strike_pitches["KorBB"] == "Strikeout").sum()
         putaway_pct = k_on_2k / n_2k * 100
     else:
         putaway_pct = 30.0
-    putaway_score = _piecewise(putaway_pct, [(15, 10), (25, 40), (35, 70), (45, 90), (55, 100)])
+    putaway_score = _piecewise(putaway_pct, [(25, 10), (40, 40), (55, 70), (70, 90), (85, 100)])
 
     # --- Waste Pitch Efficiency (0-2 count chase rate) ---
     waste_chase_pct = None
@@ -2557,21 +2586,35 @@ def _compute_call_grade(pitcher_pdf, data, pitcher):
     top_pair_names = []
 
     if top_pairs:
+        top_pair_keys = set()
+        for p in top_pairs:
+            pair_str = p.get("Pair", "")
+            top_pair_names.append(pair_str)
+            parts = [x.strip() for x in pair_str.split("/")]
+            if len(parts) == 2:
+                top_pair_keys.add(tuple(sorted(parts)))
+
         game_sorted = pitcher_pdf.sort_values(sort_cols).copy() if sort_cols else pitcher_pdf.copy()
-        if "TaggedPitchType" in game_sorted.columns:
-            game_types = game_sorted["TaggedPitchType"].dropna().tolist()
-            total_transitions = max(len(game_types) - 1, 1)
-            top_pair_keys = set()
-            for p in top_pairs:
-                pair_str = p.get("Pair", "")
-                top_pair_names.append(pair_str)
-                parts = [x.strip() for x in pair_str.split("/")]
-                if len(parts) == 2:
-                    top_pair_keys.add(tuple(sorted(parts)))
-            for i in range(len(game_types) - 1):
-                key = tuple(sorted([game_types[i], game_types[i + 1]]))
-                if key in top_pair_keys:
-                    usage_count += 1
+        if "TaggedPitchType" in game_sorted.columns and top_pair_keys:
+            total_transitions = 0
+            if pa_cols and sort_cols:
+                for _, pa_grp in game_sorted.groupby(pa_cols, sort=False, dropna=False):
+                    pa_types = pa_grp["TaggedPitchType"].dropna().tolist()
+                    if len(pa_types) < 2:
+                        continue
+                    total_transitions += len(pa_types) - 1
+                    for i in range(len(pa_types) - 1):
+                        key = tuple(sorted([pa_types[i], pa_types[i + 1]]))
+                        if key in top_pair_keys:
+                            usage_count += 1
+            else:
+                game_types = game_sorted["TaggedPitchType"].dropna().tolist()
+                total_transitions = max(len(game_types) - 1, 0)
+                for i in range(len(game_types) - 1):
+                    key = tuple(sorted([game_types[i], game_types[i + 1]]))
+                    if key in top_pair_keys:
+                        usage_count += 1
+            total_transitions = max(total_transitions, 1)
             usage_pct = usage_count / total_transitions * 100
             seq_util_score = min(100, max(0, 30 + usage_pct * 1.4))
     pair_usage_score = seq_util_score
@@ -3133,7 +3176,7 @@ def _render_call_grade_section(pitcher_pdf, data, pitcher, key_suffix):
             for p in grade_info["top_pairs"]:
                 pair_rows.append({
                     "Pair": p.get("Pair", "?"),
-                    "N": p.get("N", "-"),
+                    "N": p.get("Pairs", p.get("N", "-")),
                     "CSW%": f"{p.get('CSW%', 0):.1f}" if pd.notna(p.get("CSW%")) else "-",
                     "Chase%": f"{p.get('Chase%', 0):.1f}" if pd.notna(p.get("Chase%")) else "-",
                 })

@@ -858,6 +858,8 @@ def main():
                         help="Train ML GB direction model (XGBoost) from Trackman data")
     parser.add_argument("--train-adj-pull-model", action="store_true",
                         help="Train ML adj-pull model (XGBClassifier P(pull)) from Trackman data")
+    parser.add_argument("--train-defense-positioning-model", action="store_true",
+                        help="Train leak-free defensive positioning model from Trackman data")
     parser.add_argument("--train-spatial-hole-model", action="store_true",
                         help="Train spatial hole score model (3 XGBoost sub-models) from Trackman data")
     parser.add_argument("--backtest-scoring", action="store_true",
@@ -900,6 +902,12 @@ def main():
         print("Training ML adj-pull model...")
         from analytics.gb_model import train_adj_pull_model
         train_adj_pull_model(parquet_path=args.parquet)
+        return
+
+    if args.train_defense_positioning_model:
+        print("Training defensive positioning model...")
+        from analytics.defense_positioning_model import train_defense_positioning_model
+        train_defense_positioning_model(parquet_path=args.parquet)
         return
 
     if args.train_spatial_hole_model:

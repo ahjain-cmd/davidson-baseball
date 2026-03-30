@@ -7,6 +7,7 @@ from data.loader import (
     _hitter_narrative, _pitcher_narrative,
     _pct_to_float, _clean_pct_cols,
 )
+from data.truemedia_api import fetch_hitter_spray
 from data.stats import (
     compute_batter_stats, compute_pitcher_stats,
     _build_batter_zones,

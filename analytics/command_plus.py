@@ -295,13 +295,16 @@ def _compute_pitch_pair_results(pdf, data, tunnel_df=None):
     if pdf.empty:
         return pd.DataFrame()
 
-    # Sort by game, at-bat, pitch number
-    sort_cols = [c for c in ["GameID", "Batter", "Inning", "PAofInning", "PitchNo"] if c in pdf.columns]
+    # Sort and group strictly within a single plate appearance.
+    sort_cols = [c for c in ["GameID", "Pitcher", "Batter", "Inning", "PAofInning", "PitchNo"] if c in pdf.columns]
     if len(sort_cols) < 2:
         return pd.DataFrame()
 
     pdf_s = pdf.sort_values(sort_cols).copy()
-    pdf_s["PrevPitch"] = pdf_s.groupby(["GameID", "Batter", "PAofInning"])["TaggedPitchType"].shift(1)
+    pa_group_cols = [c for c in ["GameID", "Pitcher", "Batter", "Inning", "PAofInning"] if c in pdf_s.columns]
+    if len(pa_group_cols) < 2:
+        return pd.DataFrame()
+    pdf_s["PrevPitch"] = pdf_s.groupby(pa_group_cols, dropna=False)["TaggedPitchType"].shift(1)
     pdf_s = pdf_s.dropna(subset=["PrevPitch"])
 
     is_whiff = pdf_s["PitchCall"] == "StrikeSwinging"

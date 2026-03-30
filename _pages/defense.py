@@ -519,7 +519,7 @@ def page_defensive_positioning(data):
                 shift_color = "#fe6100"
                 shift_desc = (f"Moderate pull tendency ({pull_pct:.0f}%). "
                               f"Shade middle infielders slightly toward pull side, don't full shift.")
-            elif oppo_pct > 40:
+            elif oppo_pct > 40 or pull_pct < 30:
                 shift_rec = "Shade Oppo"
                 shift_color = "#1f77b4"
                 shift_desc = (f"Oppo-oriented hitter ({oppo_pct:.0f}% opposite field). "

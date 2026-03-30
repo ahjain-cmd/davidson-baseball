@@ -684,6 +684,108 @@ FORDHAM_POSITION = {
     "O'Brien-Gonzalez, Aidan": "RHP",
 }
 
+# ── La Salle 2026 Roster ────────
+LASALLE_TEAM_NAME = "La Salle University"
+LASALLE_COMBINED_TEAM_ID = "LASALLE_COMBINED_2026"
+LASALLE_TM_TEAM_ID = 730183680
+
+# Transfers: "Last, First" -> most-recent previous school search name.
+# La Salle restarted their program in 2026 — nearly everyone is a transfer.
+LASALLE_TRANSFERS = {
+    "Perez, Daniel": "University of Memphis",
+    "Swain, Chase": "West Virginia University",
+    "Szestowicki, Justin": "Elon University",
+    "Groen, Carter": "University of Connecticut",
+    "Welshans, Alec": "Elon University",
+    "Perez, Ryan": "Coastal Carolina University",
+    "Guiliana, AJ": "Harford CC",
+    "Livingston, Rueben": "Harford CC",
+    "Albin, Ryan": "Harford CC",
+    "Suzuki, Kosei": "Frank Phillips College",
+    "Rhue, Austin": "Hood College",
+    "MacDonnell, Owen": "Sacred Heart University",
+    "Karpaitis, Shawn": "Frederick CC",
+    "Narke, Hudson": "Elon University",
+    "Beck, Josh": "Florida Tech",
+    "Brown, Ryan": "Queens University of Charlotte",
+    "Shay, Titus": "Harford CC",
+    "Levari, Marco": "Old Dominion University",
+    "Wadiak, Bruce": "Iona College",
+    "Duke, Dylan": "Saint Joseph's University",
+    "Perez, Sebastian": "UNC Charlotte",
+    "Edwardi, Dante": "Fairleigh Dickinson University",
+    "Howarth, Kross": "Tulane University",
+    "Rodriguez, Emilio": "St. Petersburg College",
+    "Kopalchick, Isaac": "Queens University of Charlotte",
+    "Zakarewicz, Aidan": "Northern Oklahoma College Tonkawa",
+    "Edwards, Lucas": "Mount Aloysius College",
+    "Peper, Jackson": "Chaminade University",
+    "Rose, PJ": "Central Alabama CC",
+    "Collora, Connor": "Rowan University",
+}
+
+# Additional previous schools for multi-transfer players (searched in addition to above).
+LASALLE_EXTRA_TRANSFERS = {
+    "Perez, Daniel": ["Manhattan College", "Stetson University"],
+    "Swain, Chase": ["Manhattan College"],
+    "Groen, Carter": ["Iona College"],
+    "Welshans, Alec": ["Harford CC"],
+    "Perez, Ryan": ["Longwood University"],
+    "Guiliana, AJ": ["University of San Francisco"],
+    "Karpaitis, Shawn": ["Bloomsburg"],
+    "Perez, Sebastian": ["College of Central Florida"],
+    "Brown, Ryan": ["Valdosta State University"],
+}
+
+LASALLE_ROSTER_2026 = {
+    # Hitters / position players
+    "Perez, Daniel", "Swain, Chase", "Szestowicki, Justin", "Groen, Carter",
+    "Welshans, Alec", "Novak, Jayden", "Perez, Ryan", "Guiliana, AJ",
+    "Livingston, Rueben", "Rhue, Austin", "Albin, Ryan", "Suzuki, Kosei",
+    "Olender, Michael", "Morgan, Tyler", "Tilden, Dom", "Amecangelo, Nico",
+    # Pitchers
+    "Karpaitis, Shawn", "Narke, Hudson", "MacDonnell, Owen", "Duke, Dylan",
+    "Beck, Josh", "Shay, Titus", "Brown, Ryan", "Collora, Connor",
+    "Terry, Jace", "Levari, Marco", "Edwardi, Dante", "Wadiak, Bruce",
+    "Edwards, Lucas", "Howarth, Kross", "DeStefanis, Matt", "Forester, Chase",
+    "Gist, Christopher", "Zakarewicz, Aidan", "Rodriguez, Emilio",
+    "Kopalchick, Isaac", "Perez, Sebastian", "Peper, Jackson", "Rose, PJ",
+    "Till, Brendan",
+}
+
+LASALLE_JERSEY = {}  # Unknown — update when available
+
+LASALLE_POSITION = {
+    # Hitters / position players
+    "Perez, Daniel": "INF", "Swain, Chase": "INF", "Szestowicki, Justin": "INF",
+    "Groen, Carter": "OF", "Welshans, Alec": "INF", "Novak, Jayden": "UTL",
+    "Perez, Ryan": "INF", "Guiliana, AJ": "C", "Livingston, Rueben": "OF",
+    "Rhue, Austin": "UTL", "Albin, Ryan": "INF", "Suzuki, Kosei": "UTL",
+    "Olender, Michael": "UTL", "Morgan, Tyler": "UTL", "Tilden, Dom": "UTL",
+    "Amecangelo, Nico": "UTL", "Till, Brendan": "UTL", "Peper, Jackson": "UTL",
+    "Rose, PJ": "UTL",
+    # Pitchers
+    "Karpaitis, Shawn": "RHP", "Narke, Hudson": "RHP", "MacDonnell, Owen": "RHP",
+    "Duke, Dylan": "RHP", "Beck, Josh": "RHP", "Shay, Titus": "RHP",
+    "Brown, Ryan": "RHP", "Collora, Connor": "RHP", "Terry, Jace": "RHP",
+    "Levari, Marco": "RHP", "Edwardi, Dante": "RHP", "Wadiak, Bruce": "RHP",
+    "Edwards, Lucas": "RHP", "Howarth, Kross": "RHP", "DeStefanis, Matt": "RHP",
+    "Forester, Chase": "RHP", "Gist, Christopher": "RHP",
+    "Zakarewicz, Aidan": "RHP", "Rodriguez, Emilio": "RHP",
+    "Kopalchick, Isaac": "RHP", "Perez, Sebastian": "RHP",
+}
+
+# ── Duke 2026 Roster ────────
+DUKE_TEAM_NAME = "Duke University"
+DUKE_COMBINED_TEAM_ID = "DUKE_COMBINED_2026"
+
+# Duke has program continuity — few transfers expected.
+# Roster auto-populated from TrueMedia API on first run.
+DUKE_TRANSFERS = {}
+DUKE_ROSTER_2026 = set()
+DUKE_JERSEY = {}
+DUKE_POSITION = {}
+
 NAME_MAP = {
     "Laughlin, Theo": "Loughlin, Theo",
     "Laughlin , Theo": "Loughlin, Theo",
