@@ -231,8 +231,19 @@ def _compute_pitcher_from_base(df):
 # ──────────────────────────────────────────────
 
 @st.cache_data(show_spinner="Computing batter rankings...")
+def _expand_season_filter(season_filter):
+    """If only 2026 is selected, include 2025 for a meaningful percentile population."""
+    if not season_filter:
+        return season_filter
+    seasons = [int(s) for s in season_filter]
+    if seasons == [2026] and 2025 not in seasons:
+        seasons = [2025, 2026]
+    return seasons
+
+
 def compute_batter_stats_pop(season_filter=None, _version=5):
     """Compute batter stats for all D1 batters via DuckDB. Adaptive per-batter zone."""
+    season_filter = _expand_season_filter(season_filter)
     if _precompute_table_exists("batter_stats_pop"):
         df = _read_precompute_table("batter_stats_pop")
         if df.empty:
@@ -504,6 +515,7 @@ def compute_batter_stats_pop(season_filter=None, _version=5):
 @st.cache_data(show_spinner="Computing pitcher rankings...")
 def compute_pitcher_stats_pop(season_filter=None, _version=5):
     """Compute pitcher stats for all D1 pitchers via DuckDB. Adaptive per-batter zone."""
+    season_filter = _expand_season_filter(season_filter)
     if _precompute_table_exists("pitcher_stats_pop"):
         df = _read_precompute_table("pitcher_stats_pop")
         if df.empty:
