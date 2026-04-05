@@ -10,6 +10,8 @@ services:
       - ${DATA_DIR:-.}/.cache:/app/.cache
       # Optional: mount TrueMedia data
       - ${DATA_DIR:-.}/export.json:/app/export.json:ro
+      # Blast Motion swing sensor data
+      - "${DATA_DIR:-.}/Metrics - All Players - 2019-09-11 - 2026-02-18 - 1772478721.csv:/app/Metrics - All Players - 2019-09-11 - 2026-02-18 - 1772478721.csv:ro"
     environment:
       - STREAMLIT_SERVER_MAX_UPLOAD_SIZE=500
       - TM_MASTER_TOKEN=${TM_MASTER_TOKEN}
