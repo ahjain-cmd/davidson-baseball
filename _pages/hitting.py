@@ -14,7 +14,7 @@ from config import (
     in_zone_mask, is_barrel_mask, display_name, get_percentile, _is_position_player,
 )
 from data.loader import get_all_seasons, _load_truemedia, _tm_player, _safe_val, _safe_pct, _safe_num, _tm_pctile
-from data.stats import compute_batter_stats, _build_batter_zones, compute_swing_path_metrics
+from data.stats import compute_batter_stats, _build_batter_zones, compute_swing_path_metrics, load_blast_data
 from data.population import compute_batter_stats_pop
 from viz.layout import CHART_LAYOUT, section_header
 from viz.charts import (
@@ -65,9 +65,10 @@ def _plotly_chart_bats(fig, **kwargs):
     st.plotly_chart(fig, **kwargs)
 
 
-def _hitter_card_content(data, batter, season_filter, bdf, batted, pr, all_batter_stats):
+def _hitter_card_content(data, batter, season_filter, bdf, batted, pr, all_batter_stats, blast_data=None):
     """Render a single-page Hitter Card — simple, actionable summary."""
     all_stats = all_batter_stats
+    blast = (blast_data or {}).get(batter)
     in_play = bdf[bdf["PitchCall"] == "InPlay"]
     swings = bdf[bdf["PitchCall"].isin(SWING_CALLS)]
     whiffs = bdf[bdf["PitchCall"] == "StrikeSwinging"]
@@ -363,24 +364,64 @@ def _hitter_card_content(data, batter, season_filter, bdf, batted, pr, all_batte
     col_swing, col_evla = st.columns([1, 1], gap="medium")
 
     with col_swing:
-        section_header("Swing Path Profile")
-        sp = compute_swing_path_metrics(bdf)
-        if sp is not None:
-            # Display as metric cards
-            cards = [
-                ("Attack Angle", f"{sp['attack_angle']:.1f}\u00b0", sp.get("swing_type", "")),
-                ("Path Adjust", f"{sp['path_adjust']:.1f}\u00b0/ft", "Low = flat, High = adaptable"),
-                ("Median LA", f"{sp['avg_la_all']:.1f}\u00b0", f"Hard-hit: {sp['attack_angle_raw']:.1f}\u00b0"),
-            ]
-            if not pd.isna(sp.get("bat_speed_avg", np.nan)):
-                cards.append(("Bat Speed (est)", f"{sp['bat_speed_avg']:.1f} mph", "Top-25% EV proxy"))
-            if sp.get("depth_label"):
-                cards.append(("Contact Depth", sp["depth_label"], "Where bat meets ball"))
+        if blast:
+            # ── Blast Motion real data ──
+            section_header("Swing Path Profile (Blast)")
+            _b_bs = blast.get("Bat Speed (mph)")
+            _b_aa = blast.get("Attack Angle (deg)")
+            _b_ope = blast.get("On Plane Efficiency (%)")
+            _b_rot = blast.get("Rotational Acceleration (g)")
+            _b_pow = blast.get("Power (kW)")
+            _b_ttc = blast.get("Time to Contact (sec)")
 
-            for label, val, desc in cards:
+            # Swing type label from Blast attack angle
+            if _b_aa is not None and not pd.isna(_b_aa):
+                if _b_aa > 14:
+                    _b_swing_type = "Uppercut / Lift"
+                elif _b_aa > 6:
+                    _b_swing_type = "Positive / Line-Drive"
+                elif _b_aa > -2:
+                    _b_swing_type = "Level"
+                else:
+                    _b_swing_type = "Negative / Chop"
+            else:
+                _b_swing_type = ""
+
+            # OPE quality tag
+            if _b_ope is not None and not pd.isna(_b_ope):
+                _ope_tag = "Elite" if _b_ope >= 80 else ("Good" if _b_ope >= 70 else ("Avg" if _b_ope >= 60 else "Below Avg"))
+            else:
+                _ope_tag = ""
+
+            # TTC tag
+            if _b_ttc is not None and not pd.isna(_b_ttc):
+                _ttc_tag = "Quick" if _b_ttc <= 0.13 else ("Avg" if _b_ttc <= 0.15 else "Slow")
+            else:
+                _ttc_tag = ""
+
+            # Trackman estimated bat speed for comparison
+            sp = compute_swing_path_metrics(bdf)
+            _est_bs = sp.get("bat_speed_avg") if sp else None
+            _bs_cmp = f"vs est: {_est_bs:.1f}" if _est_bs and not pd.isna(_est_bs) else ""
+
+            blast_cards = []
+            if _b_bs is not None and not pd.isna(_b_bs):
+                blast_cards.append(("Bat Speed", f"{_b_bs:.1f} mph", _bs_cmp))
+            if _b_aa is not None and not pd.isna(_b_aa):
+                blast_cards.append(("Attack Angle", f"{_b_aa:.1f}\u00b0", _b_swing_type))
+            if _b_ope is not None and not pd.isna(_b_ope):
+                blast_cards.append(("On Plane Eff", f"{_b_ope:.0f}%", _ope_tag))
+            if _b_rot is not None and not pd.isna(_b_rot):
+                blast_cards.append(("Rot Accel", f"{_b_rot:.1f} g", ""))
+            if _b_pow is not None and not pd.isna(_b_pow):
+                blast_cards.append(("Power", f"{_b_pow:.2f} kW", ""))
+            if _b_ttc is not None and not pd.isna(_b_ttc):
+                blast_cards.append(("Time to Contact", f"{_b_ttc:.3f} sec", _ttc_tag))
+
+            for label, val, desc in blast_cards:
                 st.markdown(
                     f'<div style="display:flex;align-items:center;margin:4px 0;padding:8px 12px;'
-                    f'background:#f9f9f9;border-radius:6px;border-left:3px solid #e63946;">'
+                    f'background:#f0f4ff;border-radius:6px;border-left:3px solid #1565c0;">'
                     f'<div style="flex:1;">'
                     f'<div style="font-size:11px;color:#888;text-transform:uppercase;">{label}</div>'
                     f'<div style="font-size:18px;font-weight:700;color:#1a1a2e;">{val}</div>'
@@ -388,7 +429,32 @@ def _hitter_card_content(data, batter, season_filter, bdf, batted, pr, all_batte
                     f'<div style="font-size:11px;color:#888;text-align:right;">{desc}</div>'
                     f'</div>', unsafe_allow_html=True)
         else:
-            st.info("Not enough batted ball data for swing path analysis (need 10+).")
+            # ── Trackman-estimated swing path (fallback) ──
+            section_header("Swing Path Profile")
+            sp = compute_swing_path_metrics(bdf)
+            if sp is not None:
+                cards = [
+                    ("Attack Angle", f"{sp['attack_angle']:.1f}\u00b0", sp.get("swing_type", "")),
+                    ("Path Adjust", f"{sp['path_adjust']:.1f}\u00b0/ft", "Low = flat, High = adaptable"),
+                    ("Median LA", f"{sp['avg_la_all']:.1f}\u00b0", f"Hard-hit: {sp['attack_angle_raw']:.1f}\u00b0"),
+                ]
+                if not pd.isna(sp.get("bat_speed_avg", np.nan)):
+                    cards.append(("Bat Speed (est)", f"{sp['bat_speed_avg']:.1f} mph", "Top-25% EV proxy"))
+                if sp.get("depth_label"):
+                    cards.append(("Contact Depth", sp["depth_label"], "Where bat meets ball"))
+
+                for label, val, desc in cards:
+                    st.markdown(
+                        f'<div style="display:flex;align-items:center;margin:4px 0;padding:8px 12px;'
+                        f'background:#f9f9f9;border-radius:6px;border-left:3px solid #e63946;">'
+                        f'<div style="flex:1;">'
+                        f'<div style="font-size:11px;color:#888;text-transform:uppercase;">{label}</div>'
+                        f'<div style="font-size:18px;font-weight:700;color:#1a1a2e;">{val}</div>'
+                        f'</div>'
+                        f'<div style="font-size:11px;color:#888;text-align:right;">{desc}</div>'
+                        f'</div>', unsafe_allow_html=True)
+            else:
+                st.info("Not enough batted ball data for swing path analysis (need 10+).")
 
     with col_evla:
         section_header("Exit Velo vs Launch Angle")
@@ -419,6 +485,34 @@ def _hitter_card_content(data, batter, season_filter, bdf, batted, pr, all_batte
             _plotly_chart_bats(fig, use_container_width=True, key="hc_ev_la")
         else:
             st.info("No exit velo / launch angle data.")
+
+    # ── Blast Composite Scores (only if Blast data exists) ──
+    if blast:
+        _plane = blast.get("Plane Score")
+        _conn = blast.get("Connection Score")
+        _rotscore = blast.get("Rotation Score")
+        if any(v is not None and not pd.isna(v) for v in [_plane, _conn, _rotscore]):
+            st.markdown("---")
+            section_header("Blast Composite Scores")
+            bc1, bc2, bc3 = st.columns(3)
+            for col_obj, lbl, score_val in [
+                (bc1, "Plane Score", _plane),
+                (bc2, "Connection Score", _conn),
+                (bc3, "Rotation Score", _rotscore),
+            ]:
+                with col_obj:
+                    if score_val is not None and not pd.isna(score_val):
+                        sc = int(round(score_val))
+                        sc_color = "#2e7d32" if sc >= 65 else ("#f9a825" if sc >= 50 else "#c62828")
+                        st.markdown(
+                            f'<div style="text-align:center;padding:12px 8px;background:#fafafa;'
+                            f'border-radius:8px;border:2px solid {sc_color};">'
+                            f'<div style="font-size:11px;color:#888;text-transform:uppercase;">{lbl}</div>'
+                            f'<div style="font-size:32px;font-weight:800;color:{sc_color};">{sc}</div>'
+                            f'<div style="font-size:10px;color:#888;">out of 100</div>'
+                            f'</div>', unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"**{lbl}**: N/A")
 
     # ── ROW 5: Platoon Splits ──
     st.markdown("---")
@@ -1698,9 +1792,11 @@ def page_hitting(data):
                   f"{pa_val} PA  |  {bbe_val} Batted Balls  |  "
                   f"Seasons: {', '.join(str(int(s)) for s in sorted(season_filter))}")
 
+    blast_data = load_blast_data()
+
     tab_card, tab_sdl = st.tabs(["Hitter Card", "Swing Decision Lab"])
     with tab_card:
-        _hitter_card_content(data, batter, season_filter, bdf, batted, pr, all_batter_stats)
+        _hitter_card_content(data, batter, season_filter, bdf, batted, pr, all_batter_stats, blast_data)
     with tab_sdl:
         _swing_decision_lab(data, batter, season_filter, bdf, batted, pr, all_batter_stats)
 

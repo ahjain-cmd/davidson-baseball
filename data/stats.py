@@ -6,6 +6,8 @@ import numpy as np
 from scipy.stats import percentileofscore
 from scipy import stats as sp_stats
 
+import os
+
 from config import (
     ZONE_HEIGHT_BOT,
     ZONE_HEIGHT_TOP,
@@ -19,6 +21,9 @@ from config import (
     in_zone_mask,
     is_barrel_mask,
     normalize_pitch_types,
+    BLAST_CSV_PATH,
+    _BLAST_EXCLUDE,
+    NAME_MAP,
 )
 
 
@@ -450,3 +455,48 @@ def get_percentile(value, series):
     if pd.isna(value) or series.dropna().empty:
         return np.nan
     return percentileofscore(series.dropna(), value, kind='rank')
+
+
+@st.cache_data(show_spinner=False)
+def load_blast_data():
+    """Load Blast Motion CSV and return dict keyed by Trackman 'Last, First' name.
+
+    Returns dict[str, dict] mapping batter name -> Blast metrics dict.
+    Returns empty dict if CSV not found or invalid.
+    """
+    if not BLAST_CSV_PATH or not os.path.isfile(BLAST_CSV_PATH):
+        return {}
+
+    try:
+        df = pd.read_csv(BLAST_CSV_PATH, encoding="utf-8-sig")
+    except Exception:
+        return {}
+
+    # Auto-detect header: if first column isn't "First Name", scan for it
+    if df.columns[0].strip() != "First Name":
+        for skip in range(1, 15):
+            try:
+                df = pd.read_csv(BLAST_CSV_PATH, encoding="utf-8-sig", skiprows=skip)
+                if df.columns[0].strip() == "First Name":
+                    break
+            except Exception:
+                continue
+        else:
+            return {}
+
+    if not {"First Name", "Last Name", "Bat Speed (mph)"}.issubset(df.columns):
+        return {}
+
+    result = {}
+    for _, row in df.iterrows():
+        first = str(row["First Name"]).strip()
+        last = str(row["Last Name"]).strip()
+        if f"{first} {last}" in _BLAST_EXCLUDE:
+            continue
+        raw_name = f"{last}, {first}"
+        batter = NAME_MAP.get(raw_name, raw_name)
+        total_swings = row.get("Total Swings", 0)
+        if pd.isna(total_swings) or total_swings == 0:
+            continue
+        result[batter] = row.to_dict()
+    return result
