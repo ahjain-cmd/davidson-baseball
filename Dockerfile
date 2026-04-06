@@ -24,6 +24,7 @@ COPY analytics/ analytics/
 COPY viz/ viz/
 COPY _pages/ _pages/
 COPY decision_engine/ decision_engine/
+COPY models/ models/
 COPY logo.png ./
 
 # Streamlit config

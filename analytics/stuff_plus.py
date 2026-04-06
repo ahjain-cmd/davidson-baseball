@@ -392,13 +392,17 @@ def _compute_stuff_plus(data, baseline=None, baselines_dict=None):
     """
     if data is None or len(data) == 0:
         return data
-    if "StuffPlus" in data.columns:
-        return data
 
     artifact = _load_stuff_model()
     if artifact is not None:
+        # Always recompute with XGBoost (drop stale precomputed column)
+        if "StuffPlus" in data.columns:
+            data = data.drop(columns=["StuffPlus"])
         return _compute_stuff_plus_xgb(data, artifact)
     else:
+        # Z-score fallback — skip if already computed
+        if "StuffPlus" in data.columns:
+            return data
         return _compute_stuff_plus_zscore(data, baseline=baseline, baselines_dict=baselines_dict)
 
 
