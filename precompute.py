@@ -862,6 +862,12 @@ def main():
                         help="Train leak-free defensive positioning model from Trackman data")
     parser.add_argument("--train-spatial-hole-model", action="store_true",
                         help="Train spatial hole score model (3 XGBoost sub-models) from Trackman data")
+    parser.add_argument("--train-stuff-model", action="store_true",
+                        help="Train Stuff+ XGBoost model on pitch run values")
+    parser.add_argument("--train-location-model", action="store_true",
+                        help="Train Location+ XGBoost model on pitch run values")
+    parser.add_argument("--train-all-models", action="store_true",
+                        help="Train all ML models (stuff, location, hole, xwoba, matchup, etc.)")
     parser.add_argument("--backtest-scoring", action="store_true",
                         help="Run scoring formula backtest and derive empirical weights")
     args = parser.parse_args()
@@ -914,6 +920,27 @@ def main():
         print("Training spatial hole score model...")
         from analytics.spatial_hole_model import train_spatial_hole_model
         train_spatial_hole_model(parquet_path=args.parquet)
+        return
+
+    if args.train_stuff_model:
+        print("Training Stuff+ XGBoost model...")
+        from analytics.stuff_plus import train_stuff_plus_model
+        train_stuff_plus_model(parquet_path=args.parquet)
+        return
+
+    if args.train_location_model:
+        print("Training Location+ XGBoost model...")
+        from analytics.command_plus import train_location_plus_model
+        train_location_plus_model(parquet_path=args.parquet)
+        return
+
+    if args.train_all_models:
+        print("Training Stuff+ XGBoost model...")
+        from analytics.stuff_plus import train_stuff_plus_model
+        train_stuff_plus_model(parquet_path=args.parquet)
+        print("\nTraining Location+ XGBoost model...")
+        from analytics.command_plus import train_location_plus_model
+        train_location_plus_model(parquet_path=args.parquet)
         return
 
     if args.backtest_scoring:

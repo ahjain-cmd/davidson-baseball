@@ -1,13 +1,15 @@
-"""Command+ and pitch pair results computation.
+"""Command+ (Location+) and pitch pair results computation.
 
-Command+ measures pitch location quality using:
-  1. Outcome-weighted location spread — deviations from the pitcher's mean
-     location are weighted by pitch outcome.  Good outcomes (called strikes,
-     whiffs) reduce the effective miss; bad outcomes (hard contact, balls)
-     amplify it.
-  2. Bayesian stabilization — small-sample Command+ is regressed toward
-     league-average (100) so that 15-pitch cameos don't produce wild scores.
+Location+: XGBoost trained on per-pitch run values using only location + count
+features (no physical pitch characteristics).  Falls back to the original
+outcome-weighted location spread method when the model file is absent.
+
+Scale: 100 = average, higher = better location.
 """
+from __future__ import annotations
+
+import os
+from typing import Dict, Tuple
 
 import streamlit as st
 import pandas as pd
@@ -17,16 +19,296 @@ from scipy.stats import percentileofscore
 from config import (
     in_zone_mask, SWING_CALLS, filter_minor_pitches,
     MIN_TUNNEL_SEQ_PCT, PLATE_SIDE_MAX, PLATE_HEIGHT_MIN, PLATE_HEIGHT_MAX,
+    normalize_pitch_types,
 )
 from data.loader import query_population
 
-# ---------------------------------------------------------------------------
-# Outcome-weight mapping: how much each pitch outcome inflates or
-# deflates the location-miss penalty.
-#   < 1.0  → good outcome, reduces miss penalty
-#   = 1.0  → neutral
-#   > 1.0  → bad outcome, amplifies miss penalty
-# ---------------------------------------------------------------------------
+_APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_MODEL_DIR = os.path.join(_APP_DIR, "models")
+_MODEL_PATH = os.path.join(_MODEL_DIR, "location_plus_xgb.joblib")
+
+# ── Pitch-type label encoding (consistent with stuff_plus) ──────────────────
+_PITCH_TYPE_LABELS = {
+    "Fastball": 0, "Sinker": 1, "Cutter": 2, "Slider": 3,
+    "Curveball": 4, "Changeup": 5, "Splitter": 6, "Knuckle Curve": 7,
+    "Sweeper": 8,
+}
+
+# ── Feature columns for the Location+ XGBoost model ─────────────────────────
+_LOC_FEATURES = [
+    "PlateLocSide", "PlateLocHeight",
+    "Balls", "Strikes",
+    "PitcherThrows_enc", "BatterSide_enc",
+    "pitch_type_enc",
+    "dist_from_center",
+    "loc_side_x_batter_side",
+    "in_zone",
+]
+
+
+# =============================================================================
+#  XGBoost Location+ training
+# =============================================================================
+
+def train_location_plus_model(parquet_path: str) -> None:
+    """Train Location+ XGBoost model on per-pitch run values.
+
+    Saves model + per-pitch-type scaling stats to ``models/location_plus_xgb.joblib``.
+    """
+    import duckdb
+    import joblib
+    from xgboost import XGBRegressor
+    from sklearn.model_selection import GroupShuffleSplit
+
+    from analytics.run_value import compute_pitch_run_values
+    from config import PARQUET_PATH, ZONE_SIDE, ZONE_HEIGHT_BOT, ZONE_HEIGHT_TOP
+
+    pq = parquet_path or PARQUET_PATH
+    print(f"  Loading pitches from {pq} ...")
+
+    con = duckdb.connect(":memory:")
+    df = con.execute(f"""
+        SELECT
+            GameID, Pitcher, Batter,
+            PitcherThrows, BatterSide,
+            Balls, Strikes, PitchCall, PlayResult, KorBB,
+            PlateLocSide, PlateLocHeight,
+            CASE
+                WHEN TaggedPitchType IN ('Undefined','Other','Knuckleball') THEN NULL
+                WHEN TaggedPitchType = 'FourSeamFastBall' THEN 'Fastball'
+                WHEN TaggedPitchType IN ('OneSeamFastBall','TwoSeamFastBall') THEN 'Sinker'
+                WHEN TaggedPitchType = 'ChangeUp' THEN 'Changeup'
+                ELSE TaggedPitchType
+            END AS TaggedPitchType
+        FROM read_parquet('{pq}')
+        WHERE PitchCall IS NOT NULL AND PitchCall != 'Undefined'
+          AND PlateLocSide IS NOT NULL
+          AND PlateLocHeight IS NOT NULL
+          AND PlateLocSide BETWEEN -{PLATE_SIDE_MAX} AND {PLATE_SIDE_MAX}
+          AND PlateLocHeight BETWEEN {PLATE_HEIGHT_MIN} AND {PLATE_HEIGHT_MAX}
+          AND PitcherThrows IS NOT NULL
+          AND TaggedPitchType NOT IN ('Undefined','Other','Knuckleball')
+    """).fetchdf()
+    con.close()
+    print(f"  Loaded {len(df):,} pitches")
+
+    # Compute run value targets
+    df = compute_pitch_run_values(df)
+    df = df.dropna(subset=["PitchRV", "TaggedPitchType"])
+    print(f"  After PitchRV: {len(df):,} pitches with valid targets")
+
+    # Build features
+    df["PitcherThrows_enc"] = (
+        df["PitcherThrows"].astype(str).str.lower().str.startswith("l").astype(int)
+    )
+    df["BatterSide_enc"] = (
+        df["BatterSide"].astype(str).str.lower().str.startswith("l").astype(int)
+    )
+    df["pitch_type_enc"] = df["TaggedPitchType"].map(_PITCH_TYPE_LABELS).fillna(-1).astype(int)
+    df["Balls"] = pd.to_numeric(df["Balls"], errors="coerce").fillna(0)
+    df["Strikes"] = pd.to_numeric(df["Strikes"], errors="coerce").fillna(0)
+
+    loc_side = df["PlateLocSide"].astype(float)
+    loc_height = df["PlateLocHeight"].astype(float)
+    df["dist_from_center"] = np.sqrt(loc_side ** 2 + (loc_height - 2.5) ** 2)
+    df["loc_side_x_batter_side"] = loc_side * df["BatterSide_enc"]
+    df["in_zone"] = (
+        (loc_side.abs() <= ZONE_SIDE) &
+        loc_height.between(ZONE_HEIGHT_BOT, ZONE_HEIGHT_TOP)
+    ).astype(int)
+
+    # Build feature matrix
+    X = df[_LOC_FEATURES].astype(float)
+    y = df["PitchRV"].astype(float)
+
+    valid = X.notna().all(axis=1) & y.notna()
+    X, y = X[valid], y[valid]
+    game_ids = df.loc[valid.index[valid], "GameID"]
+    pitch_types = df.loc[valid.index[valid], "TaggedPitchType"]
+    print(f"  Training on {len(X):,} pitches with complete features")
+
+    # Train/val split by GameID
+    gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+    train_idx, val_idx = next(gss.split(X, y, groups=game_ids))
+
+    X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
+    y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
+
+    model = XGBRegressor(
+        n_estimators=500,
+        max_depth=5,
+        learning_rate=0.05,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        min_child_weight=50,
+        reg_alpha=0.5,
+        reg_lambda=3.0,
+        tree_method="hist",
+        random_state=42,
+        early_stopping_rounds=30,
+    )
+    model.fit(
+        X_train, y_train,
+        eval_set=[(X_val, y_val)],
+        verbose=50,
+    )
+
+    # Validation metrics
+    val_pred = model.predict(X_val)
+    val_corr = np.corrcoef(y_val, val_pred)[0, 1]
+    val_mae = np.mean(np.abs(y_val - val_pred))
+    print(f"\n  Validation: r={val_corr:.4f}, MAE={val_mae:.5f}")
+
+    # Compute per-pitch-type scaling stats
+    all_pred = model.predict(X)
+    pt_stats: Dict[str, Tuple[float, float]] = {}
+    for pt in pitch_types.unique():
+        mask = pitch_types.values == pt
+        if mask.sum() < 50:
+            continue
+        preds = all_pred[mask]
+        pt_stats[pt] = (float(np.mean(preds)), float(np.std(preds)))
+    print(f"  Scaling stats computed for {len(pt_stats)} pitch types")
+
+    # Feature importance
+    imp = dict(zip(_LOC_FEATURES, model.feature_importances_))
+    imp_sorted = sorted(imp.items(), key=lambda x: -x[1])
+    print("\n  Feature importance:")
+    for feat, score in imp_sorted:
+        print(f"    {feat:30s} {score:.4f}")
+
+    # Save
+    os.makedirs(_MODEL_DIR, exist_ok=True)
+    artifact = {
+        "model": model,
+        "pt_stats": pt_stats,
+        "features": _LOC_FEATURES,
+        "pitch_type_labels": _PITCH_TYPE_LABELS,
+    }
+    joblib.dump(artifact, _MODEL_PATH, compress=3)
+    print(f"\n  Model saved to {_MODEL_PATH}")
+
+
+# =============================================================================
+#  XGBoost Location+ prediction
+# =============================================================================
+
+def _load_location_model():
+    """Load cached Location+ model artifact. Returns None if missing."""
+    if not os.path.exists(_MODEL_PATH):
+        return None
+    import joblib
+    try:
+        return joblib.load(_MODEL_PATH)
+    except Exception:
+        return None
+
+
+def _compute_command_plus_xgb(pdf: pd.DataFrame, artifact: dict, data=None) -> pd.DataFrame:
+    """Compute Command+ (Location+) using the XGBoost model.
+
+    Returns a DataFrame with the SAME columns as the spread-based method:
+    Pitch, Pitches, Loc Spread (ft), Zone%, Edge%, CSW%, Chase%, Command+, Percentile.
+    """
+    from config import ZONE_SIDE, ZONE_HEIGHT_BOT, ZONE_HEIGHT_TOP
+
+    model = artifact["model"]
+    pt_stats = artifact["pt_stats"]
+
+    cmd_rows = []
+    for pt in sorted(pdf["TaggedPitchType"].dropna().unique()):
+        ptd = pdf[pdf["TaggedPitchType"] == pt].dropna(
+            subset=["PlateLocSide", "PlateLocHeight"]
+        ).copy()
+        ptd = ptd[
+            ptd["PlateLocSide"].between(-PLATE_SIDE_MAX, PLATE_SIDE_MAX) &
+            ptd["PlateLocHeight"].between(PLATE_HEIGHT_MIN, PLATE_HEIGHT_MAX)
+        ]
+        if len(ptd) < 10:
+            continue
+
+        # Build features for this pitch type subset
+        ptd["PitcherThrows_enc"] = (
+            ptd["PitcherThrows"].astype(str).str.lower().str.startswith("l").astype(int)
+        ) if "PitcherThrows" in ptd.columns else 0
+        ptd["BatterSide_enc"] = (
+            ptd["BatterSide"].astype(str).str.lower().str.startswith("l").astype(int)
+        ) if "BatterSide" in ptd.columns else 0
+        ptd["pitch_type_enc"] = _PITCH_TYPE_LABELS.get(pt, -1)
+        ptd["Balls"] = pd.to_numeric(ptd.get("Balls", 0), errors="coerce").fillna(0)
+        ptd["Strikes"] = pd.to_numeric(ptd.get("Strikes", 0), errors="coerce").fillna(0)
+
+        loc_side = ptd["PlateLocSide"].astype(float)
+        loc_height = ptd["PlateLocHeight"].astype(float)
+        ptd["dist_from_center"] = np.sqrt(loc_side ** 2 + (loc_height - 2.5) ** 2)
+        ptd["loc_side_x_batter_side"] = loc_side * ptd["BatterSide_enc"]
+        ptd["in_zone"] = (
+            (loc_side.abs() <= ZONE_SIDE) &
+            loc_height.between(ZONE_HEIGHT_BOT, ZONE_HEIGHT_TOP)
+        ).astype(int)
+
+        X = ptd[_LOC_FEATURES].astype(float)
+        raw_rv = model.predict(X)
+
+        # Z-score within pitch type, negate (lower RV = better location = higher score)
+        if pt in pt_stats:
+            mean, std = pt_stats[pt]
+            if std > 0:
+                z = (raw_rv - mean) / std
+                loc_plus = 100 + (-z.mean()) * 10  # average pitcher-level score
+                pctl = min(99, max(1, 50 + (-z.mean()) * 15))
+            else:
+                loc_plus = 100.0
+                pctl = 50.0
+        else:
+            loc_plus = 100.0
+            pctl = 50.0
+
+        # Standard summary stats (same columns as spread-based)
+        in_zone = in_zone_mask(ptd)
+        zone_pct = in_zone.mean() * 100
+        edge = (
+            ((ptd["PlateLocSide"].abs().between(0.5, 1.1)) |
+             (ptd["PlateLocHeight"].between(1.2, 1.8)) |
+             (ptd["PlateLocHeight"].between(3.2, 3.8))) &
+            (ptd["PlateLocSide"].abs() <= 1.5) &
+            ptd["PlateLocHeight"].between(0.5, 4.5)
+        )
+        edge_pct = edge.mean() * 100
+        csw = ptd["PitchCall"].isin(["StrikeCalled", "StrikeSwinging"]).mean() * 100
+        out_zone = ~in_zone
+        chase_swings = ptd[out_zone & ptd["PitchCall"].isin(SWING_CALLS)]
+        chase_pct = len(chase_swings) / max(out_zone.sum(), 1) * 100
+
+        # Loc Spread for display (unweighted, same as spread method)
+        loc_spread = np.sqrt(
+            ptd["PlateLocHeight"].std() ** 2 + ptd["PlateLocSide"].std() ** 2
+        )
+
+        cmd_rows.append({
+            "Pitch": pt,
+            "Pitches": len(ptd),
+            "Loc Spread (ft)": round(loc_spread, 2) if np.isfinite(loc_spread) else np.nan,
+            "Zone%": round(zone_pct, 1),
+            "Edge%": round(edge_pct, 1),
+            "CSW%": round(csw, 1),
+            "Chase%": round(chase_pct, 1),
+            "Command+": round(loc_plus, 0),
+            "Percentile": round(pctl, 1),
+        })
+
+    if not cmd_rows:
+        return pd.DataFrame()
+    cmd_df = pd.DataFrame(cmd_rows)
+    cmd_df = cmd_df.sort_values("Command+", ascending=False)
+    return cmd_df
+
+
+# =============================================================================
+#  Original spread-based Command+ (fallback)
+# =============================================================================
+
+# Outcome-weight mapping
 _OUTCOME_WEIGHTS = {
     "StrikeCalled": 0.5,
     "StrikeSwinging": 0.5,
@@ -37,41 +319,26 @@ _OUTCOME_WEIGHTS = {
     "BallinDirt": 1.2,
     "BallIntentional": 1.0,
     "HitByPitch": 1.5,
-    "InPlay": 1.0,  # base — overridden by EV tiers below
+    "InPlay": 1.0,
 }
 
-# ---------------------------------------------------------------------------
-# Count-context multipliers: adjust outcome weights by the count.
-# A ball on 0-0 is poor command; a ball on 0-2 is a strategic waste pitch.
-# Keys are (balls, strikes) → {"ball": multiplier, "strike": multiplier}.
-#   ball mult > 1  → throwing a ball here is WORSE than usual
-#   ball mult < 1  → throwing a ball here is ACCEPTABLE (waste pitch)
-#   strike mult < 1 → getting a strike here is MORE valuable than usual
-# ---------------------------------------------------------------------------
 _COUNT_CONTEXT = {
-    # Pitcher's counts — waste pitches are strategic
     (0, 2): {"ball": 0.5, "strike": 0.9},
     (1, 2): {"ball": 0.6, "strike": 0.9},
-    # Neutral / slight advantage
-    (0, 0): {"ball": 1.1, "strike": 1.0},   # first pitch — get ahead
+    (0, 0): {"ball": 1.1, "strike": 1.0},
     (0, 1): {"ball": 0.9, "strike": 1.0},
     (1, 1): {"ball": 1.0, "strike": 1.0},
     (2, 2): {"ball": 0.9, "strike": 0.9},
-    # Behind in count — balls are costly, strikes are crucial
     (1, 0): {"ball": 1.2, "strike": 0.85},
     (2, 0): {"ball": 1.4, "strike": 0.75},
     (2, 1): {"ball": 1.2, "strike": 0.85},
     (3, 0): {"ball": 1.5, "strike": 0.7},
     (3, 1): {"ball": 1.4, "strike": 0.75},
-    # Full count — walk vs strikeout, high stakes both ways
     (3, 2): {"ball": 1.3, "strike": 0.8},
 }
 
-# Bayesian stabilization: number of pitches at which the observed score
-# receives 50 % weight (the other 50 % comes from the league-average prior).
 BAYESIAN_N = 150
 
-# Pitch-call categories for count multiplier lookup
 _BALL_CALLS = {"BallCalled", "BallinDirt", "BallIntentional", "HitByPitch"}
 _STRIKE_CALLS = {
     "StrikeCalled", "StrikeSwinging",
@@ -84,15 +351,13 @@ def _outcome_weight_series(ptd):
     """Per-pitch outcome weights combining base outcome + count context + EV."""
     w = ptd["PitchCall"].map(_OUTCOME_WEIGHTS).fillna(1.0).copy()
 
-    # EV-based overrides for batted balls
     if "ExitSpeed" in ptd.columns:
         inplay = ptd["PitchCall"] == "InPlay"
         ev = pd.to_numeric(ptd["ExitSpeed"], errors="coerce")
-        w.loc[inplay & (ev >= 98)]              = 2.0   # barrel-level
-        w.loc[inplay & (ev >= 95) & (ev < 98)]  = 1.5   # hard hit
-        w.loc[inplay & (ev < 85)]               = 0.8   # weak contact
+        w.loc[inplay & (ev >= 98)]              = 2.0
+        w.loc[inplay & (ev >= 95) & (ev < 98)]  = 1.5
+        w.loc[inplay & (ev < 85)]               = 0.8
 
-    # Count-context multipliers
     if "Balls" in ptd.columns and "Strikes" in ptd.columns:
         balls = pd.to_numeric(ptd["Balls"], errors="coerce")
         strikes = pd.to_numeric(ptd["Strikes"], errors="coerce")
@@ -153,14 +418,11 @@ def _build_fallback_spreads(data, pitch_types):
     return result
 
 
-def _compute_command_plus(pdf, data=None):
-    """Compute Command+ for each pitch type. Returns DataFrame with
-    Pitch, Pitches, Loc Spread (ft), Zone%, Edge%, CSW%, Chase%, Command+, Percentile.
-    Returns empty DataFrame if insufficient data."""
+def _compute_command_plus_spread(pdf, data=None):
+    """Original spread-based Command+ — used as fallback when model is absent."""
     cmd_rows = []
     for pt in sorted(pdf["TaggedPitchType"].dropna().unique()):
         ptd = pdf[pdf["TaggedPitchType"] == pt].dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
-        # Filter to valid location bounds to avoid outlier bias
         ptd = ptd[
             ptd["PlateLocSide"].between(-PLATE_SIDE_MAX, PLATE_SIDE_MAX)
             & ptd["PlateLocHeight"].between(PLATE_HEIGHT_MIN, PLATE_HEIGHT_MAX)
@@ -168,7 +430,6 @@ def _compute_command_plus(pdf, data=None):
         if len(ptd) < 10:
             continue
 
-        # Outcome-weighted location spread
         weights = _outcome_weight_series(ptd)
         loc_spread = _weighted_spread(ptd, weights)
 
@@ -198,10 +459,7 @@ def _compute_command_plus(pdf, data=None):
     if not cmd_rows:
         return pd.DataFrame()
     cmd_df = pd.DataFrame(cmd_rows)
-    # NCAA D1 baseline via population table (DuckDB)
-    # Population uses unweighted spreads — our pitcher's outcome-weighted
-    # spread is compared against this, so pitchers who "get away with" misses
-    # (called strikes on borderline pitches) are rewarded.
+
     pitch_types = sorted(cmd_df["Pitch"].unique())
     if pitch_types:
         pt_sql = ", ".join(f"'{p.replace(chr(39), chr(39)+chr(39))}'" for p in pitch_types)
@@ -236,7 +494,6 @@ def _compute_command_plus(pdf, data=None):
     else:
         baseline_df = pd.DataFrame()
 
-    # Fallback: if D1 population query failed, use in-memory data
     fallback_spreads = {}
     if baseline_df.empty and data is not None:
         fallback_spreads = _build_fallback_spreads(data, pitch_types)
@@ -252,7 +509,6 @@ def _compute_command_plus(pdf, data=None):
             cmd_pctls.append(50.0)
             continue
 
-        # Try D1 population baseline first
         spreads = None
         if not baseline_df.empty:
             pt_df = baseline_df[baseline_df["PitchType"] == pt].copy()
@@ -262,7 +518,6 @@ def _compute_command_plus(pdf, data=None):
                 if len(spreads) < 3:
                     spreads = None
 
-        # Fallback to in-memory data
         if spreads is None and pt in fallback_spreads:
             spreads = fallback_spreads[pt]
 
@@ -273,7 +528,6 @@ def _compute_command_plus(pdf, data=None):
 
         raw_pctl = 100 - percentileofscore(spreads, my_spread, kind="rank")
 
-        # Bayesian stabilization: regress toward league-average (50th pctl)
         alpha = n_pitches / (n_pitches + BAYESIAN_N)
         stab_pctl = alpha * raw_pctl + (1 - alpha) * 50.0
         stab_cmd = 100 + (stab_pctl - 50) * 0.4
@@ -287,6 +541,31 @@ def _compute_command_plus(pdf, data=None):
     return cmd_df
 
 
+# =============================================================================
+#  Main entry point (same interface as before)
+# =============================================================================
+
+def _compute_command_plus(pdf, data=None):
+    """Compute Command+ for each pitch type. Returns DataFrame with
+    Pitch, Pitches, Loc Spread (ft), Zone%, Edge%, CSW%, Chase%, Command+, Percentile.
+
+    Uses XGBoost Location+ model if available, otherwise falls back to
+    spread-based method.
+    """
+    if pdf.empty:
+        return pd.DataFrame()
+
+    artifact = _load_location_model()
+    if artifact is not None:
+        return _compute_command_plus_xgb(pdf, artifact, data=data)
+    else:
+        return _compute_command_plus_spread(pdf, data=data)
+
+
+# =============================================================================
+#  Pitch pair results (unchanged)
+# =============================================================================
+
 def _compute_pitch_pair_results(pdf, data, tunnel_df=None):
     """Compute effectiveness when pitch B follows pitch A in an at-bat."""
     if pdf.empty:
@@ -295,7 +574,6 @@ def _compute_pitch_pair_results(pdf, data, tunnel_df=None):
     if pdf.empty:
         return pd.DataFrame()
 
-    # Sort and group strictly within a single plate appearance.
     sort_cols = [c for c in ["GameID", "Pitcher", "Batter", "Inning", "PAofInning", "PitchNo"] if c in pdf.columns]
     if len(sort_cols) < 2:
         return pd.DataFrame()
@@ -322,21 +600,18 @@ def _compute_pitch_pair_results(pdf, data, tunnel_df=None):
         whiffs = grp[is_whiff.reindex(grp.index, fill_value=False)]
         csws = grp[is_csw.reindex(grp.index, fill_value=False)]
         batted = grp[(grp["PitchCall"] == "InPlay") & grp["ExitSpeed"].notna()]
-        # SLG on batted ball events
         inplay = grp[grp["PitchCall"] == "InPlay"]
         if len(inplay) > 0 and "PlayResult" in grp.columns:
             total_bases = inplay["PlayResult"].map(_TB_MAP).fillna(0).sum()
             slg = round(total_bases / len(inplay), 3)
         else:
             slg = np.nan
-        # Putaway% proxy: 2-strike pitches resulting in swinging/called strike
         if "Strikes" in grp.columns:
             two_strike = grp[grp["Strikes"] == 2]
             putaway = two_strike[two_strike["PitchCall"].isin(["StrikeSwinging", "StrikeCalled"])]
             putaway_pct = len(putaway) / max(len(two_strike), 1) * 100 if len(two_strike) > 0 else np.nan
         else:
             putaway_pct = np.nan
-        # K%: use KorBB if available, otherwise PlayResult == Strikeout
         if "KorBB" in grp.columns:
             k_events = grp["KorBB"].isin(["Strikeout", "K"])
             k_pct = k_events.mean() * 100 if len(grp) > 0 else np.nan
@@ -345,7 +620,6 @@ def _compute_pitch_pair_results(pdf, data, tunnel_df=None):
             k_pct = k_events.mean() * 100 if len(grp) > 0 else np.nan
         else:
             k_pct = np.nan
-        # Tunnel lookup for this pair
         tun_grade, tun_score = "-", np.nan
         if isinstance(tunnel_df, pd.DataFrame) and not tunnel_df.empty:
             tun_match = tunnel_df[
