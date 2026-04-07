@@ -21,6 +21,7 @@ from config import normalize_pitch_types
 _APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _MODEL_DIR = os.path.join(_APP_DIR, "models")
 _MODEL_PATH = os.path.join(_MODEL_DIR, "stuff_plus_xgb.joblib")
+_XWHIFF_MODEL_PATH = os.path.join(_MODEL_DIR, "xwhiff_models.joblib")
 
 # ── Pitch-type label encoding (consistent across train/predict) ──────────────
 _PITCH_TYPE_LABELS = {
@@ -35,6 +36,14 @@ _STUFF_FEATURES = [
     "VertApprAngle", "SpinRate", "SpinAxis", "VeloDiff",
     "PitcherThrows_enc", "BatterSide_enc", "pitch_type_enc",
     "speed_x_ivb",
+]
+
+# xWhiff features: per-pitch-type models don't need pitch_type_enc, add HorzApprAngle
+_XWHIFF_FEATURES = [
+    "RelSpeed", "InducedVertBreak", "HorzBreakAdj", "Extension",
+    "VertApprAngle", "SpinRate", "SpinAxis", "VeloDiff",
+    "PitcherThrows_enc", "BatterSide_enc", "speed_x_ivb",
+    "HorzApprAngle",
 ]
 
 
@@ -410,3 +419,298 @@ def _compute_stuff_plus(data, baseline=None, baselines_dict=None):
 def _compute_stuff_plus_all(data):
     """Cached wrapper for _compute_stuff_plus on the full Davidson dataset."""
     return _compute_stuff_plus(data)
+
+
+# =============================================================================
+#  xWhiff Stuff+ — per-pitch-type XGBClassifier on whiff target
+# =============================================================================
+
+_SWING_CALLS = [
+    "StrikeSwinging", "FoulBall", "FoulBallNotFieldable",
+    "FoulBallFieldable", "InPlay",
+]
+
+_XWHIFF_XGB_PARAMS = dict(
+    n_estimators=500,
+    max_depth=5,
+    learning_rate=0.05,
+    subsample=0.8,
+    colsample_bytree=0.8,
+    min_child_weight=50,
+    reg_alpha=0.5,
+    reg_lambda=3.0,
+    tree_method="hist",
+    random_state=42,
+    early_stopping_rounds=30,
+)
+
+_MIN_PITCH_TYPE_TRAIN = 500
+
+
+def train_xwhiff_model(parquet_path: str) -> None:
+    """Train per-pitch-type xWhiff XGBClassifier on whiff target.
+
+    Saves models + per-pitch-type pitcher-level population stats to
+    ``models/xwhiff_models.joblib``.
+    """
+    import duckdb
+    import joblib
+    from xgboost import XGBClassifier
+    from sklearn.model_selection import GroupShuffleSplit
+
+    from config import PARQUET_PATH
+
+    pq = parquet_path or PARQUET_PATH
+    print(f"  Loading pitches from {pq} ...")
+
+    con = duckdb.connect(":memory:")
+    df = con.execute(f"""
+        SELECT
+            GameID, Pitcher, Batter,
+            PitcherThrows, BatterSide,
+            Balls, Strikes, PitchCall, PlayResult, KorBB,
+            RelSpeed, InducedVertBreak, HorzBreak,
+            Extension, VertApprAngle, SpinRate, SpinAxis,
+            HorzApprAngle,
+            CASE
+                WHEN TaggedPitchType IN ('Undefined','Other','Knuckleball') THEN NULL
+                WHEN TaggedPitchType = 'FourSeamFastBall' THEN 'Fastball'
+                WHEN TaggedPitchType IN ('OneSeamFastBall','TwoSeamFastBall') THEN 'Sinker'
+                WHEN TaggedPitchType = 'ChangeUp' THEN 'Changeup'
+                ELSE TaggedPitchType
+            END AS TaggedPitchType,
+            CASE
+                WHEN PitcherThrows IN ('Left','L') THEN -HorzBreak
+                ELSE HorzBreak
+            END AS HorzBreakAdj
+        FROM read_parquet('{pq}')
+        WHERE PitchCall IS NOT NULL AND PitchCall != 'Undefined'
+          AND RelSpeed IS NOT NULL
+          AND InducedVertBreak IS NOT NULL
+          AND HorzBreak IS NOT NULL
+          AND PitcherThrows IS NOT NULL
+          AND TaggedPitchType NOT IN ('Undefined','Other','Knuckleball')
+    """).fetchdf()
+    con.close()
+    print(f"  Loaded {len(df):,} pitches")
+
+    df = df.dropna(subset=["TaggedPitchType"])
+
+    # Swing/whiff flags
+    df["is_swing"] = df["PitchCall"].isin(_SWING_CALLS).astype(int)
+    df["is_whiff"] = (df["PitchCall"] == "StrikeSwinging").astype(int)
+
+    # VeloDiff
+    fb_types = {"Fastball", "Sinker", "Cutter"}
+    fb_velo = (
+        df[df["TaggedPitchType"].isin(fb_types)]
+        .groupby("Pitcher")["RelSpeed"]
+        .mean()
+    )
+    df["VeloDiff"] = df["Pitcher"].map(fb_velo).astype(float) - df["RelSpeed"].astype(float)
+
+    # Encode categoricals
+    df["PitcherThrows_enc"] = (
+        df["PitcherThrows"].astype(str).str.lower().str.startswith("l").astype(int)
+    )
+    df["BatterSide_enc"] = (
+        df["BatterSide"].astype(str).str.lower().str.startswith("l").astype(int)
+    )
+
+    # Interaction
+    df["speed_x_ivb"] = df["RelSpeed"].astype(float) * df["InducedVertBreak"].astype(float)
+
+    # Ensure all feature columns exist
+    for col in _XWHIFF_FEATURES:
+        if col not in df.columns:
+            df[col] = np.nan
+
+    models: Dict[str, object] = {}
+    pt_stats: Dict[str, Tuple[float, float]] = {}
+
+    for pt in sorted(df["TaggedPitchType"].dropna().unique()):
+        pt_all = df[df["TaggedPitchType"] == pt].copy()
+        # Train on swings only
+        pt_swings = pt_all[pt_all["is_swing"] == 1].copy()
+        if len(pt_swings) < _MIN_PITCH_TYPE_TRAIN:
+            print(f"  Skipping {pt}: {len(pt_swings)} swings < {_MIN_PITCH_TYPE_TRAIN}")
+            continue
+
+        X = pt_swings[_XWHIFF_FEATURES].astype(float)
+        y = pt_swings["is_whiff"].astype(int)
+        game_ids = pt_swings["GameID"]
+
+        valid = X.notna().all(axis=1)
+        X, y = X[valid], y[valid]
+        game_ids = game_ids[valid]
+
+        if len(X) < _MIN_PITCH_TYPE_TRAIN:
+            continue
+
+        # Train/val split by GameID
+        gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+        train_idx, val_idx = next(gss.split(X, y, groups=game_ids))
+        X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
+        y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
+
+        params = dict(_XWHIFF_XGB_PARAMS)
+        params["objective"] = "binary:logistic"
+        params["eval_metric"] = "logloss"
+
+        model = XGBClassifier(**params)
+        model.fit(
+            X_train, y_train,
+            eval_set=[(X_val, y_val)],
+            verbose=0,
+        )
+        models[pt] = model
+
+        # Compute pitcher-level population stats: predict xWhiff on ALL pitches
+        # (not just swings) for this pitch type
+        X_all = pt_all[_XWHIFF_FEATURES].astype(float)
+        valid_all = X_all.notna().all(axis=1)
+        xwhiff_pred = np.full(len(pt_all), np.nan)
+        if valid_all.any():
+            xwhiff_pred[valid_all.values] = model.predict_proba(X_all[valid_all])[:, 1]
+
+        pt_all["_xwhiff"] = xwhiff_pred
+        pitcher_means = pt_all.groupby("Pitcher")["_xwhiff"].mean().dropna()
+        if len(pitcher_means) >= 10:
+            pt_stats[pt] = (float(pitcher_means.mean()), float(pitcher_means.std()))
+
+        whiff_rate = y.mean() * 100
+        val_pred = model.predict_proba(X_val)[:, 1]
+        val_auc = float(np.nan)
+        try:
+            from sklearn.metrics import roc_auc_score
+            val_auc = roc_auc_score(y_val, val_pred)
+        except Exception:
+            pass
+        print(f"  {pt:20s}  swings={len(X):,}  whiff%={whiff_rate:.1f}  "
+              f"val_AUC={val_auc:.3f}  pitcher_mu={pt_stats.get(pt, (0,0))[0]:.4f}")
+
+    print(f"\n  Trained {len(models)} pitch-type models, stats for {len(pt_stats)} types")
+
+    # Save
+    os.makedirs(_MODEL_DIR, exist_ok=True)
+    artifact = {
+        "models": models,
+        "pt_stats": pt_stats,
+        "features": _XWHIFF_FEATURES,
+    }
+    joblib.dump(artifact, _XWHIFF_MODEL_PATH, compress=3)
+    print(f"  Model saved to {_XWHIFF_MODEL_PATH}")
+
+
+def _load_xwhiff_model():
+    """Load cached xWhiff model artifact. Returns None if missing."""
+    if not os.path.exists(_XWHIFF_MODEL_PATH):
+        return None
+    import joblib
+    try:
+        return joblib.load(_XWHIFF_MODEL_PATH)
+    except Exception:
+        return None
+
+
+def _compute_xwhiff(data: pd.DataFrame) -> pd.DataFrame:
+    """Compute xWhiffPlus for every pitch using per-pitch-type xWhiff models.
+
+    xWhiffPlus scale: 100 = average, higher = better stuff (more whiffs).
+    """
+    if data is None or len(data) == 0:
+        return data
+
+    artifact = _load_xwhiff_model()
+    if artifact is None:
+        return data
+
+    models = artifact["models"]
+    pt_stats = artifact["pt_stats"]
+
+    df = data.copy()
+    df = normalize_pitch_types(df)
+    scored = df.dropna(subset=["RelSpeed", "TaggedPitchType"]).copy()
+    if scored.empty:
+        df["xWhiffPlus"] = np.nan
+        return df
+
+    # HorzBreakAdj
+    if "HorzBreak" in scored.columns:
+        throws = scored.get("PitcherThrows")
+        if throws is not None:
+            is_l = throws.astype(str).str.lower().str.startswith("l")
+            scored["HorzBreakAdj"] = np.where(
+                is_l, -scored["HorzBreak"].astype(float), scored["HorzBreak"].astype(float)
+            )
+        else:
+            scored["HorzBreakAdj"] = scored["HorzBreak"].astype(float)
+    else:
+        scored["HorzBreakAdj"] = np.nan
+
+    # VeloDiff
+    fb_types = {"Fastball", "Sinker", "Cutter"}
+    fb_velo = (
+        scored[scored["TaggedPitchType"].isin(fb_types)]
+        .groupby("Pitcher")["RelSpeed"]
+        .mean()
+    )
+    scored["VeloDiff"] = (
+        scored["Pitcher"].map(fb_velo).astype(float) - scored["RelSpeed"].astype(float)
+    )
+
+    # Encode
+    scored["PitcherThrows_enc"] = (
+        scored["PitcherThrows"].astype(str).str.lower().str.startswith("l").astype(int)
+    )
+    scored["BatterSide_enc"] = (
+        scored["BatterSide"].astype(str).str.lower().str.startswith("l").astype(int)
+    )
+    scored["speed_x_ivb"] = (
+        scored["RelSpeed"].astype(float) * scored["InducedVertBreak"].astype(float)
+    )
+
+    # Ensure all feature columns exist
+    for col in _XWHIFF_FEATURES:
+        if col not in scored.columns:
+            scored[col] = np.nan
+
+    # Predict xWhiff per pitch type and z-score to xWhiffPlus
+    xwhiff_scores = pd.Series(np.nan, index=scored.index)
+    for pt in scored["TaggedPitchType"].unique():
+        if pt not in models or pt not in pt_stats:
+            continue
+        model = models[pt]
+        mean, std = pt_stats[pt]
+        if std == 0 or np.isnan(std):
+            continue
+
+        mask = scored["TaggedPitchType"] == pt
+        X_pt = scored.loc[mask, _XWHIFF_FEATURES].astype(float)
+        valid = X_pt.notna().all(axis=1)
+        if not valid.any():
+            continue
+
+        # Predict P(whiff) on all pitches (not just swings)
+        xwhiff_pred = np.full(mask.sum(), np.nan)
+        xwhiff_pred[valid.values] = model.predict_proba(X_pt[valid])[:, 1]
+
+        # Z-score pitcher-level mean xWhiff
+        temp = pd.Series(xwhiff_pred, index=scored.loc[mask].index)
+        pitcher_means = pd.DataFrame({
+            "Pitcher": scored.loc[mask, "Pitcher"].values,
+            "xwhiff": temp.values,
+        }).groupby("Pitcher")["xwhiff"].transform("mean")
+
+        z = (pitcher_means.values - mean) / std
+        # Higher P(whiff) = better stuff = higher score (no negate)
+        xwhiff_scores[mask] = 100 + z * 10
+
+    df["xWhiffPlus"] = xwhiff_scores.reindex(df.index)
+    return df
+
+
+@st.cache_data(show_spinner="Computing xWhiff Stuff+ grades...")
+def _compute_xwhiff_all(data):
+    """Cached wrapper for _compute_xwhiff on the full Davidson dataset."""
+    return _compute_xwhiff(data)

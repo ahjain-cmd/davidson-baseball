@@ -37,7 +37,7 @@ from config import (
 
 import numpy as np
 
-from analytics.stuff_plus import _compute_stuff_plus
+from analytics.stuff_plus import _compute_stuff_plus, _compute_xwhiff
 from data.population import _build_tunnel_population_pop
 
 
@@ -696,6 +696,7 @@ def _attach_stuff_plus(con, baselines_dict):
     df["PitchUID"] = uid
 
     df = _compute_stuff_plus(df, baselines_dict=baselines_dict)
+    df = _compute_xwhiff(df)
     con.register("dav_df", df)
     con.execute("CREATE OR REPLACE TABLE davidson_data AS SELECT * FROM dav_df")
 
@@ -864,12 +865,16 @@ def main():
                         help="Train spatial hole score model (3 XGBoost sub-models) from Trackman data")
     parser.add_argument("--train-stuff-model", action="store_true",
                         help="Train Stuff+ XGBoost model on pitch run values")
+    parser.add_argument("--train-xwhiff-model", action="store_true",
+                        help="Train xWhiff Stuff+ per-pitch-type XGBClassifier models")
     parser.add_argument("--train-location-model", action="store_true",
                         help="Train Location+ XGBoost model on pitch run values")
     parser.add_argument("--train-all-models", action="store_true",
                         help="Train all ML models (stuff, location, hole, xwoba, matchup, etc.)")
     parser.add_argument("--backtest-scoring", action="store_true",
                         help="Run scoring formula backtest and derive empirical weights")
+    parser.add_argument("--backtest-stuff", action="store_true",
+                        help="Run Stuff+ model architecture backtest (compare 4 variants)")
     args = parser.parse_args()
 
     if args.train_hole_model:
@@ -928,6 +933,12 @@ def main():
         train_stuff_plus_model(parquet_path=args.parquet)
         return
 
+    if args.train_xwhiff_model:
+        print("Training xWhiff Stuff+ models...")
+        from analytics.stuff_plus import train_xwhiff_model
+        train_xwhiff_model(parquet_path=args.parquet)
+        return
+
     if args.train_location_model:
         print("Training Location+ XGBoost model...")
         from analytics.command_plus import train_location_plus_model
@@ -938,6 +949,9 @@ def main():
         print("Training Stuff+ XGBoost model...")
         from analytics.stuff_plus import train_stuff_plus_model
         train_stuff_plus_model(parquet_path=args.parquet)
+        print("\nTraining xWhiff Stuff+ models...")
+        from analytics.stuff_plus import train_xwhiff_model
+        train_xwhiff_model(parquet_path=args.parquet)
         print("\nTraining Location+ XGBoost model...")
         from analytics.command_plus import train_location_plus_model
         train_location_plus_model(parquet_path=args.parquet)
@@ -947,6 +961,12 @@ def main():
         print("Running scoring formula backtest...")
         from scripts.backtest_scoring_weights import run_backtest
         run_backtest(parquet_path=args.parquet)
+        return
+
+    if args.backtest_stuff:
+        print("Running Stuff+ model architecture backtest...")
+        from analytics.stuff_model_backtest import train_and_evaluate_all
+        train_and_evaluate_all(parquet_path=args.parquet)
         return
 
     run(args.parquet, args.out, overwrite=args.overwrite)

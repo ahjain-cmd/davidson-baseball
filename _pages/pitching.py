@@ -23,7 +23,7 @@ from viz.charts import (
     _add_grid_zone_outline,
 )
 from viz.percentiles import savant_color, render_savant_percentile_section
-from analytics.stuff_plus import _compute_stuff_plus, _compute_stuff_plus_all
+from analytics.stuff_plus import _compute_stuff_plus, _compute_stuff_plus_all, _compute_xwhiff_all
 from analytics.tunnel import _compute_tunnel_score, _build_tunnel_population, _load_tunnel_benchmarks
 from analytics.command_plus import _compute_command_plus, _compute_pitch_pair_results
 from analytics.expected import _create_zone_grid_data
@@ -1021,6 +1021,21 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
             if stuff_metrics:
                 render_savant_percentile_section(stuff_metrics,
                                                  title="Stuff+ Percentile Rankings")
+
+    # xWhiff Stuff+ percentile bars
+    if "xWhiffPlus" in stuff_df.columns:
+        all_xwhiff = _compute_xwhiff_all(data)
+        if "xWhiffPlus" in all_xwhiff.columns:
+            xwhiff_metrics = []
+            for pt in pitch_types:
+                my_val = stuff_df[stuff_df["TaggedPitchType"] == pt]["xWhiffPlus"].mean()
+                all_pt_vals = all_xwhiff[all_xwhiff["TaggedPitchType"] == pt]["xWhiffPlus"]
+                if len(all_pt_vals) > 5 and not pd.isna(my_val):
+                    pctl = percentileofscore(all_pt_vals.dropna(), my_val, kind="rank")
+                    xwhiff_metrics.append((pt, my_val, pctl, ".0f", True))
+            if xwhiff_metrics:
+                render_savant_percentile_section(xwhiff_metrics,
+                                                 title="xWhiff Stuff+ Percentile Rankings")
 
     # Command+ percentile bars
     if not cmd_df.empty:
@@ -2218,6 +2233,21 @@ def _pitching_lab_content(data, pitcher, season_filter, pdf, stuff_df,
                     metrics.append((pt, my_val, pctl, ".0f", True))
             if metrics:
                 render_savant_percentile_section(metrics)
+
+        # xWhiff Stuff+ percentile bars
+        if "xWhiffPlus" in stuff_df.columns:
+            all_xwhiff = _compute_xwhiff_all(data)
+            if "xWhiffPlus" in all_xwhiff.columns:
+                section_header("xWhiff Stuff+ Percentile Rankings (vs All Pitchers in Database)")
+                xwhiff_metrics = []
+                for pt in arsenal_summary.index:
+                    my_val = stuff_df[stuff_df["TaggedPitchType"] == pt]["xWhiffPlus"].mean()
+                    all_pt_vals = all_xwhiff[all_xwhiff["TaggedPitchType"] == pt]["xWhiffPlus"]
+                    if len(all_pt_vals) > 5 and not pd.isna(my_val):
+                        pctl = percentileofscore(all_pt_vals.dropna(), my_val, kind="rank")
+                        xwhiff_metrics.append((pt, my_val, pctl, ".0f", True))
+                if xwhiff_metrics:
+                    render_savant_percentile_section(xwhiff_metrics)
 
         # Stuff+ distribution violin plot
         section_header("Stuff+ Distribution by Pitch")
