@@ -1007,21 +1007,6 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
     pitch_types = arsenal_agg.index.tolist()
     n_pitches = len(pitch_types)
 
-    # Stuff+ percentile bars
-    if has_stuff:
-        all_stuff = _compute_stuff_plus_all(data)
-        if "StuffPlus" in all_stuff.columns:
-            stuff_metrics = []
-            for pt in pitch_types:
-                my_val = stuff_df[stuff_df["TaggedPitchType"] == pt]["StuffPlus"].mean()
-                all_pt_vals = all_stuff[all_stuff["TaggedPitchType"] == pt]["StuffPlus"]
-                if len(all_pt_vals) > 5:
-                    pctl = percentileofscore(all_pt_vals.dropna(), my_val, kind="rank")
-                    stuff_metrics.append((pt, my_val, pctl, ".0f", True))
-            if stuff_metrics:
-                render_savant_percentile_section(stuff_metrics,
-                                                 title="Stuff+ Percentile Rankings")
-
     # xWhiff Stuff+ percentile bars
     if "xWhiffPlus" in stuff_df.columns:
         all_xwhiff = _compute_xwhiff_all(data)
@@ -1029,9 +1014,10 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
             xwhiff_metrics = []
             for pt in pitch_types:
                 my_val = stuff_df[stuff_df["TaggedPitchType"] == pt]["xWhiffPlus"].mean()
-                all_pt_vals = all_xwhiff[all_xwhiff["TaggedPitchType"] == pt]["xWhiffPlus"]
-                if len(all_pt_vals) > 5 and not pd.isna(my_val):
-                    pctl = percentileofscore(all_pt_vals.dropna(), my_val, kind="rank")
+                all_xwhiff_pt = all_xwhiff[all_xwhiff["TaggedPitchType"] == pt]
+                all_pitcher_means = all_xwhiff_pt.groupby("Pitcher")["xWhiffPlus"].mean()
+                if len(all_pitcher_means) > 5 and not pd.isna(my_val):
+                    pctl = percentileofscore(all_pitcher_means.dropna(), my_val, kind="rank")
                     xwhiff_metrics.append((pt, my_val, pctl, ".0f", True))
             if xwhiff_metrics:
                 render_savant_percentile_section(xwhiff_metrics,
@@ -2220,20 +2206,6 @@ def _pitching_lab_content(data, pitcher, season_filter, pdf, stuff_df,
         formatted["Pitches"] = formatted["Pitches"].astype(int)
         st.dataframe(formatted, use_container_width=True)
 
-        # Savant-style percentile bars for Stuff+
-        all_stuff = _compute_stuff_plus_all(data)
-        if "StuffPlus" in all_stuff.columns:
-            section_header("Stuff+ Percentile Rankings (vs All Pitchers in Database)")
-            metrics = []
-            for pt in arsenal_summary.index:
-                my_val = stuff_df[stuff_df["TaggedPitchType"] == pt]["StuffPlus"].mean()
-                all_pt_vals = all_stuff[all_stuff["TaggedPitchType"] == pt]["StuffPlus"]
-                if len(all_pt_vals) > 5:
-                    pctl = percentileofscore(all_pt_vals.dropna(), my_val, kind="rank")
-                    metrics.append((pt, my_val, pctl, ".0f", True))
-            if metrics:
-                render_savant_percentile_section(metrics)
-
         # xWhiff Stuff+ percentile bars
         if "xWhiffPlus" in stuff_df.columns:
             all_xwhiff = _compute_xwhiff_all(data)
@@ -2242,9 +2214,10 @@ def _pitching_lab_content(data, pitcher, season_filter, pdf, stuff_df,
                 xwhiff_metrics = []
                 for pt in arsenal_summary.index:
                     my_val = stuff_df[stuff_df["TaggedPitchType"] == pt]["xWhiffPlus"].mean()
-                    all_pt_vals = all_xwhiff[all_xwhiff["TaggedPitchType"] == pt]["xWhiffPlus"]
-                    if len(all_pt_vals) > 5 and not pd.isna(my_val):
-                        pctl = percentileofscore(all_pt_vals.dropna(), my_val, kind="rank")
+                    all_xwhiff_pt = all_xwhiff[all_xwhiff["TaggedPitchType"] == pt]
+                    all_pitcher_means = all_xwhiff_pt.groupby("Pitcher")["xWhiffPlus"].mean()
+                    if len(all_pitcher_means) > 5 and not pd.isna(my_val):
+                        pctl = percentileofscore(all_pitcher_means.dropna(), my_val, kind="rank")
                         xwhiff_metrics.append((pt, my_val, pctl, ".0f", True))
                 if xwhiff_metrics:
                     render_savant_percentile_section(xwhiff_metrics)
