@@ -2186,6 +2186,539 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
                 st.info("< 3 weak contacts")
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+#  STUFF+ LAB TAB
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _stuff_lab_page(data, pitcher, season_filter, pdf, stuff_df):
+    """Main entry point for the Stuff+ Lab tab."""
+    has_stuff = stuff_df is not None and "StuffPlus" in stuff_df.columns and not stuff_df.empty
+    if not has_stuff:
+        st.error("Could not compute Stuff+ scores. Not enough data for this pitcher.")
+        return
+
+    _render_methodology_section()
+    st.markdown("---")
+    _render_scrimmage_grading(data, pitcher, stuff_df)
+    st.markdown("---")
+    _render_csv_upload(data)
+    st.markdown("---")
+    _render_improvement_lab(stuff_df, pitcher, data)
+    st.markdown("---")
+    _render_stuff_trend(stuff_df, pitcher)
+
+
+def _render_methodology_section():
+    """Section: Why Stuff+ Matters — methodology, correlation evidence, stabilization."""
+    section_header("Why Stuff+ Matters")
+
+    with st.expander("How it works", expanded=False):
+        st.markdown("""
+**Stuff+** measures the raw quality of a pitch — how hard it is to hit based purely on its physical shape — independent of where it's thrown.
+
+**How the model works:** For every pitch, we feed its physical characteristics (velocity, movement, spin, release point, approach angle) into a set of 10 machine learning classifiers that predict what happens when that pitch is thrown: does the batter swing? Whiff? Make contact? Hit a single, double, or home run? Each classifier outputs a probability, and those probabilities are combined into an **expected run value** — how many runs that pitch shape is worth to the offense.
+
+The key step is **location isolation**: we evaluate every pitch shape across a standardized grid of all possible locations and counts, then average the results. This strips out location entirely — a 92 mph fastball with elite ride gets the same Stuff+ whether it's thrown down the middle or at the batter's eyes. What's left is purely the **stuff effect**: how the pitch's physical properties influence outcomes.
+
+The result is scaled so **100 = D1 average** and **each 10 points = one standard deviation**.
+
+**What drives high Stuff+ scores:**
+- **Fastballs** — Ride (induced vertical break), velocity, and vertical approach angle.
+- **Breaking balls** — Total movement (sweep + depth), difference from the fastball's movement profile, and spin efficiency.
+- **Offspeed** — Velocity separation from the fastball and sink.
+
+**What doesn't affect Stuff+:** Location, pitch sequencing, game situation, or batter identity.
+""")
+
+    with st.expander("Correlation evidence — does Stuff+ predict future performance?", expanded=True):
+        st.markdown("How well does Stuff+ predict future pitching outcomes compared to 30+ other stats?")
+        corr_data = {
+            "Target": ["Future ERA", "Future FIP", "Future K-BB%"],
+            "IP Threshold": ["40+ IP (n=499)", "60+ IP (n=177)", "20+ IP (n=1,104)"],
+            "Stuff+ r": ["-0.278", "-0.279", "+0.321"],
+            "Stuff+ Rank": ["#3 of 31", "#3 of 29", "#4 of 29"],
+        }
+        st.dataframe(pd.DataFrame(corr_data).set_index("Target"), use_container_width=True)
+        st.caption("Correlation analysis from D1 season-over-season validation. "
+                   "Rank is among 29-31 pitching stats (K%, BB%, FIP, ERA, SwStr%, etc).")
+
+    st.markdown("#### Stabilization Comparison")
+    st.markdown("""
+| Metric | Stabilizes at | Equivalent to |
+|--------|--------------|---------------|
+| **Stuff+** | ~50-100 pitches | 1-2 starts |
+| FBVel | ~50-100 pitches | 1-2 starts |
+| SwStr% | ~200-400 pitches | 3-5 starts |
+| K-BB% | ~300-500 pitches | 4-7 starts |
+| ERA | ~500+ pitches | 8+ starts |
+""")
+    st.info("You can trust a Stuff+ grade after 2 bullpen sessions. "
+            "You need half a season for K-BB% and a full season for ERA.")
+
+
+def _render_scrimmage_grading(data, pitcher, stuff_df):
+    """Section: Grade scrimmage pitches and identify new/developing pitch types."""
+    section_header("Scrimmage Grading")
+    st.caption("Grade pitches from scrimmages — identify new or developing pitches")
+
+    # Pull ALL data for this pitcher (not filtered by game mode)
+    all_pitcher = data[data["Pitcher"] == pitcher].copy()
+    if all_pitcher.empty:
+        st.info("No data found for this pitcher.")
+        return
+
+    scrimmage = all_pitcher[all_pitcher["BatterTeam"] == DAVIDSON_TEAM_ID]
+    if scrimmage.empty or len(scrimmage) < 5:
+        st.info("No scrimmage data found for this pitcher.")
+        return
+
+    # Normalize pitch types for consistency
+    scrimmage = normalize_pitch_types(scrimmage)
+    games_only = all_pitcher[all_pitcher["BatterTeam"] != DAVIDSON_TEAM_ID]
+    games_only = normalize_pitch_types(games_only)
+
+    # Identify "new pitches": types appearing in scrimmages but with <10% share in real games (or absent)
+    game_pt_counts = games_only["TaggedPitchType"].value_counts(normalize=True) if len(games_only) > 0 else pd.Series(dtype=float)
+    scrim_pts = scrimmage["TaggedPitchType"].dropna().unique()
+    new_pitches = set()
+    for pt in scrim_pts:
+        game_share = game_pt_counts.get(pt, 0.0)
+        if game_share < 0.10:
+            new_pitches.add(pt)
+
+    show_new_only = st.toggle("New pitches only", value=False, key="stuff_lab_new_only")
+    if show_new_only:
+        if not new_pitches:
+            st.info("No new/developing pitches found in scrimmages (all pitch types appear in games at >10% usage).")
+            return
+        scrimmage = scrimmage[scrimmage["TaggedPitchType"].isin(new_pitches)]
+        if scrimmage.empty:
+            st.info("No scoreable new pitches found.")
+            return
+
+    # Score scrimmage pitches
+    scrim_scored = _compute_stuff_plus(scrimmage)
+    if scrim_scored is None or "StuffPlus" not in scrim_scored.columns:
+        st.warning("Could not score scrimmage pitches.")
+        return
+
+    # Arsenal summary table
+    rows = []
+    for pt in sorted(scrim_scored["TaggedPitchType"].dropna().unique()):
+        sub = scrim_scored[scrim_scored["TaggedPitchType"] == pt]
+        if len(sub) < 3:
+            continue
+        row = {
+            "Pitch": pt,
+            "Pitches": len(sub),
+            "Stuff+": f"{sub['StuffPlus'].mean():.0f}",
+            "Velo": f"{sub['RelSpeed'].mean():.1f}" if "RelSpeed" in sub.columns else "-",
+            "IVB": f'{sub["InducedVertBreak"].mean():.1f}"' if "InducedVertBreak" in sub.columns else "-",
+            "HB": f'{sub["HorzBreak"].mean():.1f}"' if "HorzBreak" in sub.columns else "-",
+            "Ext": f"{sub['Extension'].mean():.1f} ft" if "Extension" in sub.columns else "-",
+            "Spin": f"{sub['SpinRate'].mean():.0f}" if "SpinRate" in sub.columns else "-",
+        }
+        if pt in new_pitches:
+            row["Pitch"] = f"{pt} (NEW)"
+        rows.append(row)
+
+    if rows:
+        st.dataframe(pd.DataFrame(rows).set_index("Pitch"), use_container_width=True)
+    else:
+        st.info("Not enough scrimmage pitches to display (need 3+ per pitch type).")
+        return
+
+    # Percentile bars vs D1 population
+    all_stuff = _compute_stuff_plus_all(data)
+    if all_stuff is not None and "StuffPlus" in all_stuff.columns:
+        stuff_metrics = []
+        for pt in sorted(scrim_scored["TaggedPitchType"].dropna().unique()):
+            my_val = scrim_scored[scrim_scored["TaggedPitchType"] == pt]["StuffPlus"].mean()
+            all_pt = all_stuff[all_stuff["TaggedPitchType"] == pt]
+            all_pitcher_means = all_pt.groupby("Pitcher")["StuffPlus"].mean()
+            if len(all_pitcher_means) > 5 and not pd.isna(my_val):
+                pctl = percentileofscore(all_pitcher_means.dropna(), my_val, kind="rank")
+                label = f"{pt} (NEW)" if pt in new_pitches else pt
+                stuff_metrics.append((label, my_val, pctl, ".0f", True))
+        if stuff_metrics:
+            render_savant_percentile_section(stuff_metrics,
+                                             title="Scrimmage Stuff+ vs D1 Population")
+
+    # Component breakdown if available
+    component_cols = ["StuffWhiff", "StuffCalledStrike", "StuffHomeRun", "StuffDamage"]
+    has_components = all(c in scrim_scored.columns for c in component_cols)
+    if has_components:
+        with st.expander("Component Breakdown (Scrimmage)", expanded=False):
+            comp_rows = []
+            for pt in sorted(scrim_scored["TaggedPitchType"].dropna().unique()):
+                sub = scrim_scored[scrim_scored["TaggedPitchType"] == pt]
+                if len(sub) < 3:
+                    continue
+                comp_rows.append({
+                    "Pitch": pt,
+                    "StuffWhiff": f"{sub['StuffWhiff'].mean():.4f}",
+                    "StuffCS": f"{sub['StuffCalledStrike'].mean():.4f}",
+                    "StuffHR": f"{sub['StuffHomeRun'].mean():.4f}",
+                    "StuffDamage": f"{sub['StuffDamage'].mean():.4f}",
+                })
+            if comp_rows:
+                st.dataframe(pd.DataFrame(comp_rows).set_index("Pitch"), use_container_width=True)
+                st.caption("Lower run values = better stuff (pitcher-friendly). "
+                           "StuffWhiff = whiff probability, StuffCS = called strike prob, "
+                           "StuffHR = home run prob, StuffDamage = hard-hit prob.")
+
+
+def _render_csv_upload(data):
+    """Section: Upload a Trackman CSV to score with Stuff+."""
+    section_header("CSV Upload — Score Any Trackman Data")
+    st.caption("Upload a raw Trackman CSV (bullpen, scrimmage, recruit data) to get Stuff+ grades")
+
+    uploaded = st.file_uploader("Upload Trackman CSV", type=["csv"], key="stuff_csv_upload")
+    if uploaded is None:
+        return
+
+    try:
+        csv_df = pd.read_csv(uploaded)
+    except Exception as e:
+        st.error(f"Could not read CSV: {e}")
+        return
+
+    # Validate required columns
+    required = [
+        "TaggedPitchType", "Pitcher", "PitcherThrows",
+        "RelSpeed", "InducedVertBreak", "HorzBreak",
+        "Extension", "RelHeight", "RelSide", "SpinRate", "SpinAxis",
+    ]
+    # Physics columns are nice to have but not strictly required
+    physics_cols = ["vx0", "vy0", "vz0", "ax0", "ay0", "az0"]
+
+    missing = [c for c in required if c not in csv_df.columns]
+    if missing:
+        st.error(f"Missing required columns: {', '.join(missing)}")
+        st.caption(f"Required: {', '.join(required)}")
+        return
+
+    # Fill optional columns with defaults
+    if "Balls" not in csv_df.columns:
+        csv_df["Balls"] = 0
+    if "Strikes" not in csv_df.columns:
+        csv_df["Strikes"] = 0
+    if "BatterSide" not in csv_df.columns:
+        csv_df["BatterSide"] = "Right"
+    if "PitchCall" not in csv_df.columns:
+        csv_df["PitchCall"] = ""
+    if "Date" not in csv_df.columns:
+        csv_df["Date"] = ""
+
+    # Normalize pitch types
+    csv_df = normalize_pitch_types(csv_df)
+
+    # Load artifact and score
+    from analytics.stuff_plus import _load_stuff_model
+    artifact = _load_stuff_model()
+    if artifact is None:
+        st.error("Stuff+ model not found. Cannot score uploaded data.")
+        return
+
+    if artifact.get("artifact_type") == "pitchsim_lite":
+        from analytics.pitchsim_stuff import compute_pitchsim_stuff_plus
+        scored = compute_pitchsim_stuff_plus(csv_df, artifact)
+    else:
+        from analytics.stuff_plus import _compute_stuff_plus_xgb
+        scored = _compute_stuff_plus_xgb(csv_df, artifact)
+
+    if scored is None or "StuffPlus" not in scored.columns:
+        st.error("Could not score uploaded data.")
+        return
+
+    # If multiple pitchers, let user pick one
+    pitchers_in_csv = sorted(scored["Pitcher"].dropna().unique())
+    if len(pitchers_in_csv) > 1:
+        sel_pitcher = st.selectbox("Select Pitcher", pitchers_in_csv,
+                                    format_func=display_name, key="csv_pitcher_select")
+        scored = scored[scored["Pitcher"] == sel_pitcher]
+
+    if scored.empty:
+        st.warning("No scoreable pitches found for selected pitcher.")
+        return
+
+    st.success(f"Scored {len(scored)} pitches")
+
+    # Arsenal summary table
+    rows = []
+    for pt in sorted(scored["TaggedPitchType"].dropna().unique()):
+        sub = scored[scored["TaggedPitchType"] == pt]
+        if len(sub) < 1:
+            continue
+        rows.append({
+            "Pitch": pt,
+            "Pitches": len(sub),
+            "Stuff+": f"{sub['StuffPlus'].mean():.0f}",
+            "Velo": f"{sub['RelSpeed'].mean():.1f}" if "RelSpeed" in sub.columns else "-",
+            "IVB": f'{sub["InducedVertBreak"].mean():.1f}"' if "InducedVertBreak" in sub.columns else "-",
+            "HB": f'{sub["HorzBreak"].mean():.1f}"' if "HorzBreak" in sub.columns else "-",
+            "Ext": f"{sub['Extension'].mean():.1f} ft" if "Extension" in sub.columns else "-",
+            "Spin": f"{sub['SpinRate'].mean():.0f}" if "SpinRate" in sub.columns else "-",
+        })
+    if rows:
+        st.dataframe(pd.DataFrame(rows).set_index("Pitch"), use_container_width=True)
+
+    # Percentile bars vs D1 population
+    all_stuff = _compute_stuff_plus_all(data)
+    if all_stuff is not None and "StuffPlus" in all_stuff.columns:
+        stuff_metrics = []
+        for pt in sorted(scored["TaggedPitchType"].dropna().unique()):
+            my_val = scored[scored["TaggedPitchType"] == pt]["StuffPlus"].mean()
+            all_pt = all_stuff[all_stuff["TaggedPitchType"] == pt]
+            all_pitcher_means = all_pt.groupby("Pitcher")["StuffPlus"].mean()
+            if len(all_pitcher_means) > 5 and not pd.isna(my_val):
+                pctl = percentileofscore(all_pitcher_means.dropna(), my_val, kind="rank")
+                stuff_metrics.append((pt, my_val, pctl, ".0f", True))
+        if stuff_metrics:
+            render_savant_percentile_section(stuff_metrics,
+                                             title="Uploaded Stuff+ vs D1 Population")
+
+    # Component breakdown if available
+    component_cols = ["StuffWhiff", "StuffCalledStrike", "StuffHomeRun", "StuffDamage"]
+    has_components = all(c in scored.columns for c in component_cols)
+    if has_components:
+        with st.expander("Component Breakdown (Uploaded)", expanded=False):
+            comp_rows = []
+            for pt in sorted(scored["TaggedPitchType"].dropna().unique()):
+                sub = scored[scored["TaggedPitchType"] == pt]
+                if len(sub) < 1:
+                    continue
+                comp_rows.append({
+                    "Pitch": pt,
+                    "StuffWhiff": f"{sub['StuffWhiff'].mean():.4f}",
+                    "StuffCS": f"{sub['StuffCalledStrike'].mean():.4f}",
+                    "StuffHR": f"{sub['StuffHomeRun'].mean():.4f}",
+                    "StuffDamage": f"{sub['StuffDamage'].mean():.4f}",
+                })
+            if comp_rows:
+                st.dataframe(pd.DataFrame(comp_rows).set_index("Pitch"), use_container_width=True)
+                st.caption("Lower run values = better stuff (pitcher-friendly).")
+
+
+def _render_improvement_lab(stuff_df, pitcher, data):
+    """Section: Perturbation analysis — what physical changes improve Stuff+ most."""
+    section_header("Stuff Improvement Recommendations")
+    st.caption("Perturbation analysis — what physical changes would improve your Stuff+ most?")
+
+    pitcher_stuff = stuff_df[stuff_df["Pitcher"] == pitcher] if "Pitcher" in stuff_df.columns else stuff_df
+    if pitcher_stuff.empty:
+        st.info("Not enough data for improvement analysis.")
+        return
+
+    pitch_types = sorted(pitcher_stuff["TaggedPitchType"].dropna().unique())
+    if not pitch_types:
+        st.info("No pitch types available.")
+        return
+
+    sel_pt = st.selectbox("Select pitch type", pitch_types, key="improve_pt_select")
+    pt_data = pitcher_stuff[pitcher_stuff["TaggedPitchType"] == sel_pt]
+    if len(pt_data) < 5:
+        st.info(f"Need at least 5 pitches of {sel_pt} for analysis (have {len(pt_data)}).")
+        return
+
+    # Load the model artifact
+    from analytics.stuff_plus import _load_stuff_model
+    artifact = _load_stuff_model()
+    if artifact is None:
+        st.warning("Stuff+ model not available for perturbation analysis.")
+        return
+
+    # Only works with pitchsim_lite artifacts that have distilled models
+    if artifact.get("artifact_type") != "pitchsim_lite":
+        st.info("Perturbation analysis requires the PitchSim Stuff+ model.")
+        return
+
+    distilled_models = artifact.get("distilled_models", {})
+    vaa_models = artifact.get("vaa_models")
+    feature_cols = artifact.get("features", [])
+    pt_stats = artifact.get("pt_stats", {})
+
+    if not distilled_models or "StuffRV_vsR" not in distilled_models:
+        st.warning("Distilled models not found in artifact.")
+        return
+
+    # Build mean feature vector for this pitch type
+    from analytics.pitchsim_stuff import _prepare_pitchsim_frame
+
+    # Get a single representative row — use the mean of physical features
+    base_row = pt_data.iloc[[0]].copy()
+    for col in ["RelSpeed", "InducedVertBreak", "HorzBreak", "Extension",
+                "RelHeight", "RelSide", "SpinRate", "SpinAxis",
+                "VertApprAngle", "vx0", "vy0", "vz0", "ax0", "ay0", "az0"]:
+        if col in pt_data.columns:
+            base_row[col] = pt_data[col].astype(float).mean()
+
+    # Perturbation levers: (column, display_name, delta, unit)
+    levers = [
+        ("RelSpeed",         "Velocity",       1.0,   "mph"),
+        ("InducedVertBreak", "Induced VBreak",  1.0,   "in"),
+        ("HorzBreak",        "Horiz Break",     1.0,   "in"),
+        ("Extension",        "Extension",       0.25,  "ft"),
+        ("SpinRate",         "Spin Rate",       100.0, "rpm"),
+    ]
+    # Add VAA residual if present
+    if "VertApprAngle" in pt_data.columns:
+        levers.append(("VertApprAngle", "VAA", 0.5, "deg"))
+
+    def _score_single(row_df):
+        """Score a single-row DataFrame and return mean StuffRV."""
+        prepared = _prepare_pitchsim_frame(row_df, vaa_models=vaa_models)
+        if prepared is None or prepared.empty:
+            return np.nan
+        for col in feature_cols:
+            if col not in prepared.columns:
+                prepared[col] = np.nan
+        valid = prepared[feature_cols].notna().all(axis=1)
+        if not valid.any():
+            return np.nan
+        X = prepared.loc[valid, feature_cols].astype(np.float32)
+        rv_r = distilled_models["StuffRV_vsR"].predict(X)
+        rv_l = distilled_models["StuffRV_vsL"].predict(X)
+        return float(0.5 * (rv_r[0] + rv_l[0]))
+
+    # Score baseline
+    baseline_rv = _score_single(base_row)
+    if np.isnan(baseline_rv):
+        st.warning("Could not score baseline pitch vector.")
+        return
+
+    # Convert RV to Stuff+ scale
+    global_mu, global_sigma = pt_stats.get(str(sel_pt), pt_stats.get("__global__", (0.0, 1.0)))
+    if not np.isfinite(global_sigma) or global_sigma <= 0:
+        global_sigma = pt_stats.get("__global__", (0.0, 1.0))[1]
+    baseline_stuff = 100.0 + (-(baseline_rv - global_mu) / global_sigma) * 10.0
+
+    # Perturb each lever
+    results = []
+    for col, label, delta, unit in levers:
+        if col not in base_row.columns:
+            continue
+        orig_val = float(base_row[col].iloc[0])
+        if pd.isna(orig_val):
+            continue
+
+        # Positive perturbation
+        row_up = base_row.copy()
+        row_up[col] = orig_val + delta
+        rv_up = _score_single(row_up)
+
+        # Negative perturbation
+        row_dn = base_row.copy()
+        row_dn[col] = orig_val - delta
+        rv_dn = _score_single(row_dn)
+
+        if np.isnan(rv_up) or np.isnan(rv_dn):
+            continue
+
+        stuff_up = 100.0 + (-(rv_up - global_mu) / global_sigma) * 10.0
+        stuff_dn = 100.0 + (-(rv_dn - global_mu) / global_sigma) * 10.0
+        delta_up = stuff_up - baseline_stuff
+        delta_dn = stuff_dn - baseline_stuff
+
+        # Pick the direction with larger positive change
+        if delta_up > delta_dn:
+            best_delta = delta_up
+            direction = f"+{delta} {unit}"
+        else:
+            best_delta = delta_dn
+            direction = f"-{delta} {unit}"
+
+        results.append({
+            "Lever": label,
+            "Change": direction,
+            "Stuff+ Delta": best_delta,
+            "abs_delta": abs(best_delta),
+            "delta_up": delta_up,
+            "delta_dn": delta_dn,
+        })
+
+    if not results:
+        st.info("Could not compute perturbation results.")
+        return
+
+    results.sort(key=lambda x: x["abs_delta"], reverse=True)
+
+    # Tornado chart
+    fig = go.Figure()
+    labels = [r["Lever"] for r in results]
+    deltas_up = [r["delta_up"] for r in results]
+    deltas_dn = [r["delta_dn"] for r in results]
+
+    fig.add_trace(go.Bar(
+        y=labels, x=deltas_up, orientation="h",
+        name="Increase", marker_color="#1dbe3a",
+        text=[f"{d:+.1f}" for d in deltas_up], textposition="outside",
+    ))
+    fig.add_trace(go.Bar(
+        y=labels, x=deltas_dn, orientation="h",
+        name="Decrease", marker_color="#d22d49",
+        text=[f"{d:+.1f}" for d in deltas_dn], textposition="outside",
+    ))
+    fig.add_vline(x=0, line_dash="solid", line_color="gray", line_width=1)
+    fig.update_layout(
+        **CHART_LAYOUT, height=50 + 60 * len(results),
+        title=f"Stuff+ Sensitivity — {sel_pt} (Baseline: {baseline_stuff:.0f})",
+        xaxis_title="Stuff+ Change",
+        barmode="overlay",
+        yaxis=dict(autorange="reversed"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Natural language recommendation
+    top = results[0]
+    st.markdown(
+        f"**Top recommendation:** {top['Change']} of **{top['Lever'].lower()}** to your "
+        f"{sel_pt.lower()} would improve Stuff+ by **~{top['Stuff+ Delta']:.1f} points**. "
+        f"This is your highest-leverage adjustment."
+    )
+
+    # Summary table
+    summary_rows = []
+    for r in results:
+        summary_rows.append({
+            "Lever": r["Lever"],
+            "Best Direction": r["Change"],
+            "Stuff+ Delta": f"{r['Stuff+ Delta']:+.1f}",
+        })
+    st.dataframe(pd.DataFrame(summary_rows).set_index("Lever"), use_container_width=True)
+
+
+def _render_stuff_trend(stuff_df, pitcher):
+    """Section: Stuff+ per game date by pitch type — line chart with 100 baseline."""
+    section_header("Stuff+ Trend Over Time")
+
+    pitcher_stuff = stuff_df[stuff_df["Pitcher"] == pitcher] if "Pitcher" in stuff_df.columns else stuff_df
+    if "Date" not in pitcher_stuff.columns:
+        st.info("No date information available for trend chart.")
+        return
+
+    trend = pitcher_stuff.dropna(subset=["Date", "StuffPlus"]).copy()
+    if len(trend) < 10:
+        st.info("Not enough data points for a trend chart (need 10+).")
+        return
+
+    trend = trend.sort_values("Date")
+    daily = trend.groupby(["Date", "TaggedPitchType"])["StuffPlus"].mean().reset_index()
+
+    if daily.empty:
+        st.info("No trend data available.")
+        return
+
+    fig = px.line(
+        daily, x="Date", y="StuffPlus", color="TaggedPitchType",
+        color_discrete_map=PITCH_COLORS,
+        labels={"StuffPlus": "Stuff+", "Date": "", "TaggedPitchType": "Pitch"},
+    )
+    fig.add_hline(y=100, line_dash="dash", line_color="gray", line_width=1,
+                  annotation_text="D1 Average", annotation_position="bottom right")
+    fig.update_layout(**CHART_LAYOUT, height=400)
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def page_pitching(data):
@@ -2263,11 +2796,13 @@ def page_pitching(data):
     stuff_df = _compute_stuff_plus(pdf)
     cmd_df = _compute_command_plus(pdf, data)
 
-    tab_card, tab_lab = st.tabs(["Pitcher Card", "Pitch Lab"])
+    tab_card, tab_lab, tab_stuff_lab = st.tabs(["Pitcher Card", "Pitch Lab", "Stuff+ Lab"])
     with tab_card:
         _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher_stats, cmd_df=cmd_df)
     with tab_lab:
         _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher_stats, cmd_df=cmd_df)
+    with tab_stuff_lab:
+        _stuff_lab_page(data, pitcher, season_filter, pdf, stuff_df)
 
 
 

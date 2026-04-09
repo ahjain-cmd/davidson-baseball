@@ -1692,7 +1692,6 @@ def _compute_location_rv_stats(
     sub["StuffRV"] = 0.5 * (stuff_rv_r + stuff_rv_l)
 
     # 2) Compute FullRV at actual location+count for each batter side
-    rv_lookup = _run_value_lookup(run_value_table)
     balls = sub["Balls"].astype(int).clip(0, 3).to_numpy()
     strikes = sub["Strikes"].astype(int).clip(0, 2).to_numpy()
 
@@ -1705,7 +1704,7 @@ def _compute_location_rv_stats(
         X_event = X_event[event_features].astype(np.float32)
 
         terminal_probs = _predict_terminal_probabilities(X_event, event_models)
-        rv = _expected_run_value(terminal_probs, rv_lookup, balls, strikes)
+        rv = _expected_run_value(terminal_probs, run_value_table, balls, strikes)
         full_rv_sides.append(rv)
 
     sub["FullRV"] = 0.5 * (full_rv_sides[0] + full_rv_sides[1])
@@ -2125,7 +2124,6 @@ def compute_pitchsim_command_plus(data: pd.DataFrame, artifact: dict) -> pd.Data
     )
 
     # 2) FullRV at actual location+count for each batter side
-    rv_lookup = _run_value_lookup(run_value_table)
     balls = sub["Balls"].astype(int).clip(0, 3).to_numpy()
     strikes = sub["Strikes"].astype(int).clip(0, 2).to_numpy()
 
@@ -2138,7 +2136,7 @@ def compute_pitchsim_command_plus(data: pd.DataFrame, artifact: dict) -> pd.Data
         X_event = X_event[event_features].astype(np.float32)
 
         terminal_probs = _predict_terminal_probabilities(X_event, event_models)
-        rv = _expected_run_value(terminal_probs, rv_lookup, balls, strikes)
+        rv = _expected_run_value(terminal_probs, run_value_table, balls, strikes)
         full_rv_sides.append(rv)
 
     full_rv = 0.5 * (full_rv_sides[0] + full_rv_sides[1])
