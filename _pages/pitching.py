@@ -1100,20 +1100,26 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
     section_header("Stuff+ & Command+ Grades")
     with st.expander("How does Stuff+ work?"):
         st.markdown("""
-**Stuff+** grades the raw quality of a pitch based on its physical characteristics — velocity, movement, spin, release, and approach angle — independent of where it's thrown.
+**Stuff+** measures the raw quality of a pitch — how hard it is to hit based purely on its physical shape — independent of where it's thrown.
 
-The model simulates what would happen if a pitch with those characteristics were thrown to every possible location and count. By averaging across all locations, we isolate the **stuff** effect from the **location** effect. The result is scaled so that **100 = D1 average** and **each 10 points = one standard deviation**.
+**How the model works:** For every pitch, we feed its physical characteristics (velocity, movement, spin, release point, approach angle) into a set of 10 machine learning classifiers that predict what happens when that pitch is thrown: does the batter swing? Whiff? Make contact? Hit a single, double, or home run? Each classifier outputs a probability, and those probabilities are combined into an **expected run value** — how many runs that pitch shape is worth to the offense.
+
+The key step is **location isolation**: we evaluate every pitch shape across a standardized grid of all possible locations and counts, then average the results. This strips out location entirely — a 92 mph fastball with elite ride gets the same Stuff+ whether it's thrown down the middle or at the batter's eyes. What's left is purely the **stuff effect**: how the pitch's physical properties influence outcomes.
+
+The result is scaled so **100 = D1 average** and **each 10 points = one standard deviation**.
+
+**Why this predicts future performance:** Stuff+ based on run value (not just whiff rate) captures the full picture of what a pitch does — strikeouts, weak contact, hard contact, walks. At the MLB level, run-value Stuff+ correlates significantly with future ERA (r ~ 0.3-0.4), because a pitcher's pitch shapes are stable year-to-year even as location and luck fluctuate. A pitcher with elite Stuff+ who has a high ERA is likely getting unlucky or commanding poorly — the stuff itself projects well going forward. This is the same framework used by FanGraphs Stuff+ and MLB front office models.
 
 **What drives high Stuff+ scores:**
 - **Fastballs** — Ride (induced vertical break), velocity, and vertical approach angle. A 91 mph fastball with 20" of ride that hitters swing under grades much higher than a 91 mph fastball with 14" of ride that's easy to barrel. Horizontal run also matters — more arm-side movement creates deception.
 - **Breaking balls** — Total movement (sweep + depth), difference from the fastball's movement profile, and spin efficiency. A slider that moves very differently from the pitcher's fastball grades highest.
 - **Offspeed** — Velocity separation from the fastball and sink. A changeup that's 10+ mph slower with arm-side fade and drop is hard to square up.
 
-**What doesn't affect Stuff+:** Location, pitch sequencing, game situation, or batter identity. A 95 mph fastball with elite ride gets the same Stuff+ whether it's thrown down the middle or at a batter's eyes.
+**What doesn't affect Stuff+:** Location, pitch sequencing, game situation, or batter identity.
 
 ---
 
-**Note from Ahan:** Apologies for the new model - the old xWhiff model was predicting whiffs and swinging strikes, not run value. This now predicts and is in-line with run-value. A few pitches' Stuff+ has changed, it now likes certain Slider shapes unlike before from a RV basis but this model is in-line with FanGraphs Stuff+ and MLB teams' Stuff+ models as well. I'm 100% confident in this one and am not touching it.
+**Note from Ahan (4/9/26):** Apologies for the new model - the old xWhiff model was predicting whiffs and swinging strikes, not run value. This now predicts and is in-line with run-value. A few pitches' Stuff+ has changed — it now likes certain slider shapes unlike before from a RV basis — but this model is in-line with FanGraphs Stuff+ and MLB teams' Stuff+ models as well. I'm 100% confident in this one and am not touching it.
 """)
     has_stuff = stuff_df is not None and "StuffPlus" in stuff_df.columns and not stuff_df.empty
     if has_stuff:
