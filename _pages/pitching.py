@@ -31,7 +31,6 @@ from analytics.expected import _create_zone_grid_data
 # Import helpers that live in app.py
 from config import safe_mode, _SWING_CALLS_SQL
 from data.loader import query_population
-from data.population import build_tunnel_population_pop
 
 
 def _score_linear(val, lo, hi, invert=False):
@@ -1078,9 +1077,7 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
     if n_pitches >= 2:
         st.markdown("")
         section_header("Best Pitch Pairs & Sequences (Composite)")
-        pitch_types = tuple(sorted(pdf["TaggedPitchType"].dropna().unique()))
-        tunnel_pop = build_tunnel_population_pop(pitch_types=pitch_types)
-        tunnel_df = _compute_tunnel_score(pdf, tunnel_pop=tunnel_pop)
+        tunnel_df = _compute_tunnel_score(pdf)
         pair_df = _compute_pitch_pair_results(pdf, data, tunnel_df=tunnel_df if not tunnel_df.empty else None)
         pitch_metrics = _build_pitch_metric_map(pdf, stuff_df, cmd_df)
         top_pairs = _rank_pairs(tunnel_df, pair_df, pitch_metrics, top_n=2)
@@ -1561,9 +1558,7 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
 
     # Pre-compute shared data
     try:
-        pitch_types = tuple(sorted(pdf["TaggedPitchType"].dropna().unique()))
-        tunnel_pop = build_tunnel_population_pop(pitch_types=pitch_types)
-        tunnel_df = _compute_tunnel_score(pdf, tunnel_pop=tunnel_pop)
+        tunnel_df = _compute_tunnel_score(pdf)
     except Exception as e:
         st.warning(f"Could not compute tunnel scores: {e}")
         tunnel_df = pd.DataFrame()
@@ -2157,9 +2152,7 @@ def _pitching_lab_content(data, pitcher, season_filter, pdf, stuff_df,
     pdf_tunnel = filter_minor_pitches(pdf, min_pct=MIN_TUNNEL_SEQ_PCT)
     if pdf_tunnel.empty:
         pdf_tunnel = pdf
-    pitch_types = tuple(sorted(pdf["TaggedPitchType"].dropna().unique()))
-    tunnel_pop = build_tunnel_population_pop(pitch_types=pitch_types)
-    tunnel_df = _compute_tunnel_score(pdf_tunnel, tunnel_pop=tunnel_pop)
+    tunnel_df = _compute_tunnel_score(pdf_tunnel)
 
     # ═══════════════════════════════════════════
     # TAB 1: STUFF+ GRADES
@@ -2267,8 +2260,9 @@ def _pitching_lab_content(data, pitcher, season_filter, pdf, stuff_df,
     # ═══════════════════════════════════════════
     with tab_tunnel:
         section_header("Pitch Tunnel Analysis")
-        st.caption("Tunnel Score = percentile rank vs all pitchers in the database for the same pair type. "
-                   "A (top 20%) → F (bottom 20%). Based on physics-modeled flight paths at 280ms commit point. "
+        st.caption("Tunnel Score = absolute 0-100 geometry grade from commit separation, plate separation, "
+                   "release consistency, release-angle similarity, and movement divergence. Higher is better. "
+                   "Pair Whiff% is shown separately and does not change the score. "
                    "Pairs are unordered — Changeup/Fastball and Fastball/Changeup get the same tunnel grade "
                    "(tunneling measures visual deception, which is symmetric; sequence *order* effects are captured in the Sequencing tab).")
 
@@ -2296,7 +2290,7 @@ def _pitching_lab_content(data, pitcher, season_filter, pdf, stuff_df,
             st.markdown("")
 
             # Detailed table (show key columns)
-            display_cols = ["Pitch A", "Pitch B", "Grade", "Tunnel Score", "Pair Whiff%",
+            display_cols = ["Pitch A", "Pitch B", "Grade", "Tunnel Score", "Whiff Boost", "Pair Whiff%",
                             "Release Sep (in)", "Commit Sep (in)", "Plate Sep (in)",
                             "Velo Gap (mph)", "Move Diff (in)", "Rel Angle Sep (°)"]
             st.dataframe(tunnel_df[display_cols], use_container_width=True, hide_index=True)
@@ -3011,9 +3005,7 @@ def _game_planning_content(data, pitcher=None, season_filter=None, pdf=None, key
         st.caption("Sequence effectiveness combined with physics-based tunnel analysis — the best sequences are ones that tunnel well AND produce whiffs")
 
         # Compute tunnel scores for this pitcher
-        pitch_types = tuple(sorted(pdf["TaggedPitchType"].dropna().unique()))
-        tunnel_pop = build_tunnel_population_pop(pitch_types=pitch_types)
-        tunnel_df = _compute_tunnel_score(pdf, tunnel_pop=tunnel_pop)
+        tunnel_df = _compute_tunnel_score(pdf)
         tunnel_lookup = {}
         if not tunnel_df.empty:
             for _, tr in tunnel_df.iterrows():

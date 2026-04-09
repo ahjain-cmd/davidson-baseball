@@ -7,7 +7,6 @@ import math
 import streamlit as st
 import pandas as pd
 import numpy as np
-from scipy.stats import percentileofscore
 
 from config import (
     PARQUET_PATH, CACHE_DIR, TUNNEL_BENCH_PATH, TUNNEL_WEIGHTS_PATH,
@@ -252,13 +251,7 @@ def _save_tunnel_weights(weights):
 
 @st.cache_data(show_spinner="Building tunnel population database...")
 def _build_tunnel_population(_data):
-    """Compute raw tunnel composites for every pitcher in the database.
-
-    Returns dict: pair_type (e.g. 'Fastball/Slider') → sorted numpy array of
-    raw tunnel scores across all pitchers.  Used for percentile grading — a
-    pitcher's Fastball/Slider tunnel is ranked against *all* Fastball/Slider
-    tunnels in college baseball.
-    """
+    """Legacy helper: build raw tunnel-score populations across pitchers."""
     pop = {}  # pair_type → [raw_score, ...]
     # Pre-filter: only pitchers with ≥50 pitches and ≥2 pitch types qualify
     # for tunnel computation (reduces 12k → ~2-3k meaningful pitchers)
@@ -283,9 +276,12 @@ def _build_tunnel_population(_data):
 
 def _compute_tunnel_score(pdf, tunnel_pop=None):
     """Compute tunnel scores using Euler-integrated flight paths and
-    data-driven percentile grading.
+    absolute geometry grading.
 
-    V8 — Average-based, break-driven tunnel scoring:
+    `tunnel_pop` is retained for backwards compatibility and ignored by the
+    current scorer.
+
+    V9 — Average-based, break-driven tunnel scoring:
       1. Commit separation from pitch-type AVERAGES via IVB/HB model
          (not pitch-by-pitch), so break profiles drive the score, not
          command scatter or velocity.  Physics audit showed IVB/HB
@@ -300,7 +296,8 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
            rel_angle    8%  (lower → better — similar launch angles)
            move_div     8%  (higher → better — pitches diverge at plate)
       4. Release-point variance penalty on rel_sep factor.
-      5. Pitch-by-pitch pairing used only for whiff% outcome boost.
+      5. Pitch-by-pitch pairing is diagnostic only. Pair whiff is exposed
+         separately and does not change the tunnel grade.
     """
     # Minimum columns: need pitch type, release point, plate location, and velo.
     # IVB/HB are preferred but we can fall back to 9-param or gravity-only.
@@ -331,7 +328,7 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
     COMMIT_TIME = 0.280  # seconds before plate arrival (research-backed)
     N_STEPS = 20         # Euler integration steps
 
-    # Pair-type benchmarks loaded from population cache (commit_sep percentiles).
+    # Pair-type benchmarks loaded from population cache for diagnostics only.
     # Format: (p10, p25, p50, p75, p90, mean, std)
     PAIR_BENCHMARKS = _load_tunnel_benchmarks() or {}
     # Pair-type outcome baselines (whiff%) for shrinkage
@@ -398,7 +395,7 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
         def _pos_at(t):
             x = x0_val + vx0_val * t + 0.5 * ax0_val * t * t
             z = z0_val + vz0_val * t + 0.5 * az0_val * t * t
-            return -x, z
+            return x, z
 
         c_side, c_h = _pos_at(commit_t)
         p_side, p_h = _pos_at(t_total)
@@ -653,7 +650,7 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
             ) * 12  # inches
             effective_rel_sep = rel_sep + 0.5 * combined_rel_std
 
-    # TUNNEL SCORE (v8) — absolute, average-based, break-driven.
+    # TUNNEL SCORE (v9) — absolute, average-based, break-driven.
 
             type_a_norm = types[i]; type_b_norm = types[j]
             pair_label = '/'.join(sorted([type_a_norm, type_b_norm]))
@@ -700,28 +697,31 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
             # Cached regression weights (tunnel_weights.json) are ignored:
             # they were fit on old pitch-by-pitch scoring and distort the
             # new average-based, absolute model.
-            raw_tunnel = round(
+            geometry_score = round(
                 commit_pct * 0.55 +
                 plate_pct * 0.19 +
                 rel_pct * 0.10 +
                 rel_angle_pct * 0.08 +
                 move_pct * 0.08, 2)
 
-            # Outcome boost: small, sample-size gated, shrunk to league baseline
+            # Outcome context is diagnostic only. Keep it visible, but do not
+            # blend it into the tunnel grade or downstream tunnel consumers.
             outcome_boost = 0.0
+            adj_whiff = np.nan
+            whiff_edge = np.nan
             if n_pairs_used >= WHIFF_MIN_PAIRS and pd.notna(pair_whiff):
                 baseline = PAIR_OUTCOMES.get(pair_label, GLOBAL_WHIFF)
                 if baseline is not None and not pd.isna(baseline):
                     adj_whiff = (pair_whiff * n_pairs_used + baseline * WHIFF_SHRINK_K) / (n_pairs_used + WHIFF_SHRINK_K)
-                    diff = adj_whiff - baseline
-                    outcome_boost = float(np.clip(diff / WHIFF_BOOST_SCALE * WHIFF_BOOST_MAX,
+                    whiff_edge = float(adj_whiff - baseline)
+                    outcome_boost = float(np.clip(whiff_edge / WHIFF_BOOST_SCALE * WHIFF_BOOST_MAX,
                                                   -WHIFF_BOOST_MAX, WHIFF_BOOST_MAX))
-                    raw_tunnel = round(raw_tunnel + outcome_boost, 2)
 
-            # V8: use raw composite directly — absolute scale, not population
-            # percentile.  The composite is already 0-100 with clear meaning:
+            # Use the geometry composite directly — absolute scale, not
+            # population percentile and not blended with outcome data.
+            # The composite is already 0-100 with clear meaning:
             #   ≥65 elite, ≥55 good, ≥45 avg, ≥35 below avg, <35 poor.
-            tunnel = round(raw_tunnel, 1)
+            tunnel = round(geometry_score, 1)
 
             # Letter grades on absolute composite
             if tunnel >= 65:
@@ -765,20 +765,25 @@ def _compute_tunnel_score(pdf, tunnel_pop=None):
                 issues.append(f"{rel_angle_sep:.1f}° release angle divergence")
                 fixes.append("Release angles differ too much — hitter can distinguish pitch type at release")
             if not issues:
-                if tunnel >= 75:
-                    diagnosis = f"Elite tunnel — {tunnel:.0f}th percentile for {pair_label}"
-                elif tunnel >= 50:
-                    diagnosis = f"Above-average tunnel — {tunnel:.0f}th percentile for {pair_label}"
-                elif tunnel >= 25:
-                    diagnosis = f"Below-average tunnel — {tunnel:.0f}th percentile for {pair_label}"
+                if tunnel >= 65:
+                    diagnosis = f"Elite tunnel — {tunnel:.0f}/100 for {pair_label}"
+                elif tunnel >= 55:
+                    diagnosis = f"Above-average tunnel — {tunnel:.0f}/100 for {pair_label}"
+                elif tunnel >= 45:
+                    diagnosis = f"Average tunnel — {tunnel:.0f}/100 for {pair_label}"
+                elif tunnel >= 35:
+                    diagnosis = f"Below-average tunnel — {tunnel:.0f}/100 for {pair_label}"
                 else:
-                    diagnosis = f"Poor tunnel — bottom {tunnel:.0f}% for {pair_label}"
+                    diagnosis = f"Poor tunnel — {tunnel:.0f}/100 for {pair_label}"
             else:
                 diagnosis = "; ".join(issues)
 
             rows.append({
                 "Pitch A": types[i], "Pitch B": types[j],
                 "Grade": grade, "Tunnel Score": tunnel,
+                "Geometry Score": round(geometry_score, 1),
+                "Whiff Boost": round(outcome_boost, 1),
+                "Whiff Edge (pp)": round(whiff_edge, 1) if pd.notna(whiff_edge) else None,
                 "Release Sep (in)": round(rel_sep, 1),
                 "Commit Sep (in)": round(commit_sep, 1),
                 "Plate Sep (in)": round(plate_sep, 1),

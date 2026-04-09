@@ -896,7 +896,7 @@ def _render_cover(combined_gd, game_ids, series_label, data=None):
         ax_strip.text(x, 0.22, lbl, fontsize=7, fontweight="bold",
                       color="#888", va="center", ha="center", transform=ax_strip.transAxes)
 
-    # ── Row 4: Top takeaway bullets ──
+    # ── Row 4: Top takeaway bullets — two-column layout ──
     ax_takeaways = fig.add_subplot(outer[4])
     ax_takeaways.axis("off")
 
@@ -906,28 +906,28 @@ def _render_cover(combined_gd, game_ids, series_label, data=None):
     except Exception:
         pass
 
-    y_pos = 0.95
-    ax_takeaways.text(0.03, y_pos, "KEY TAKEAWAYS", fontsize=10, fontweight="bold",
+    ax_takeaways.text(0.03, 0.97, "KEY TAKEAWAYS", fontsize=10, fontweight="bold",
                       color=_DARK, va="top", ha="left", transform=ax_takeaways.transAxes)
-    y_pos -= 0.08
 
-    # Show top 3 pitching + top 3 hitting
+    # Left column: Pitching
+    y_pos = 0.87
     if pitching_bullets:
         ax_takeaways.text(0.03, y_pos, "PITCHING", fontsize=8, fontweight="bold",
                           color=_SECTION_BG, va="top", ha="left", transform=ax_takeaways.transAxes)
-        y_pos -= 0.06
-        for bullet in pitching_bullets[:3]:
-            ax_takeaways.text(0.05, y_pos, f"- {bullet}", fontsize=7.5, color=_DARK,
+        y_pos -= 0.07
+        for bullet in pitching_bullets[:5]:
+            ax_takeaways.text(0.04, y_pos, f"•  {bullet}", fontsize=7, color=_DARK,
                               va="top", ha="left", transform=ax_takeaways.transAxes)
             y_pos -= 0.06
 
-    y_pos -= 0.03
+    # Right column: Hitting
+    y_pos = 0.87
     if hitting_bullets:
-        ax_takeaways.text(0.03, y_pos, "HITTING", fontsize=8, fontweight="bold",
+        ax_takeaways.text(0.52, y_pos, "HITTING", fontsize=8, fontweight="bold",
                           color=_SECTION_BG, va="top", ha="left", transform=ax_takeaways.transAxes)
-        y_pos -= 0.06
-        for bullet in hitting_bullets[:3]:
-            ax_takeaways.text(0.05, y_pos, f"- {bullet}", fontsize=7.5, color=_DARK,
+        y_pos -= 0.07
+        for bullet in hitting_bullets[:5]:
+            ax_takeaways.text(0.53, y_pos, f"•  {bullet}", fontsize=7, color=_DARK,
                               va="top", ha="left", transform=ax_takeaways.transAxes)
             y_pos -= 0.06
 
@@ -943,7 +943,7 @@ def _render_takeaways_page(combined_gd, data, series_label):
     fig.patch.set_facecolor("white")
 
     outer = gridspec.GridSpec(3, 1, figure=fig,
-        height_ratios=[0.08, 0.46, 0.46],
+        height_ratios=[0.07, 0.46, 0.47],
         hspace=0.08, top=0.97, bottom=0.03, left=0.03, right=0.97)
 
     _header_bar(fig, outer[0], f"SERIES REPORT  |  {series_label}  |  COACH TAKEAWAYS")
@@ -951,31 +951,35 @@ def _render_takeaways_page(combined_gd, data, series_label):
     # Pitching takeaways
     ax_pit = fig.add_subplot(outer[1])
     ax_pit.axis("off")
-    ax_pit.set_title("PITCHING", fontsize=11, fontweight="bold",
-                     color=_DARK, loc="left", pad=6)
+    ax_pit.text(0.02, 0.95, "PITCHING", fontsize=11, fontweight="bold",
+                color=_DARK, va="top", ha="left", transform=ax_pit.transAxes)
     if pitching_bullets:
-        y = 0.88
+        y = 0.84
         for b in pitching_bullets:
-            ax_pit.text(0.04, y, f"- {b}", fontsize=9.5, va="top", ha="left",
+            ax_pit.text(0.04, y, f"  •  {b}", fontsize=9, va="top", ha="left",
                         color=_DARK, transform=ax_pit.transAxes, fontfamily="sans-serif")
-            y -= 0.14
+            y -= 0.10
     else:
-        ax_pit.text(0.04, 0.85, "No pitching takeaways available.", fontsize=9,
+        ax_pit.text(0.04, 0.84, "No pitching takeaways available.", fontsize=9,
                     color="#999", va="top", ha="left", transform=ax_pit.transAxes)
+
+    # Divider line between pitching and hitting sections
+    ax_pit.plot([0.03, 0.97], [0.02, 0.02], color="#ddd", linewidth=1,
+                transform=ax_pit.transAxes, clip_on=False)
 
     # Hitting takeaways
     ax_hit = fig.add_subplot(outer[2])
     ax_hit.axis("off")
-    ax_hit.set_title("HITTING", fontsize=11, fontweight="bold",
-                     color=_DARK, loc="left", pad=6)
+    ax_hit.text(0.02, 0.95, "HITTING", fontsize=11, fontweight="bold",
+                color=_DARK, va="top", ha="left", transform=ax_hit.transAxes)
     if hitting_bullets:
-        y = 0.88
+        y = 0.84
         for b in hitting_bullets:
-            ax_hit.text(0.04, y, f"- {b}", fontsize=9.5, va="top", ha="left",
+            ax_hit.text(0.04, y, f"  •  {b}", fontsize=9, va="top", ha="left",
                         color=_DARK, transform=ax_hit.transAxes, fontfamily="sans-serif")
-            y -= 0.14
+            y -= 0.10
     else:
-        ax_hit.text(0.04, 0.85, "No hitting takeaways available.", fontsize=9,
+        ax_hit.text(0.04, 0.84, "No hitting takeaways available.", fontsize=9,
                     color="#999", va="top", ha="left", transform=ax_hit.transAxes)
 
     _add_page_number(fig)
@@ -1197,7 +1201,7 @@ def _render_hitter_page(bdf, data, batter, series_label, game_ids=None):
 
 
 def _render_pitching_summary(combined_gd, series_label):
-    """Pitching staff summary."""
+    """Pitching staff summary with team aggregate stats."""
     dav_pitching = combined_gd[combined_gd["PitcherTeam"] == DAVIDSON_TEAM_ID].copy()
     if dav_pitching.empty:
         return None
@@ -1205,9 +1209,9 @@ def _render_pitching_summary(combined_gd, series_label):
 
     fig = plt.figure(figsize=_FIG_SIZE)
     fig.patch.set_facecolor("white")
-    outer = gridspec.GridSpec(2, 1, figure=fig,
-        height_ratios=[0.08, 0.92],
-        hspace=0.08, top=0.97, bottom=0.03, left=0.03, right=0.97)
+    outer = gridspec.GridSpec(3, 1, figure=fig,
+        height_ratios=[0.06, 0.55, 0.39],
+        hspace=0.06, top=0.97, bottom=0.03, left=0.03, right=0.97)
     _header_bar(fig, outer[0], f"SERIES REPORT  |  {series_label}  |  PITCHING")
 
     ax_table = fig.add_subplot(outer[1])
@@ -1234,12 +1238,62 @@ def _render_pitching_summary(combined_gd, series_label):
     _styled_table(ax_table, rows, col_labels,
                   [0.20, 0.08, 0.07, 0.06, 0.06, 0.06, 0.09, 0.09, 0.09],
                   fontsize=7.5, row_height=1.5)
+
+    # Team aggregate stats below table
+    ax_agg = fig.add_subplot(outer[2])
+    ax_agg.axis("off")
+    ax_agg.set_title("TEAM PITCHING AGGREGATES", fontsize=9, fontweight="bold",
+                     color=_DARK, loc="left", pad=4)
+
+    total_pitches = len(dav_pitching)
+    total_ks = (dav_pitching["KorBB"] == "Strikeout").sum() if "KorBB" in dav_pitching.columns else 0
+    total_bbs = (dav_pitching["KorBB"] == "Walk").sum() if "KorBB" in dav_pitching.columns else 0
+    total_hits = dav_pitching["PlayResult"].isin(["Single", "Double", "Triple", "HomeRun"]).sum() if "PlayResult" in dav_pitching.columns else 0
+    all_velo = pd.to_numeric(dav_pitching["RelSpeed"], errors="coerce").dropna()
+    team_csw = dav_pitching["PitchCall"].isin(["StrikeCalled", "StrikeSwinging"]).mean() * 100
+    swings = dav_pitching[dav_pitching["PitchCall"].isin(SWING_CALLS)]
+    whiffs = dav_pitching[dav_pitching["PitchCall"] == "StrikeSwinging"]
+    whiff_pct = len(whiffs) / max(len(swings), 1) * 100
+    fstrike = dav_pitching[dav_pitching["Strikes"] == 0]
+    fstrike_rate = fstrike["PitchCall"].isin(["StrikeCalled", "StrikeSwinging", "FoulBall",
+                   "FoulBallNotFieldable", "FoulBallFieldable", "InPlay"]).mean() * 100 if len(fstrike) > 0 else 0
+
+    # Pitch type distribution
+    pt_counts = dav_pitching["TaggedPitchType"].value_counts()
+    pt_total = pt_counts.sum()
+    pt_lines = []
+    for pt, cnt in pt_counts.head(5).items():
+        pt_velo = pd.to_numeric(dav_pitching[dav_pitching["TaggedPitchType"] == pt]["RelSpeed"],
+                                errors="coerce").dropna()
+        avg_v = f"{pt_velo.mean():.1f}" if len(pt_velo) > 0 else "-"
+        pt_lines.append(f"{pt}: {cnt} ({cnt/pt_total*100:.0f}%) — {avg_v} mph avg")
+
+    y = 0.88
+    stats_text = [
+        f"Total Pitches: {total_pitches}  |  K: {total_ks}  |  BB: {total_bbs}  |  H: {total_hits}  |  K/BB: {total_ks/max(total_bbs,1):.1f}",
+        f"Team CSW%: {team_csw:.1f}%  |  Whiff%: {whiff_pct:.1f}%  |  First-Pitch Strike%: {fstrike_rate:.0f}%",
+        f"Avg Velo: {all_velo.mean():.1f} mph  |  Max Velo: {all_velo.max():.1f} mph",
+        "",
+        "PITCH MIX:",
+    ] + [f"    {line}" for line in pt_lines]
+
+    for line in stats_text:
+        if line == "":
+            y -= 0.04
+            continue
+        bold = line.startswith("PITCH") or line.startswith("Total")
+        ax_agg.text(0.04, y, line, fontsize=8, va="top", ha="left",
+                    color=_DARK, transform=ax_agg.transAxes,
+                    fontweight="bold" if bold else "normal",
+                    fontfamily="sans-serif")
+        y -= 0.08
+
     _add_page_number(fig)
     return fig
 
 
 def _render_hitting_summary(combined_gd, series_label):
-    """Hitting lineup summary."""
+    """Hitting lineup summary with team aggregate stats."""
     dav_hitting = combined_gd[combined_gd["BatterTeam"] == DAVIDSON_TEAM_ID].copy()
     if dav_hitting.empty:
         return None
@@ -1247,9 +1301,9 @@ def _render_hitting_summary(combined_gd, series_label):
 
     fig = plt.figure(figsize=_FIG_SIZE)
     fig.patch.set_facecolor("white")
-    outer = gridspec.GridSpec(2, 1, figure=fig,
-        height_ratios=[0.08, 0.92],
-        hspace=0.08, top=0.97, bottom=0.03, left=0.03, right=0.97)
+    outer = gridspec.GridSpec(3, 1, figure=fig,
+        height_ratios=[0.06, 0.55, 0.39],
+        hspace=0.06, top=0.97, bottom=0.03, left=0.03, right=0.97)
     _header_bar(fig, outer[0], f"SERIES REPORT  |  {series_label}  |  HITTING")
 
     ax_table = fig.add_subplot(outer[1])
@@ -1281,6 +1335,73 @@ def _render_hitting_summary(combined_gd, series_label):
     _styled_table(ax_table, rows, col_labels,
                   [0.20, 0.06, 0.06, 0.06, 0.06, 0.06, 0.06, 0.10, 0.10, 0.08],
                   fontsize=7, row_height=1.3)
+
+    # Team aggregate stats below table
+    ax_agg = fig.add_subplot(outer[2])
+    ax_agg.axis("off")
+    ax_agg.set_title("TEAM HITTING AGGREGATES", fontsize=9, fontweight="bold",
+                     color=_DARK, loc="left", pad=4)
+
+    # Compute team-level stats
+    pa_cols = [c for c in ["GameID", "Batter", "Inning", "PAofInning"] if c in dav_hitting.columns]
+    total_pa = dav_hitting.drop_duplicates(subset=pa_cols).shape[0] if len(pa_cols) >= 2 else 0
+    pr_all = dav_hitting["PlayResult"] if "PlayResult" in dav_hitting.columns else pd.Series(dtype=str)
+    total_hits = pr_all.isin(["Single", "Double", "Triple", "HomeRun"]).sum()
+    total_hr = (pr_all == "HomeRun").sum()
+    total_ks = (dav_hitting["KorBB"] == "Strikeout").sum() if "KorBB" in dav_hitting.columns else 0
+    total_bbs = (dav_hitting["KorBB"] == "Walk").sum() if "KorBB" in dav_hitting.columns else 0
+    all_ip = dav_hitting[dav_hitting["PitchCall"] == "InPlay"]
+    all_ev = pd.to_numeric(all_ip["ExitSpeed"], errors="coerce").dropna() if "ExitSpeed" in all_ip.columns else pd.Series(dtype=float)
+    team_hh = f"{(all_ev >= 95).mean()*100:.0f}%" if len(all_ev) > 0 else "-"
+    barrel_count = is_barrel_mask(all_ip).sum() if len(all_ev) > 0 else 0
+    barrel_pct = f"{barrel_count/max(len(all_ev),1)*100:.0f}%" if len(all_ev) > 0 else "-"
+
+    loc_df = dav_hitting.dropna(subset=["PlateLocSide", "PlateLocHeight"])
+    chase_str = "-"
+    whiff_str = "-"
+    if not loc_df.empty:
+        iz = in_zone_mask(loc_df)
+        oz = loc_df[~iz]
+        oz_sw = oz[oz["PitchCall"].isin(SWING_CALLS)]
+        chase_str = f"{len(oz_sw)/max(len(oz),1)*100:.1f}%"
+    swings = dav_hitting[dav_hitting["PitchCall"].isin(SWING_CALLS)]
+    whiffs = dav_hitting[dav_hitting["PitchCall"] == "StrikeSwinging"]
+    whiff_str = f"{len(whiffs)/max(len(swings),1)*100:.1f}%"
+
+    # Pitch type performance
+    pt_lines = []
+    for pt in ["Fastball", "Sinker", "Slider", "Changeup", "Curveball", "Cutter"]:
+        pt_df = dav_hitting[dav_hitting["TaggedPitchType"] == pt]
+        if len(pt_df) < 5:
+            continue
+        pt_sw = pt_df[pt_df["PitchCall"].isin(SWING_CALLS)]
+        pt_wh = pt_df[pt_df["PitchCall"] == "StrikeSwinging"]
+        pt_ip = pt_df[pt_df["PitchCall"] == "InPlay"]
+        pt_ev = pd.to_numeric(pt_ip["ExitSpeed"], errors="coerce").dropna() if "ExitSpeed" in pt_ip.columns else pd.Series(dtype=float)
+        wh_pct = f"{len(pt_wh)/max(len(pt_sw),1)*100:.0f}%"
+        ev_str = f"{pt_ev.mean():.1f}" if len(pt_ev) > 0 else "-"
+        pt_lines.append(f"    vs {pt}: {len(pt_df)} pitches, {wh_pct} Whiff, {ev_str} Avg EV")
+
+    y = 0.88
+    stats_text = [
+        f"Total PA: {total_pa}  |  H: {total_hits}  |  HR: {total_hr}  |  BB: {total_bbs}  |  K: {total_ks}",
+        f"Avg EV: {all_ev.mean():.1f} mph  |  Max EV: {all_ev.max():.1f} mph  |  Hard Hit%: {team_hh}  |  Barrel%: {barrel_pct}" if len(all_ev) > 0 else "No batted ball data",
+        f"Chase%: {chase_str}  |  Whiff%: {whiff_str}  |  K%: {total_ks/max(total_pa,1)*100:.0f}%  |  BB%: {total_bbs/max(total_pa,1)*100:.0f}%",
+        "",
+        "VS PITCH TYPE:",
+    ] + pt_lines
+
+    for line in stats_text:
+        if line == "":
+            y -= 0.04
+            continue
+        bold = line.startswith("VS PITCH") or line.startswith("Total")
+        ax_agg.text(0.04, y, line, fontsize=8, va="top", ha="left",
+                    color=_DARK, transform=ax_agg.transAxes,
+                    fontweight="bold" if bold else "normal",
+                    fontfamily="sans-serif")
+        y -= 0.08
+
     _add_page_number(fig)
     return fig
 
@@ -1315,16 +1436,17 @@ def _mpl_pa_zone_plot(ax, ab_df):
         ax.text(0.5, 0.5, "No location\ndata", fontsize=8, color="#999",
                 ha="center", va="center", transform=ax.transAxes)
         return
+    ax.set_clip_on(True)
     for _, row in loc.iterrows():
         pnum = int(row["_OrigPitchNum"])
         pt = row.get("TaggedPitchType", "Other")
         color = PITCH_COLORS.get(pt, "#aaa")
         ax.scatter(row["PlateLocSide"], row["PlateLocHeight"],
                    c=color, s=120, alpha=0.85, edgecolors="white",
-                   linewidths=0.5, zorder=10)
+                   linewidths=0.5, zorder=10, clip_on=True)
         ax.text(row["PlateLocSide"], row["PlateLocHeight"], str(pnum),
                 fontsize=6, fontweight="bold", color="white",
-                ha="center", va="center", zorder=11)
+                ha="center", va="center", zorder=11, clip_on=True)
 
 
 def _render_hitter_ab_pages(bdf, data, batter, series_label, game_ids):
@@ -1355,7 +1477,7 @@ def _render_hitter_ab_pages(bdf, data, batter, series_label, game_ids):
 
     dname = display_name(batter, escape_html=False)
     figures = []
-    PAS_PER_PAGE = 3
+    PAS_PER_PAGE = 4
 
     for page_start in range(0, len(pa_list), PAS_PER_PAGE):
         page_pas = pa_list[page_start:page_start + PAS_PER_PAGE]
@@ -1364,14 +1486,14 @@ def _render_hitter_ab_pages(bdf, data, batter, series_label, game_ids):
         fig = plt.figure(figsize=_FIG_SIZE)
         fig.patch.set_facecolor("white")
 
-        h_ratios = [0.08] + [0.28] * n_pas_page
+        h_ratios = [0.07] + [0.22] * n_pas_page
         remaining = 1.0 - sum(h_ratios)
         if remaining > 0.01:
             h_ratios.append(remaining)
         n_rows = len(h_ratios)
 
         page_outer = gridspec.GridSpec(n_rows, 1, figure=fig,
-            height_ratios=h_ratios, hspace=0.10,
+            height_ratios=h_ratios, hspace=0.08,
             top=0.97, bottom=0.03, left=0.04, right=0.96)
 
         _header_bar(fig, page_outer[0],
@@ -1396,7 +1518,28 @@ def _render_hitter_ab_pages(bdf, data, batter, series_label, game_ids):
 
             score, letter, _ = _grade_at_bat(ab_sorted, season_bdf)
             date_prefix = f"[{game_date_str}] " if game_date_str else ""
-            pa_header = f"{date_prefix}Inn {inn} vs {vs_pitcher} — {result} ({len(ab_sorted)}p) [{letter}]"
+
+            # Build swing-decision notes for the header
+            loc = ab_sorted.dropna(subset=["PlateLocSide", "PlateLocHeight"])
+            notes = []
+            if not loc.empty:
+                iz = in_zone_mask(loc)
+                oz_swings = loc[~iz & loc["PitchCall"].isin(SWING_CALLS)]
+                iz_pitches = loc[iz]
+                iz_takes = iz_pitches[~iz_pitches["PitchCall"].isin(SWING_CALLS)]
+                if len(oz_swings) > 0:
+                    notes.append(f"Chased {len(oz_swings)}x")
+                if len(iz_pitches) > 0 and len(iz_takes) > 0:
+                    take_pct = len(iz_takes) / len(iz_pitches) * 100
+                    if take_pct > 50:
+                        notes.append(f"Took {take_pct:.0f}% IZ")
+            ip = ab_sorted[ab_sorted["PitchCall"] == "InPlay"]
+            if "ExitSpeed" in ip.columns and not ip.empty:
+                ev = ip["ExitSpeed"].dropna()
+                if not ev.empty:
+                    notes.append(f"EV {ev.iloc[0]:.0f}")
+            note_suffix = f"  ({', '.join(notes)})" if notes else ""
+            pa_header = f"{date_prefix}Inn {inn} vs {vs_pitcher} — {result} ({len(ab_sorted)}p) [{letter}]{note_suffix}"
 
             # Left: pitch table
             ax_table = fig.add_subplot(row_gs[0, 0])
@@ -1410,34 +1553,13 @@ def _render_hitter_ab_pages(bdf, data, batter, series_label, game_ids):
                     [str(r["#"]), r["Count"], r["Type"], r["Velo"], r["Call"], r["EV"], r["LA"]]
                     for r in pitch_rows
                 ]
+                # Shrink row height for long ABs to prevent table overflow
+                n_rows = len(table_data) + 1  # +1 for header
+                rh = 1.3 if n_rows <= 5 else max(0.9, 5.5 / n_rows)
                 _styled_table(ax_table, table_data,
                              ["#", "Count", "Type", "Velo", "Call", "EV", "LA"],
                              [0.06, 0.10, 0.18, 0.12, 0.12, 0.12, 0.10],
-                             fontsize=6.5, row_height=1.3)
-
-            # Swing decision annotation below the table
-            loc = ab_sorted.dropna(subset=["PlateLocSide", "PlateLocHeight"])
-            notes = []
-            if not loc.empty:
-                iz = in_zone_mask(loc)
-                oz_swings = loc[~iz & loc["PitchCall"].isin(SWING_CALLS)]
-                iz_pitches = loc[iz]
-                iz_takes = iz_pitches[~iz_pitches["PitchCall"].isin(SWING_CALLS)]
-                if len(oz_swings) > 0:
-                    notes.append(f"Chased {len(oz_swings)}x outside zone")
-                if len(iz_pitches) > 0 and len(iz_takes) > 0:
-                    take_pct = len(iz_takes) / len(iz_pitches) * 100
-                    if take_pct > 50:
-                        notes.append(f"Took {take_pct:.0f}% in-zone")
-            ip = ab_sorted[ab_sorted["PitchCall"] == "InPlay"]
-            if "ExitSpeed" in ip.columns and not ip.empty:
-                ev = ip["ExitSpeed"].dropna()
-                if not ev.empty:
-                    notes.append(f"EV: {ev.iloc[0]:.0f} mph")
-            if notes:
-                ax_table.text(0.02, 0.02, " | ".join(notes),
-                             fontsize=5.5, color="#666", va="bottom", ha="left",
-                             transform=ax_table.transAxes)
+                             fontsize=6.5, row_height=rh)
 
             # Right: zone plot
             ax_zone = fig.add_subplot(row_gs[0, 1])

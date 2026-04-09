@@ -281,6 +281,193 @@ def _cmd_norm(cmd_plus: Any) -> float:
     return float(max(0.0, min(1.0, (v - 85.0) / 30.0)))
 
 
+def _prob_like_to_pct(x: Any) -> float:
+    try:
+        v = float(x)
+    except Exception:
+        return float("nan")
+    if np.isnan(v):
+        return float("nan")
+    if 0.0 <= v <= 1.0:
+        return v * 100.0
+    return v
+
+
+def _pitch_class_name(pitch_name: Optional[str]) -> str:
+    if pitch_name in _HARD_PITCHES:
+        return "hard"
+    if isinstance(pitch_name, str) and pitch_name:
+        return "offspeed"
+    return "unknown"
+
+
+def _candidate_whiff_baseline_pct(info: Dict[str, Any]) -> float:
+    for key in ("blended_whiff", "shrunk_whiff", "our_whiff"):
+        try:
+            v = float(info.get(key, np.nan))
+        except Exception:
+            v = np.nan
+        if not np.isnan(v):
+            return v
+    for key in ("xwhiff_grade", "xwhiff"):
+        v = _prob_like_to_pct(info.get(key, np.nan))
+        if not np.isnan(v):
+            return v
+    return float("nan")
+
+
+def _lookup_seq_context(
+    last_pitch: Optional[str],
+    pitch_name: str,
+    seq_df: Optional[pd.DataFrame],
+) -> Dict[str, Any]:
+    if not last_pitch or not isinstance(seq_df, pd.DataFrame) or seq_df.empty:
+        return {}
+    m = seq_df[(seq_df["Setup Pitch"] == last_pitch) & (seq_df["Follow Pitch"] == pitch_name)]
+    if m.empty:
+        return {}
+    row = m.iloc[0]
+    seq_whiff = np.nan
+    seq_source = None
+    for col in ("xSequenceWhiff%", "SeqWhiff%", "Whiff%"):
+        if col in m.columns and pd.notna(row.get(col)):
+            seq_whiff = float(row[col])
+            seq_source = col
+            break
+    return {
+        "whiff_pct": seq_whiff,
+        "whiff_source": seq_source,
+        "prior_pct": float(row["Sequence Prior%"]) if "Sequence Prior%" in m.columns and pd.notna(row.get("Sequence Prior%")) else np.nan,
+        "swings": int(row["Sequence Swings"]) if "Sequence Swings" in m.columns and pd.notna(row.get("Sequence Swings")) else int(row.get("Count", 0) or 0),
+        "chase_pct": float(row["Chase%"]) if "Chase%" in m.columns and pd.notna(row.get("Chase%")) else np.nan,
+    }
+
+
+def _lookup_hitter_sequence_edge(
+    last_pitch: Optional[str],
+    pitch_name: str,
+    hd: Dict[str, Any],
+) -> Dict[str, Any]:
+    seq_profile = (hd or {}).get("sequence_profile") or {}
+    if not last_pitch or not seq_profile:
+        return {}
+
+    entry = None
+    source = ""
+    by_prev_pitch = seq_profile.get("by_prev_pitch", {})
+    if isinstance(by_prev_pitch, dict):
+        prev_map = by_prev_pitch.get(last_pitch, {})
+        if isinstance(prev_map, dict):
+            entry = prev_map.get(pitch_name)
+            source = f"hitter exact {last_pitch}->{pitch_name}"
+
+    if entry is None:
+        by_prev_class = seq_profile.get("by_prev_class", {})
+        prev_class = _pitch_class_name(last_pitch)
+        if isinstance(by_prev_class, dict):
+            class_map = by_prev_class.get(prev_class, {})
+            if isinstance(class_map, dict):
+                entry = class_map.get(pitch_name)
+                source = f"hitter {prev_class}->{pitch_name}"
+
+    if not isinstance(entry, dict):
+        return {}
+
+    n_events = int(entry.get("n_events", 0) or 0)
+    reliability = n_events / (n_events + 20.0) if n_events > 0 else 0.0
+    whiff_delta = float(entry.get("whiff_delta", np.nan)) if pd.notna(entry.get("whiff_delta")) else np.nan
+    chase_delta = float(entry.get("chase_delta", np.nan)) if pd.notna(entry.get("chase_delta")) else np.nan
+    support_raw = 0.0
+    if not np.isnan(whiff_delta):
+        support_raw += whiff_delta * 0.60
+    if not np.isnan(chase_delta):
+        support_raw += chase_delta * 0.20
+    support_pp = float(np.clip(support_raw * max(0.35, reliability), -6.0, 6.0))
+    return {
+        "support_pp": support_pp,
+        "source": source,
+        "n_events": n_events,
+        "whiff_delta": whiff_delta,
+        "chase_delta": chase_delta,
+        "reliability": reliability,
+    }
+
+
+def _resolve_effective_usage(
+    pitch_name: str,
+    info: Dict[str, Any],
+    hd: Dict[str, Any],
+    balls: int,
+    strikes: int,
+    bats: str,
+    last_pitch: Optional[str] = None,
+    seq_df: Optional[pd.DataFrame] = None,
+) -> Dict[str, Any]:
+    ctx_usage, usage_src = _resolve_contextual_usage(info, balls, strikes, bats, last_pitch)
+    if np.isnan(ctx_usage):
+        return {
+            "ctx_usage": np.nan,
+            "effective_usage": np.nan,
+            "usage_src": usage_src,
+            "support_pp": 0.0,
+            "reasons": [],
+        }
+
+    reasons: List[str] = []
+    support_pp = 0.0
+    baseline_whiff = _candidate_whiff_baseline_pct(info)
+
+    seq_ctx = _lookup_seq_context(last_pitch, pitch_name, seq_df)
+    seq_whiff = seq_ctx.get("whiff_pct", np.nan)
+    if not np.isnan(seq_whiff):
+        comp_whiff = baseline_whiff
+        if np.isnan(comp_whiff):
+            comp_whiff = seq_ctx.get("prior_pct", np.nan)
+        if not np.isnan(comp_whiff):
+            seq_edge = seq_whiff - comp_whiff
+            seq_swings = max(int(seq_ctx.get("swings", 0) or 0), 0)
+            seq_reliability = max(0.35, seq_swings / (seq_swings + 40.0))
+            seq_support = float(np.clip(seq_edge * 0.45 * seq_reliability, -6.0, 6.0))
+            support_pp += seq_support
+            if abs(seq_support) >= 0.75:
+                reasons.append(
+                    f"pair support {seq_support:+.1f}pp ({last_pitch}->{pitch_name} {seq_whiff:.0f}% {seq_ctx.get('whiff_source') or 'seq'})"
+                )
+
+    hitter_seq = _lookup_hitter_sequence_edge(last_pitch, pitch_name, hd)
+    hitter_support = float(hitter_seq.get("support_pp", 0.0) or 0.0)
+    support_pp += hitter_support
+    if abs(hitter_support) >= 0.75:
+        reasons.append(
+            f"{hitter_seq.get('source', 'hitter seq')} {hitter_support:+.1f}pp"
+        )
+
+    quality_support = 0.0
+    xwhiff_plus = float(info.get("xwhiff_plus", np.nan)) if pd.notna(info.get("xwhiff_plus")) else np.nan
+    command_plus = float(info.get("command_plus", np.nan)) if pd.notna(info.get("command_plus")) else np.nan
+    stuff_plus = float(info.get("stuff_plus", np.nan)) if pd.notna(info.get("stuff_plus")) else np.nan
+    if not np.isnan(xwhiff_plus):
+        quality_support += float(np.clip((xwhiff_plus - 100.0) * 0.12, -4.0, 4.0))
+    elif not np.isnan(baseline_whiff):
+        quality_support += float(np.clip((baseline_whiff - 24.0) * 0.18, -3.0, 3.0))
+    if not np.isnan(command_plus):
+        quality_support += float(np.clip((command_plus - 100.0) * 0.04, -2.0, 2.0))
+    if not np.isnan(stuff_plus):
+        quality_support += float(np.clip((stuff_plus - 100.0) * 0.03, -2.0, 2.0))
+    support_pp += quality_support
+    if abs(quality_support) >= 0.75:
+        reasons.append(f"quality support {quality_support:+.1f}pp")
+
+    effective_usage = float(np.clip(ctx_usage + support_pp, 0.0, 65.0))
+    return {
+        "ctx_usage": float(ctx_usage),
+        "effective_usage": effective_usage,
+        "usage_src": usage_src,
+        "support_pp": float(support_pp),
+        "reasons": reasons,
+    }
+
+
 def _count_adjustments(
     pitch_name: str, info: Dict[str, Any], state: GameState, *, hd: Dict = None,
 ) -> Tuple[float, List[str]]:
@@ -291,7 +478,7 @@ def _count_adjustments(
 
     is_hard = pitch_name in _HARD_PITCHES
     is_offspeed = pitch_name in _OFFSPEED_PITCHES
-    wh = info.get("shrunk_whiff", info.get("our_whiff"))
+    wh = info.get("blended_whiff", info.get("shrunk_whiff", info.get("our_whiff")))
     csw = info.get("shrunk_csw", info.get("our_csw"))
     chase = info.get("shrunk_chase", info.get("our_chase"))
     ev = info.get("shrunk_ev", info.get("our_ev_against"))
@@ -548,7 +735,7 @@ def _base_adjustments(
     delta = 0.0
     hd = hd or {}
 
-    wh = info.get("shrunk_whiff", info.get("our_whiff"))
+    wh = info.get("blended_whiff", info.get("shrunk_whiff", info.get("our_whiff")))
     cmd = info.get("command_plus", np.nan)
 
     mr = _get_metric_ranges()
@@ -776,7 +963,8 @@ def _lookup_tunnel_score(a: str, b: str, tun_df: Optional[pd.DataFrame]) -> floa
     ]
     if m.empty:
         return np.nan
-    return float(m.iloc[0]["Tunnel Score"])
+    score_col = "Geometry Score" if "Geometry Score" in m.columns else "Tunnel Score"
+    return float(m.iloc[0][score_col])
 
 
 def _sequence_adjustments(
@@ -871,7 +1059,11 @@ def _sequence_adjustments(
     if isinstance(seq_df, pd.DataFrame) and not seq_df.empty:
         m = seq_df[(seq_df["Setup Pitch"] == last) & (seq_df["Follow Pitch"] == pitch_name)]
         if not m.empty:
-            sw = m.iloc[0].get("Whiff%", np.nan)
+            sw = np.nan
+            for col in ("SeqWhiff%", "xSequenceWhiff%", "Whiff%"):
+                if col in m.columns and pd.notna(m.iloc[0].get(col)):
+                    sw = float(m.iloc[0][col])
+                    break
             if not np.isnan(sw) and sw > 25:
                 boost = min((sw - 25) / 25 * 3.0, 3.0)
                 delta += boost
@@ -1109,7 +1301,7 @@ def _recommend_pitch_core(
         _metric_source = _cg if _count_perf else "overall"
 
         pitcher_metrics = {
-            "whiff_pct": _count_perf.get("whiff_pct") or info.get("shrunk_whiff", info.get("our_whiff")),
+            "whiff_pct": _count_perf.get("whiff_pct") or info.get("blended_whiff", info.get("shrunk_whiff", info.get("our_whiff"))),
             "csw_pct": _count_perf.get("csw_pct") or info.get("shrunk_csw", info.get("our_csw")),
             "chase_pct": _count_perf.get("chase_pct") or info.get("shrunk_chase", info.get("our_chase")),
             "ev_against": _count_perf.get("ev_against") or info.get("shrunk_ev", info.get("our_ev_against")),
@@ -1188,14 +1380,26 @@ def _recommend_pitch_core(
         bats_str = str(matchup.get("bats", "R")).strip().upper()[:1]
         last_p = state.last_pitch if hasattr(state, 'last_pitch') else None
 
-        ctx_usage, usage_src = _resolve_contextual_usage(
-            info, b, s, bats_str, last_p,
-        )
         delta_usage = 0.0
         usage_reasons: List[str] = []
+        usage_ctx = _resolve_effective_usage(
+            pitch_name,
+            info,
+            hd,
+            b,
+            s,
+            bats_str,
+            last_pitch=last_p,
+            seq_df=seq_df,
+        )
+        ctx_usage = usage_ctx.get("ctx_usage", np.nan)
+        effective_usage = usage_ctx.get("effective_usage", np.nan)
+        usage_src = usage_ctx.get("usage_src", "none")
+        usage_reasons.extend(usage_ctx.get("reasons", []))
 
-        if not np.isnan(ctx_usage):
-            usage_f = float(ctx_usage)
+        if not np.isnan(effective_usage):
+            usage_f = float(effective_usage)
+            raw_usage_f = float(ctx_usage) if not np.isnan(ctx_usage) else usage_f
 
             # Reliability curve (tightened — low-usage pitches get near-zero reliability)
             if pitch_name in _HARD_PITCHES:
@@ -1220,18 +1424,23 @@ def _recommend_pitch_core(
             if usage_f < 10:
                 usage_penalty = 0.015 * (10 - usage_f) * usage_penalty_scale
                 delta_usage += usage_penalty
-                usage_reasons.append(f"usage penalty +{usage_penalty:.4f} ({usage_f:.0f}%)")
+                usage_reasons.append(f"usage penalty +{usage_penalty:.4f} ({usage_f:.0f}% eff)")
 
             # Transition bonus
             trans_bonus = _resolve_transition_bonus(info, last_p) * transition_scale
             delta_usage += trans_bonus
 
-            if usage_f < 8.0:
-                usage_reasons.append(f"low usage ({usage_f:.0f}%, {usage_src}): reliability {reliability:.0%}")
+            support_pp = usage_ctx.get("support_pp", 0.0) or 0.0
+            if abs(support_pp) >= 0.75 and not np.isnan(ctx_usage):
+                usage_reasons.append(
+                    f"effective usage {usage_f:.0f}% from {raw_usage_f:.0f}% ({usage_src}, {support_pp:+.1f}pp)"
+                )
+            elif usage_f < 8.0:
+                usage_reasons.append(f"low usage ({usage_f:.0f}% eff, {usage_src}): reliability {reliability:.0%}")
             elif usage_f < 20.0:
-                usage_reasons.append(f"secondary ({usage_f:.0f}%, {usage_src}): reliability {reliability:.0%}")
+                usage_reasons.append(f"secondary ({usage_f:.0f}% eff, {usage_src}): reliability {reliability:.0%}")
             elif usage_src != "overall":
-                usage_reasons.append(f"ctx usage {usage_f:.0f}% ({usage_src})")
+                usage_reasons.append(f"ctx usage {raw_usage_f:.0f}% ({usage_src})")
 
             if abs(trans_bonus) > 0.0005 * transition_scale:
                 usage_reasons.append(f"transition {'bonus' if trans_bonus < 0 else 'penalty'}")

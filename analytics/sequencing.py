@@ -17,7 +17,8 @@ def _lookup_tunnel(a, b, tun_df):
     ]
     if m.empty:
         return np.nan, "-"
-    return m.iloc[0]["Tunnel Score"], m.iloc[0]["Grade"]
+    score_col = "Geometry Score" if "Geometry Score" in m.columns else "Tunnel Score"
+    return m.iloc[0][score_col], m.iloc[0]["Grade"]
 
 
 def _lookup_seq(setup, follow, seq_df):
@@ -27,7 +28,12 @@ def _lookup_seq(setup, follow, seq_df):
     m = seq_df[(seq_df["Setup Pitch"] == setup) & (seq_df["Follow Pitch"] == follow)]
     if m.empty:
         return np.nan, np.nan
-    return m.iloc[0]["Whiff%"], m.iloc[0].get("Chase%", np.nan)
+    whiff = np.nan
+    for col in ("SeqWhiff%", "xSequenceWhiff%", "Whiff%"):
+        if col in m.columns and pd.notna(m.iloc[0].get(col)):
+            whiff = m.iloc[0][col]
+            break
+    return whiff, m.iloc[0].get("Chase%", np.nan)
 
 
 def _build_3pitch_sequences(sorted_ps, hd, tun_df, seq_df):

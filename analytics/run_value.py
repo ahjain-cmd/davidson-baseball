@@ -31,6 +31,7 @@ _FALLBACK_COUNT_RV: Dict[str, float] = {
 _FALLBACK_LINEAR_WEIGHTS: Dict[str, float] = {
     "Out": 0.0, "FieldersChoice": 0.0, "Sacrifice": 0.0,
     "Single": 0.47, "Double": 0.78, "Triple": 1.05, "HomeRun": 1.40,
+    "Walk": 0.33, "HBP": 0.35,
     "Error": 0.47,
 }
 
@@ -67,6 +68,8 @@ def _load_linear_weights() -> Dict[str, float]:
                     "Double": lw.get("double_w", 0.78),
                     "Triple": lw.get("triple_w", 1.05),
                     "HomeRun": lw.get("hr_w", 1.40),
+                    "Walk": lw.get("bb_w", 0.33),
+                    "HBP": lw.get("hbp_w", 0.35),
                     "Error": lw.get("single_w", 0.47),
                 }
     except Exception:
@@ -107,13 +110,13 @@ def compute_pitch_run_values(df: pd.DataFrame) -> pd.DataFrame:
     is_k = kor_bb.isin(["Strikeout", "K"])
     rv[is_k] = -current_rv[is_k]
 
-    # Walk: +lw["Single"] - current_rv (runner on, approximate)
+    # Walk: +lw["Walk"] - current_rv
     is_bb = kor_bb.isin(["Walk", "BB"])
-    rv[is_bb] = lw["Single"] - current_rv[is_bb]
+    rv[is_bb] = lw["Walk"] - current_rv[is_bb]
 
-    # HBP: same as walk
+    # HBP
     is_hbp = pitch_call == "HitByPitch"
-    rv[is_hbp] = lw["Single"] - current_rv[is_hbp]
+    rv[is_hbp] = lw["HBP"] - current_rv[is_hbp]
 
     # InPlay: linear_weights[PlayResult] - current_rv
     is_ip = pitch_call == "InPlay"

@@ -159,16 +159,27 @@ def train_location_plus_model(parquet_path: str) -> None:
     val_mae = np.mean(np.abs(y_val - val_pred))
     print(f"\n  Validation: r={val_corr:.4f}, MAE={val_mae:.5f}")
 
-    # Compute per-pitch-type scaling stats
+    # Compute per-pitch-type scaling stats at PITCHER level
+    # (pitch-level stats cause compression when averaged per pitcher)
     all_pred = model.predict(X)
+    pred_series = pd.Series(all_pred, index=X.index)
+    pitcher_ids = df.loc[valid.index[valid], "Pitcher"]
     pt_stats: Dict[str, Tuple[float, float]] = {}
     for pt in pitch_types.unique():
-        mask = pitch_types.values == pt
-        if mask.sum() < 50:
+        pt_mask = pitch_types.values == pt
+        if pt_mask.sum() < 50:
             continue
-        preds = all_pred[mask]
-        pt_stats[pt] = (float(np.mean(preds)), float(np.std(preds)))
-    print(f"  Scaling stats computed for {len(pt_stats)} pitch types")
+        # Group by pitcher, compute each pitcher's mean predicted RV
+        pt_preds = pred_series[pt_mask]
+        pt_pitchers = pitcher_ids[pt_mask]
+        pitcher_means = pt_preds.groupby(pt_pitchers).mean()
+        # Require at least 10 pitches per pitcher for stable mean
+        pt_counts = pt_preds.groupby(pt_pitchers).count()
+        pitcher_means = pitcher_means[pt_counts >= 10]
+        if len(pitcher_means) < 10:
+            continue
+        pt_stats[pt] = (float(pitcher_means.mean()), float(pitcher_means.std()))
+    print(f"  Scaling stats computed for {len(pt_stats)} pitch types (pitcher-level)")
 
     # Feature importance
     imp = dict(zip(_LOC_FEATURES, model.feature_importances_))
@@ -250,13 +261,14 @@ def _compute_command_plus_xgb(pdf: pd.DataFrame, artifact: dict, data=None) -> p
         X = ptd[_LOC_FEATURES].astype(float)
         raw_rv = model.predict(X)
 
-        # Z-score within pitch type, negate (lower RV = better location = higher score)
+        # Z-score pitcher's mean predicted RV against pitcher-level distribution
+        pitcher_mean_rv = float(np.mean(raw_rv))
         if pt in pt_stats:
-            mean, std = pt_stats[pt]
-            if std > 0:
-                z = (raw_rv - mean) / std
-                loc_plus = 100 + (-z.mean()) * 10  # average pitcher-level score
-                pctl = min(99, max(1, 50 + (-z.mean()) * 15))
+            pop_mean, pop_std = pt_stats[pt]
+            if pop_std > 0:
+                z = (pitcher_mean_rv - pop_mean) / pop_std
+                loc_plus = 100 + (-z) * 10  # negate: lower RV = higher Command+
+                pctl = min(99, max(1, 50 + (-z) * 15))
             else:
                 loc_plus = 100.0
                 pctl = 50.0
@@ -574,6 +586,19 @@ def _compute_pitch_pair_results(pdf, data, tunnel_df=None):
     if pdf.empty:
         return pd.DataFrame()
 
+    seq_model_df = pd.DataFrame()
+    normalize_seq_pitch_types = None
+    try:
+        from analytics.sequence_whiff import (
+            _compute_sequence_whiff_table,
+            _normalize_sequence_pitch_types,
+        )
+
+        seq_model_df = _compute_sequence_whiff_table(pdf)
+        normalize_seq_pitch_types = _normalize_sequence_pitch_types
+    except Exception:
+        seq_model_df = pd.DataFrame()
+
     sort_cols = [c for c in ["GameID", "Pitcher", "Batter", "Inning", "PAofInning", "PitchNo"] if c in pdf.columns]
     if len(sort_cols) < 2:
         return pd.DataFrame()
@@ -643,4 +668,31 @@ def _compute_pitch_pair_results(pdf, data, tunnel_df=None):
             "Tunnel": tun_grade,
             "Tunnel Score": tun_score,
         })
-    return pd.DataFrame(rows).sort_values("Whiff%", ascending=False).reset_index(drop=True)
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    if not seq_model_df.empty:
+        seq_merge = seq_model_df.rename(
+            columns={
+                "Setup Pitch": "_SetupMergePitch",
+                "Follow Pitch": "_FollowMergePitch",
+            }
+        )
+        if callable(normalize_seq_pitch_types):
+            merge_keys = out[["Setup Pitch", "Follow Pitch"]].copy()
+            for col in ["Setup Pitch", "Follow Pitch"]:
+                norm_col = normalize_seq_pitch_types(
+                    merge_keys[[col]].rename(columns={col: "TaggedPitchType"})
+                )
+                merge_keys[col] = norm_col["TaggedPitchType"]
+            out["_SetupMergePitch"] = merge_keys["Setup Pitch"]
+            out["_FollowMergePitch"] = merge_keys["Follow Pitch"]
+        else:
+            out["_SetupMergePitch"] = out["Setup Pitch"]
+            out["_FollowMergePitch"] = out["Follow Pitch"]
+        out = (
+            out.merge(seq_merge, on=["_SetupMergePitch", "_FollowMergePitch"], how="left")
+            .drop(columns=["_SetupMergePitch", "_FollowMergePitch"])
+        )
+    sort_col = "SeqWhiff%" if "SeqWhiff%" in out.columns else "Whiff%"
+    return out.sort_values(sort_col, ascending=False).reset_index(drop=True)

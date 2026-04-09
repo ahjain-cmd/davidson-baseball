@@ -6,7 +6,6 @@ import pandas as pd
 import plotly.graph_objects as go
 
 from config import display_name, filter_davidson
-from data.population import build_tunnel_population_pop
 from data.truemedia_api import fetch_all_teams
 
 from _pages.scouting import _get_opp_hitter_profile, _get_our_pitcher_arsenal
@@ -332,8 +331,7 @@ def render_ingame_panel(data):
 
     # ── Compute matchup & recommendations ───────────────────────────────────
     with st.spinner("Building pitcher arsenal..."):
-        tunnel_pop = build_tunnel_population_pop()
-        arsenal = _get_our_pitcher_arsenal(data, our_pitcher, season_filter=season_filter, tunnel_pop=tunnel_pop)
+        arsenal = _get_our_pitcher_arsenal(data, our_pitcher, season_filter=season_filter)
     if arsenal is None:
         st.error("Not enough Trackman data for this pitcher/season selection.")
         return

@@ -35,7 +35,6 @@ from data.truemedia_api import (
 from data.stats import compute_batter_stats, compute_pitcher_stats, _build_batter_zones, compute_swing_path_metrics
 from data.population import (
     compute_batter_stats_pop, compute_pitcher_stats_pop, compute_stuff_baselines,
-    build_tunnel_population_pop,
 )
 from viz.layout import CHART_LAYOUT, section_header
 from viz.charts import (
@@ -44,9 +43,10 @@ from viz.charts import (
     _add_grid_zone_outline,
 )
 from viz.percentiles import savant_color, render_savant_percentile_section
-from analytics.stuff_plus import _compute_stuff_plus, _compute_stuff_plus_all
+from analytics.stuff_plus import _compute_stuff_plus, _compute_stuff_plus_all, _compute_xwhiff
 from analytics.tunnel import _compute_tunnel_score, _build_tunnel_population
 from analytics.command_plus import _compute_command_plus, _compute_pitch_pair_results
+from analytics.sequence_whiff import _compute_hitter_sequence_profile
 from analytics.zone_vulnerability import (
     compute_zone_swing_metrics as _zv_compute_zone_swing_metrics,
     analyze_zone_patterns as _zv_analyze_zone_patterns,
@@ -404,9 +404,13 @@ def _get_opp_hitter_profile(tm, hitter, team, pitch_df=None):
     if pitch_df is not None and not pitch_df.empty:
         from analytics.zone_vulnerability import compute_zone_vulnerability_summary
         hitter_pitches = pitch_df[pitch_df["Batter"].astype(str).str.strip() == str(hitter).strip()] if "Batter" in pitch_df.columns else pd.DataFrame()
-        if len(hitter_pitches) >= 50:
-            hitter_pitches_norm = normalize_pitch_types(hitter_pitches)
+        hitter_pitches_norm = normalize_pitch_types(hitter_pitches) if len(hitter_pitches) > 0 else pd.DataFrame()
+        if len(hitter_pitches_norm) >= 50:
             profile["zone_vuln"] = compute_zone_vulnerability_summary(hitter_pitches_norm, bats)
+        if len(hitter_pitches_norm) >= 30:
+            seq_profile = _compute_hitter_sequence_profile(hitter_pitches_norm, batter_name=hitter)
+            if seq_profile:
+                profile["sequence_profile"] = seq_profile
 
     # Pre-computed hole scores from opponent pack (3x3 grid, 0-100)
     hole_df = tm["hitting"].get("hole_scores", pd.DataFrame())
@@ -540,6 +544,18 @@ def _get_our_pitcher_arsenal(data, pitcher_name, season_filter=None, tunnel_pop=
     _oz = ~_iz & pdf["PlateLocSide"].notna() & pdf["PlateLocHeight"].notna()
     arsenal = {"name": pitcher_name, "throws": throws, "total_pitches": len(pdf), "pitches": {}}
     stuff_df = _compute_stuff_plus(pdf)
+    xwhiff_df = _compute_xwhiff(pdf)
+    xwhiff_map = {}
+    if isinstance(xwhiff_df, pd.DataFrame) and not xwhiff_df.empty:
+        cols = [c for c in ["TaggedPitchType", "xWhiff", "xWhiffGrade", "xWhiffPlus"] if c in xwhiff_df.columns]
+        if "TaggedPitchType" in cols:
+            xwhiff_map = (
+                xwhiff_df[cols]
+                .dropna(subset=["TaggedPitchType"])
+                .groupby("TaggedPitchType", observed=False)[[c for c in cols if c != "TaggedPitchType"]]
+                .mean()
+                .to_dict("index")
+            )
     for pt_name, grp in pdf.groupby("TaggedPitchType"):
         if len(grp) < 5:
             continue
@@ -611,6 +627,7 @@ def _get_our_pitcher_arsenal(data, pitcher_name, season_filter=None, tunnel_pop=
         barrel_pct_against = barrels_against / max(len(ip), 1) * 100 if len(ip) > 0 else np.nan
         # Extension
         ext_val = grp["Extension"].mean() if "Extension" in grp.columns and grp["Extension"].notna().any() else np.nan
+        xwhiff_entry = xwhiff_map.get(pt_name, {})
         arsenal["pitches"][pt_name] = {
             "usage_pct": len(grp) / len(pdf) * 100,
             "avg_velo": grp["RelSpeed"].mean() if grp["RelSpeed"].notna().any() else np.nan,
@@ -631,6 +648,9 @@ def _get_our_pitcher_arsenal(data, pitcher_name, season_filter=None, tunnel_pop=
             "n_oz_swings": int(len(oz_sw)),
             "n_barrels_against": int(barrels_against),
             "stuff_plus": stuff_plus,
+            "xwhiff": xwhiff_entry.get("xWhiff", np.nan),
+            "xwhiff_grade": xwhiff_entry.get("xWhiffGrade", np.nan),
+            "xwhiff_plus": xwhiff_entry.get("xWhiffPlus", np.nan),
             "command_plus": cmd_map.get(pt_name, np.nan),
             "count": len(grp),
             "eff_velo": eff_velo,
@@ -797,7 +817,7 @@ def _get_our_pitcher_arsenal(data, pitcher_name, season_filter=None, tunnel_pop=
                             pt_data["stabilised_usage"] = pt_data["stabilised_usage"] / total_stab * 100
 
     # Tunnel scores and pitch pair sequencing results
-    tunnels = _compute_tunnel_score(pdf, tunnel_pop=tunnel_pop)
+    tunnels = _compute_tunnel_score(pdf)
     arsenal["tunnels"] = tunnels
     arsenal["sequences"] = _compute_pitch_pair_results(pdf, data, tunnel_df=tunnels)
     return arsenal
@@ -1076,6 +1096,11 @@ def _get_our_hitter_profile(data, batter_name, season_filter=None):
             "chase_pct": len(cls_oz_sw) / max(len(cls_oz), 1) * 100 if len(cls_oz) > 0 else np.nan,
         }
 
+    if len(bdf) >= 30:
+        seq_profile = _compute_hitter_sequence_profile(bdf, batter_name=batter_name)
+        if seq_profile:
+            profile["sequence_profile"] = seq_profile
+
     sp = _compute_swing_path(bdf)
     profile["swing_path"] = sp if sp else None
 
@@ -1299,7 +1324,8 @@ def _lookup_tunnel(a, b, tun_df):
     m = tun_df[((tun_df["Pitch A"]==a)&(tun_df["Pitch B"]==b))|((tun_df["Pitch A"]==b)&(tun_df["Pitch B"]==a))]
     if m.empty:
         return np.nan, "-"
-    return m.iloc[0]["Tunnel Score"], m.iloc[0]["Grade"]
+    score_col = "Geometry Score" if "Geometry Score" in m.columns else "Tunnel Score"
+    return m.iloc[0][score_col], m.iloc[0]["Grade"]
 
 
 def _lookup_seq(setup, follow, seq_df):
@@ -1309,7 +1335,12 @@ def _lookup_seq(setup, follow, seq_df):
     m = seq_df[(seq_df["Setup Pitch"]==setup)&(seq_df["Follow Pitch"]==follow)]
     if m.empty:
         return np.nan, np.nan
-    return m.iloc[0]["Whiff%"], m.iloc[0].get("Chase%", np.nan)
+    whiff = np.nan
+    for col in ("SeqWhiff%", "xSequenceWhiff%", "Whiff%"):
+        if col in m.columns and pd.notna(m.iloc[0].get(col)):
+            whiff = m.iloc[0][col]
+            break
+    return whiff, m.iloc[0].get("Chase%", np.nan)
 
 
 def _score_ev(ev):
@@ -3124,8 +3155,7 @@ def _pitching_plan_content(tm, team, data, season_filter, pitch_df=None):
         return
     selected_pitcher = st.selectbox("Select Our Pitcher", our_pitchers,
                                      format_func=display_name, key="gpl_our_pitcher")
-    tunnel_pop = build_tunnel_population_pop()
-    arsenal = _get_our_pitcher_arsenal(data, selected_pitcher, season_filter, tunnel_pop=tunnel_pop)
+    arsenal = _get_our_pitcher_arsenal(data, selected_pitcher, season_filter)
     if arsenal is None:
         st.warning("Not enough Trackman data for this pitcher (min 100 pitches).")
         return

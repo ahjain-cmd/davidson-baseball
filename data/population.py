@@ -1142,9 +1142,9 @@ def _build_tunnel_population_pop(con=None, pitch_types=None):
                 z0v = frame["z0"].values[gi]
                 vz0v = frame["vz0"].values[gi]
                 az0v = frame["az0"].values[gi]
-                commit_x[gi] = -(x0v + vx0v * ct + 0.5 * ax0v * ct * ct)
+                commit_x[gi] = x0v + vx0v * ct + 0.5 * ax0v * ct * ct
                 commit_y[gi] = z0v + vz0v * ct + 0.5 * az0v * ct * ct
-                plate_x[gi] = -(x0v + vx0v * tt + 0.5 * ax0v * tt * tt)
+                plate_x[gi] = x0v + vx0v * tt + 0.5 * ax0v * tt * tt
                 plate_y[gi] = z0v + vz0v * tt + 0.5 * az0v * tt * tt
 
         # IVB fallback for remaining rows

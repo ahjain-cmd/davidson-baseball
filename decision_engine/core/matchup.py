@@ -28,6 +28,18 @@ def _norm_hand(x: Any) -> str:
     return "?"
 
 
+def _prob_to_pct(x: Any) -> float:
+    try:
+        v = float(x)
+    except Exception:
+        return float("nan")
+    if np.isnan(v):
+        return float("nan")
+    if 0.0 <= v <= 1.0:
+        return v * 100.0
+    return v
+
+
 def _build_hitter_data(hitter_profile: Dict[str, Any], throws: str) -> Dict[str, Any]:
     woba_key = "woba_lhp" if throws == "L" else "woba_rhp"
     woba_split = hitter_profile.get(woba_key, np.nan)
@@ -90,6 +102,7 @@ def _build_hitter_data(hitter_profile: Dict[str, Any], throws: str) -> Dict[str,
         "count_zone_metrics": count_zone_metrics,
         "by_count": hitter_profile.get("by_count", {}),
         "by_pitch_class": hitter_profile.get("by_pitch_class", {}),
+        "sequence_profile": hitter_profile.get("sequence_profile", {}),
     }
 
 
@@ -152,6 +165,16 @@ def score_pitcher_vs_hitter_shrunk(
         # Pitch-type prior fallback order: pitch type -> overall.
         prior_pt = pitch_priors.by_pitch_type.get(pt_name, pitch_priors.overall) if pitch_priors else {}
         shrunk = _shrunk_pitch_metrics(pt_data, prior_pt or {}, cfg)
+        whiff_obs = pt_data.get("whiff_pct", np.nan)
+        xwhiff_pct = _prob_to_pct(pt_data.get("xwhiff", np.nan))
+        xwhiff_grade_pct = _prob_to_pct(pt_data.get("xwhiff_grade", np.nan))
+        whiff_prior = xwhiff_grade_pct if pd.notna(xwhiff_grade_pct) else xwhiff_pct
+        blended_whiff = shrink_value(
+            whiff_obs,
+            pt_data.get("n_swings"),
+            whiff_prior if pd.notna(whiff_prior) else shrunk.get("whiff_pct"),
+            n_prior_equiv=25.0,
+        )
 
         # The composite scorer reads some metrics from `arsenal_data` (notably Barrel% Against).
         # Provide a non-mutating override so shrinkage is actually reflected in the score.
@@ -163,7 +186,7 @@ def score_pitcher_vs_hitter_shrunk(
 
         pd_compat = {
             "stuff_plus": pt_data.get("stuff_plus", np.nan),
-            "our_whiff": shrunk.get("whiff_pct", np.nan),
+            "our_whiff": blended_whiff if pd.notna(blended_whiff) else shrunk.get("whiff_pct", np.nan),
             "our_csw": shrunk.get("csw_pct", np.nan),
             "our_chase": shrunk.get("chase_pct", np.nan),
             "our_ev_against": shrunk.get("ev_against", np.nan),
@@ -182,9 +205,11 @@ def score_pitcher_vs_hitter_shrunk(
         stuff = pt_data.get("stuff_plus", np.nan)
         if pd.notna(stuff) and stuff >= 115:
             reasons.append(f"elite stuff ({stuff:.0f} S+)")
-        whiff_obs = pt_data.get("whiff_pct", np.nan)
         if pd.notna(whiff_obs) and whiff_obs >= 35:
             reasons.append(f"high whiff ({whiff_obs:.0f}%)")
+        xwhiff_plus = pt_data.get("xwhiff_plus", np.nan)
+        if pd.notna(xwhiff_plus) and xwhiff_plus >= 110:
+            reasons.append(f"plus swing-miss shape ({xwhiff_plus:.0f} xW+)")
         is_hard = pt_name in _HARD_PITCHES
         hand_key = "lhp" if throws == "L" else "rhp"
         whiff_2k = hitter_profile.get(f"whiff_2k_{hand_key}_{'hard' if is_hard else 'os'}", np.nan)
@@ -211,6 +236,9 @@ def score_pitcher_vs_hitter_shrunk(
             "our_ev_against": ev_obs,
             "barrel_pct_against": pt_data.get("barrel_pct_against", np.nan),
             "stuff_plus": stuff,
+            "xwhiff": pt_data.get("xwhiff", np.nan),
+            "xwhiff_grade": pt_data.get("xwhiff_grade", np.nan),
+            "xwhiff_plus": xwhiff_plus,
             "command_plus": pt_data.get("command_plus", np.nan),
             "usage": pt_data.get("stabilised_usage", pt_data.get("usage_pct", np.nan)),
             # Contextual usage tiers (computed in scouting arsenal builder)
@@ -230,6 +258,7 @@ def score_pitcher_vs_hitter_shrunk(
             "shrunk_chase": shrunk.get("chase_pct", np.nan),
             "shrunk_ev": shrunk.get("ev_against", np.nan),
             "shrunk_barrel": shrunk.get("barrel_pct_against", np.nan),
+            "blended_whiff": blended_whiff,
         }
 
         # ── Shrink count-group performance metrics toward overall shrunk metrics ──
