@@ -55,35 +55,45 @@ def _build_stuff_explanation(pt, stuff_df, baselines_dict):
     throws = sub["PitcherThrows"].mode()
     is_lefty = len(throws) > 0 and throws.iloc[0] in ("Left", "L")
 
+    # ── Fastball reference (for changeup/splitter differential metrics) ──
+    fb_sub = stuff_df[stuff_df["TaggedPitchType"] == "Fastball"]
+    fb_velo = fb_sub["RelSpeed"].mean() if len(fb_sub) >= 10 else None
+    fb_ivb = fb_sub["InducedVertBreak"].mean() if len(fb_sub) >= 10 else None
+
     # Per-pitch-type: (metric_key, display_label, higher_is_better)
-    # Only include the metrics that actually drive Stuff+ for each type.
+    # Changeup/Splitter use differential metrics (vs pitcher's own FB)
+    # because deception from the fastball is what drives their Stuff+ grade.
     _PITCH_METRICS = {
         "Fastball": [
-            ("InducedVertBreak", "ride", True),       # more ride → whiffs up
-            ("RelSpeed",         "velocity", True),    # faster → less reaction time
-            ("HorzBreakAdj",     "arm-side run", True),# more run → deception
+            ("InducedVertBreak", "ride", True),        # more ride → whiffs up in zone
+            ("RelSpeed",         "velocity", True),     # faster → less reaction time
+            ("HorzBreakAdj",     "arm-side run", True), # more run → deception
+            ("VertApprAngle",    "approach angle", True),# flatter → more perceived rise
         ],
         "Sinker": [
-            ("InducedVertBreak", "sink", False),       # LESS IVB = more sink = good
+            ("InducedVertBreak", "sink", False),        # LESS IVB = more sink = good
             ("RelSpeed",         "velocity", True),
             ("HorzBreakAdj",     "arm-side run", True),
         ],
         "Changeup": [
-            ("InducedVertBreak", "sink", False),       # less IVB = more sink = good
+            ("_velo_sep",        "velo separation", None),   # bigger gap from FB = better
+            ("_ivb_gap",         "ride gap from FB", None),  # bigger = more deceptive drop
             ("HorzBreakAdj",     "arm-side fade", True),
         ],
         "Splitter": [
-            ("InducedVertBreak", "drop", False),
+            ("_velo_sep",        "velo separation", None),
+            ("_ivb_gap",         "ride gap from FB", None),
             ("HorzBreakAdj",     "arm-side fade", True),
         ],
         "Curveball": [
-            ("InducedVertBreak", "drop", False),       # more negative IVB = more drop = good
-            ("HorzBreakAdj",     "sweep", True),       # more sweep = good
+            ("InducedVertBreak", "drop", False),        # more negative IVB = more drop = good
+            ("HorzBreakAdj",     "sweep", True),        # more sweep = good
+            ("SpinRate",         "spin", True),          # more spin on CB = sharper break
         ],
         "Slider": [
-            ("HorzBreakAdj",     "sweep", True),       # more sweep = good
+            ("HorzBreakAdj",     "sweep", True),        # more sweep = good
             ("RelSpeed",         "velocity", True),
-            ("InducedVertBreak", "vertical movement", False),  # less IVB = more drop/bite
+            ("InducedVertBreak", "drop", False),         # less IVB = more bite
         ],
         "Cutter": [
             ("HorzBreakAdj",     "cut", True),
@@ -91,7 +101,7 @@ def _build_stuff_explanation(pt, stuff_df, baselines_dict):
         ],
         "Sweeper": [
             ("HorzBreakAdj",     "sweep", True),
-            ("InducedVertBreak", "vertical movement", False),
+            ("InducedVertBreak", "drop", False),
         ],
     }
 
@@ -101,6 +111,40 @@ def _build_stuff_explanation(pt, stuff_df, baselines_dict):
 
     factors = []
     for metric_key, label, higher_is_better in metrics:
+        # ── Differential metrics for changeup/splitter ──
+        if metric_key == "_velo_sep":
+            if fb_velo is None:
+                continue
+            ch_velo = sub["RelSpeed"].dropna()
+            if len(ch_velo) < 3:
+                continue
+            diff = fb_velo - ch_velo.mean()
+            # Rough z-score: typical sep ~7.5 mph, std ~2.0 mph
+            z = (diff - 7.5) / 2.0
+            factors.append((label, z, f"{diff:.1f} mph"))
+            continue
+        if metric_key == "_ivb_gap":
+            if fb_ivb is None:
+                continue
+            ch_ivb = sub["InducedVertBreak"].dropna()
+            if len(ch_ivb) < 3:
+                continue
+            diff = fb_ivb - ch_ivb.mean()
+            # Rough z-score: typical gap ~9", std ~4"
+            z = (diff - 9.0) / 4.0
+            if z >= -0.3:
+                # Normal sinking changeup: big IVB gap = pitch drops more than FB
+                factors.append((label, z, f'{diff:.1f}"'))
+            else:
+                # Small IVB gap: check if this is a tunneling changeup
+                # (high IVB for a CH = mirrors the fastball out of the hand)
+                ivb_bl = pt_baselines.get("InducedVertBreak")
+                if ivb_bl and ivb_bl[1] > 0.01:
+                    tun_z = (ch_ivb.mean() - ivb_bl[0]) / ivb_bl[1]
+                    if tun_z > 0.3:
+                        factors.append(("FB mirroring", tun_z, f'{ch_ivb.mean():.1f}" IVB'))
+            continue
+
         col = "HorzBreak" if metric_key == "HorzBreakAdj" else metric_key
         if col not in sub.columns or metric_key not in pt_baselines:
             continue
@@ -122,6 +166,8 @@ def _build_stuff_explanation(pt, stuff_df, baselines_dict):
         # Format value
         if label == "velocity":
             val_str = f"{pitcher_mean:.1f} mph"
+        elif label == "spin":
+            val_str = f"{pitcher_mean:.0f} rpm"
         else:
             val_str = f'{abs(pitcher_mean):.1f}"'
 
@@ -148,6 +194,12 @@ def _build_stuff_explanation(pt, stuff_df, baselines_dict):
         parts.append(f'<span style="color:{color};font-weight:600;">{desc} {label}</span> ({val_str})')
 
     if not parts:
+        # Fallback: pitch has no single standout metric
+        # Check if multiple small positives add up (well-rounded)
+        positive_count = sum(1 for _, z, _ in factors if z > 0.2)
+        negative_count = sum(1 for _, z, _ in factors if z < -0.2)
+        if positive_count >= 2 and negative_count == 0:
+            return '<span style="color:#2e7d32;font-weight:600;">solid across the board</span> — no single standout, but no weaknesses'
         return None
 
     return ", ".join(parts)
