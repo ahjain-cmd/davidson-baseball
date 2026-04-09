@@ -1102,25 +1102,43 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
         st.markdown("""
 **Stuff+** measures the raw quality of a pitch — how hard it is to hit based purely on its physical shape — independent of where it's thrown.
 
-**How the model works:** For every pitch, we feed its physical characteristics (velocity, movement, spin, release point, approach angle) into a set of 10 machine learning classifiers that predict what happens when that pitch is thrown: does the batter swing? Whiff? Make contact? Hit a single, double, or home run? Each classifier outputs a probability, and those probabilities are combined into an **expected run value** — how many runs that pitch shape is worth to the offense.
+**How the model works:** For every pitch, we feed its physical characteristics (velocity, movement, spin, release point, approach angle) into a cascade of **10 machine learning classifiers** trained on **~3.5 million D1 pitches**. These classifiers predict the full chain of outcomes: does the batter swing? Whiff? Make contact? Hit a single, double, or home run? Each classifier outputs a probability, and those probabilities are combined into an **expected run value** — how many runs that pitch shape is worth to the offense.
 
 The key step is **location isolation**: we evaluate every pitch shape across a standardized grid of all possible locations and counts, then average the results. This strips out location entirely — a 92 mph fastball with elite ride gets the same Stuff+ whether it's thrown down the middle or at the batter's eyes. What's left is purely the **stuff effect**: how the pitch's physical properties influence outcomes.
 
-The result is scaled so **100 = D1 average** and **each 10 points = one standard deviation**.
-
-**Why this predicts future performance:** Stuff+ based on run value (not just whiff rate) captures the full picture of what a pitch does — strikeouts, weak contact, hard contact, walks. At the MLB level, run-value Stuff+ correlates significantly with future ERA (r ~ 0.3-0.4), because a pitcher's pitch shapes are stable year-to-year even as location and luck fluctuate. A pitcher with elite Stuff+ who has a high ERA is likely getting unlucky or commanding poorly — the stuff itself projects well going forward. This is the same framework used by FanGraphs Stuff+ and MLB front office models.
+The final run values are then distilled into fast **XGBoost regressors** (one per batter-side) for real-time scoring. The result is scaled so **100 = D1 average** and **each 10 points = one standard deviation**.
 
 **What drives high Stuff+ scores:**
-- **Fastballs** — Ride (induced vertical break), velocity, and vertical approach angle. A 91 mph fastball with 20" of ride that hitters swing under grades much higher than a 91 mph fastball with 14" of ride that's easy to barrel. Horizontal run also matters — more arm-side movement creates deception.
-- **Breaking balls** — Total movement (sweep + depth), difference from the fastball's movement profile, and spin efficiency. A slider that moves very differently from the pitcher's fastball grades highest.
-- **Offspeed** — Velocity separation from the fastball and sink. A changeup that's 10+ mph slower with arm-side fade and drop is hard to square up.
+- **Fastballs** — Ride (induced vertical break), velocity, and vertical approach angle.
+- **Breaking balls** — Total movement (sweep + depth), difference from the fastball's movement profile, and spin efficiency.
+- **Offspeed** — Velocity separation from the fastball and sink.
 
 **What doesn't affect Stuff+:** Location, pitch sequencing, game situation, or batter identity.
-
----
-
-**Note from Ahan (4/9/26):** Apologies for the new model - the old xWhiff model was predicting whiffs and swinging strikes, not run value. This now predicts and is in-line with run-value. A few pitches' Stuff+ has changed — it now likes certain slider shapes unlike before from a RV basis — but this model is in-line with FanGraphs Stuff+ and MLB teams' Stuff+ models as well. I'm 100% confident in this one and am not touching it.
 """)
+
+        st.markdown("**Does Stuff+ predict future performance?**")
+        st.markdown("How well Stuff+ predicts future pitching outcomes compared to 30+ other stats (D1 season-over-season validation):")
+        corr_data = {
+            "Target": ["Future ERA", "Future FIP", "Future K-BB%"],
+            "IP Threshold": ["40+ IP (n=499)", "60+ IP (n=177)", "20+ IP (n=1,104)"],
+            "Stuff+ r": ["-0.278", "-0.279", "+0.321"],
+            "Stuff+ Rank": ["#3 of 31", "#3 of 29", "#4 of 29"],
+        }
+        st.dataframe(pd.DataFrame(corr_data).set_index("Target"), use_container_width=True)
+
+        st.markdown("""
+**How quickly does Stuff+ stabilize?**
+
+| Metric | Stabilizes at | Equivalent to |
+|--------|--------------|---------------|
+| **Stuff+** | ~50-100 pitches | 1-2 starts |
+| FBVel | ~50-100 pitches | 1-2 starts |
+| SwStr% | ~200-400 pitches | 3-5 starts |
+| K-BB% | ~300-500 pitches | 4-7 starts |
+| ERA | ~500+ pitches | 8+ starts |
+""")
+        st.info("You can trust a Stuff+ grade after 2 bullpen sessions. "
+                "You need half a season for K-BB% and a full season for ERA.")
     has_stuff = stuff_df is not None and "StuffPlus" in stuff_df.columns and not stuff_df.empty
     if has_stuff:
         arsenal_agg = stuff_df.groupby("TaggedPitchType").agg(
@@ -2197,8 +2215,6 @@ def _stuff_lab_page(data, pitcher, season_filter, pdf, stuff_df):
         st.error("Could not compute Stuff+ scores. Not enough data for this pitcher.")
         return
 
-    _render_methodology_section()
-    st.markdown("---")
     _render_scrimmage_grading(data, pitcher, stuff_df)
     st.markdown("---")
     _render_csv_upload(data)
@@ -2206,54 +2222,6 @@ def _stuff_lab_page(data, pitcher, season_filter, pdf, stuff_df):
     _render_improvement_lab(stuff_df, pitcher, data)
     st.markdown("---")
     _render_stuff_trend(stuff_df, pitcher)
-
-
-def _render_methodology_section():
-    """Section: Why Stuff+ Matters — methodology, correlation evidence, stabilization."""
-    section_header("Why Stuff+ Matters")
-
-    with st.expander("How it works", expanded=False):
-        st.markdown("""
-**Stuff+** measures the raw quality of a pitch — how hard it is to hit based purely on its physical shape — independent of where it's thrown.
-
-**How the model works:** For every pitch, we feed its physical characteristics (velocity, movement, spin, release point, approach angle) into a set of 10 machine learning classifiers that predict what happens when that pitch is thrown: does the batter swing? Whiff? Make contact? Hit a single, double, or home run? Each classifier outputs a probability, and those probabilities are combined into an **expected run value** — how many runs that pitch shape is worth to the offense.
-
-The key step is **location isolation**: we evaluate every pitch shape across a standardized grid of all possible locations and counts, then average the results. This strips out location entirely — a 92 mph fastball with elite ride gets the same Stuff+ whether it's thrown down the middle or at the batter's eyes. What's left is purely the **stuff effect**: how the pitch's physical properties influence outcomes.
-
-The result is scaled so **100 = D1 average** and **each 10 points = one standard deviation**.
-
-**What drives high Stuff+ scores:**
-- **Fastballs** — Ride (induced vertical break), velocity, and vertical approach angle.
-- **Breaking balls** — Total movement (sweep + depth), difference from the fastball's movement profile, and spin efficiency.
-- **Offspeed** — Velocity separation from the fastball and sink.
-
-**What doesn't affect Stuff+:** Location, pitch sequencing, game situation, or batter identity.
-""")
-
-    with st.expander("Correlation evidence — does Stuff+ predict future performance?", expanded=True):
-        st.markdown("How well does Stuff+ predict future pitching outcomes compared to 30+ other stats?")
-        corr_data = {
-            "Target": ["Future ERA", "Future FIP", "Future K-BB%"],
-            "IP Threshold": ["40+ IP (n=499)", "60+ IP (n=177)", "20+ IP (n=1,104)"],
-            "Stuff+ r": ["-0.278", "-0.279", "+0.321"],
-            "Stuff+ Rank": ["#3 of 31", "#3 of 29", "#4 of 29"],
-        }
-        st.dataframe(pd.DataFrame(corr_data).set_index("Target"), use_container_width=True)
-        st.caption("Correlation analysis from D1 season-over-season validation. "
-                   "Rank is among 29-31 pitching stats (K%, BB%, FIP, ERA, SwStr%, etc).")
-
-    st.markdown("#### Stabilization Comparison")
-    st.markdown("""
-| Metric | Stabilizes at | Equivalent to |
-|--------|--------------|---------------|
-| **Stuff+** | ~50-100 pitches | 1-2 starts |
-| FBVel | ~50-100 pitches | 1-2 starts |
-| SwStr% | ~200-400 pitches | 3-5 starts |
-| K-BB% | ~300-500 pitches | 4-7 starts |
-| ERA | ~500+ pitches | 8+ starts |
-""")
-    st.info("You can trust a Stuff+ grade after 2 bullpen sessions. "
-            "You need half a season for K-BB% and a full season for ERA.")
 
 
 def _render_scrimmage_grading(data, pitcher, stuff_df):
@@ -2413,19 +2381,8 @@ def _render_csv_upload(data):
     # Normalize pitch types
     csv_df = normalize_pitch_types(csv_df)
 
-    # Load artifact and score
-    from analytics.stuff_plus import _load_stuff_model
-    artifact = _load_stuff_model()
-    if artifact is None:
-        st.error("Stuff+ model not found. Cannot score uploaded data.")
-        return
-
-    if artifact.get("artifact_type") == "pitchsim_lite":
-        from analytics.pitchsim_stuff import compute_pitchsim_stuff_plus
-        scored = compute_pitchsim_stuff_plus(csv_df, artifact)
-    else:
-        from analytics.stuff_plus import _compute_stuff_plus_xgb
-        scored = _compute_stuff_plus_xgb(csv_df, artifact)
+    # Score with Stuff+ (tries XGB model first, falls back to z-score composite)
+    scored = _compute_stuff_plus(csv_df)
 
     if scored is None or "StuffPlus" not in scored.columns:
         st.error("Could not score uploaded data.")
@@ -2521,11 +2478,12 @@ def _render_improvement_lab(stuff_df, pitcher, data):
         st.info(f"Need at least 5 pitches of {sel_pt} for analysis (have {len(pt_data)}).")
         return
 
-    # Load the model artifact
-    from analytics.stuff_plus import _load_stuff_model
+    # Load the model artifact (perturbation requires the full PitchSim model)
+    from analytics.stuff_plus import _load_stuff_model, _MODEL_PATH
     artifact = _load_stuff_model()
     if artifact is None:
-        st.warning("Stuff+ model not available for perturbation analysis.")
+        st.warning(f"Stuff+ model not available for perturbation analysis. "
+                   f"Model file: {_MODEL_PATH}")
         return
 
     # Only works with pitchsim_lite artifacts that have distilled models

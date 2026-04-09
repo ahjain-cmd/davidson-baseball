@@ -103,7 +103,9 @@ def _load_stuff_model():
     import joblib
     try:
         return joblib.load(_MODEL_PATH)
-    except Exception:
+    except Exception as e:
+        import warnings
+        warnings.warn(f"Failed to load Stuff+ model from {_MODEL_PATH}: {e}")
         return None
 
 
