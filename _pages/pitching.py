@@ -2511,6 +2511,16 @@ def _render_improvement_lab(stuff_df, pitcher, data):
         if col in pt_data.columns:
             base_row[col] = pt_data[col].astype(float).mean()
 
+    # Pre-compute pitcher's fastball velo for VeloDiff (needed by _prepare_pitchsim_frame).
+    # A single non-FB row has no FB data in its group → VeloDiff becomes NaN.
+    # Build a reference FB row to include alongside the scored row.
+    _FB_TYPES = {"Fastball", "Sinker", "Cutter"}
+    fb_data = pitcher_stuff[pitcher_stuff["TaggedPitchType"].isin(_FB_TYPES)]
+    fb_ref_row = None
+    if not fb_data.empty and "RelSpeed" in fb_data.columns:
+        fb_ref_row = fb_data.iloc[[0]].copy()
+        fb_ref_row["RelSpeed"] = fb_data["RelSpeed"].astype(float).mean()
+
     # Perturbation levers: (column, display_name, delta, unit)
     levers = [
         ("RelSpeed",         "Velocity",       1.0,   "mph"),
@@ -2524,10 +2534,21 @@ def _render_improvement_lab(stuff_df, pitcher, data):
         levers.append(("VertApprAngle", "VAA", 0.5, "deg"))
 
     def _score_single(row_df):
-        """Score a single-row DataFrame and return mean StuffRV."""
-        prepared = _prepare_pitchsim_frame(row_df, vaa_models=vaa_models)
+        """Score a single-row DataFrame and return mean StuffRV.
+
+        Appends a fastball reference row so _prepare_pitchsim_frame can
+        compute VeloDiff even for non-FB pitch types.
+        """
+        # Include FB reference so groupby('Pitcher') finds FB velo
+        if fb_ref_row is not None and sel_pt not in _FB_TYPES:
+            combo = pd.concat([row_df, fb_ref_row], ignore_index=True)
+        else:
+            combo = row_df
+        prepared = _prepare_pitchsim_frame(combo, vaa_models=vaa_models)
         if prepared is None or prepared.empty:
             return np.nan
+        # Keep only the first row (the one we want to score)
+        prepared = prepared.iloc[[0]]
         for col in feature_cols:
             if col not in prepared.columns:
                 prepared[col] = np.nan
