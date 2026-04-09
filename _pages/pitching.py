@@ -1149,21 +1149,21 @@ The result is scaled so **100 = D1 average** and **each 10 points = one standard
     pitch_types = arsenal_agg.index.tolist()
     n_pitches = len(pitch_types)
 
-    # xWhiff Stuff+ percentile bars
-    if "xWhiffPlus" in stuff_df.columns:
-        all_xwhiff = _compute_xwhiff_all(data)
-        if "xWhiffPlus" in all_xwhiff.columns:
-            xwhiff_metrics = []
+    # Stuff+ percentile bars
+    if has_stuff:
+        all_stuff = _compute_stuff_plus_all(data)
+        if all_stuff is not None and "StuffPlus" in all_stuff.columns:
+            stuff_metrics = []
             for pt in pitch_types:
-                my_val = stuff_df[stuff_df["TaggedPitchType"] == pt]["xWhiffPlus"].mean()
-                all_xwhiff_pt = all_xwhiff[all_xwhiff["TaggedPitchType"] == pt]
-                all_pitcher_means = all_xwhiff_pt.groupby("Pitcher")["xWhiffPlus"].mean()
+                my_val = stuff_df[stuff_df["TaggedPitchType"] == pt]["StuffPlus"].mean()
+                all_stuff_pt = all_stuff[all_stuff["TaggedPitchType"] == pt]
+                all_pitcher_means = all_stuff_pt.groupby("Pitcher")["StuffPlus"].mean()
                 if len(all_pitcher_means) > 5 and not pd.isna(my_val):
                     pctl = percentileofscore(all_pitcher_means.dropna(), my_val, kind="rank")
-                    xwhiff_metrics.append((pt, my_val, pctl, ".0f", True))
-            if xwhiff_metrics:
-                render_savant_percentile_section(xwhiff_metrics,
-                                                 title="xWhiff Stuff+ Percentile Rankings")
+                    stuff_metrics.append((pt, my_val, pctl, ".0f", True))
+            if stuff_metrics:
+                render_savant_percentile_section(stuff_metrics,
+                                                 title="Stuff+ Percentile Rankings")
 
 
     # ── Section B: Best Pitch Locations (whiffs, called strikes, weak contact) ──
