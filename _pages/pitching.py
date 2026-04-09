@@ -2491,13 +2491,25 @@ def _render_improvement_lab(stuff_df, pitcher, data):
         st.info("Perturbation analysis requires the PitchSim Stuff+ model.")
         return
 
-    distilled_models = artifact.get("distilled_models", {})
     vaa_models = artifact.get("vaa_models")
-    feature_cols = artifact.get("features", [])
     pt_stats = artifact.get("pt_stats", {})
 
-    if not distilled_models or "StuffRV_vsR" not in distilled_models:
-        st.warning("Distilled models not found in artifact.")
+    # Full cascade components for context-aware scoring
+    event_models = artifact.get("event_models")
+    cluster_scaler = artifact.get("cluster_scaler")
+    cluster_model = artifact.get("cluster_model")
+    weight_vec = artifact.get("cluster_weight_vector")
+    cluster_cols = artifact.get("cluster_cols", [])
+    context_distributions = artifact.get("context_distributions", {})
+    run_value_table = artifact.get("run_value_table")
+
+    has_full_cascade = all(x is not None for x in [
+        event_models, cluster_scaler, cluster_model,
+        weight_vec, run_value_table,
+    ]) and len(cluster_cols) > 0 and len(context_distributions) > 0
+    if not has_full_cascade:
+        st.warning("Full Stuff+ model not available for perturbation analysis. "
+                   "The model artifact may need to be retrained.")
         return
 
     # Component model keys for per-component breakdown
@@ -2508,13 +2520,13 @@ def _render_improvement_lab(stuff_df, pitcher, data):
         ("StuffHomeRun", "Home Run"),
         ("StuffDamage", "Damage"),
     ]
-    has_components = all(
-        f"{key}_vsR" in distilled_models and f"{key}_vsL" in distilled_models
-        for key, _ in _COMPONENT_KEYS
-    )
+    has_components = True  # Full cascade always produces all components
 
     # Build mean feature vector for this pitch type
-    from analytics.pitchsim_stuff import _prepare_pitchsim_frame
+    from analytics.pitchsim_stuff import (
+        _prepare_pitchsim_frame, _simulate_pitchsim_targets,
+        _fuzzy_cmeans_predict, _CLUSTER_FEATURES,
+    )
 
     # Get a single representative row — use the mean of physical features
     base_row = pt_data.iloc[[0]].copy()
@@ -2559,41 +2571,50 @@ def _render_improvement_lab(stuff_df, pitcher, data):
         prepared = _prepare_pitchsim_frame(combo, vaa_models=vaa_models)
         if prepared is None or prepared.empty:
             return None
-        prepared = prepared.iloc[0:1]
-        for col in feature_cols:
-            if col not in prepared.columns:
-                prepared[col] = np.nan
-        valid = prepared[feature_cols].notna().all(axis=1)
-        if not valid.any():
+        return prepared.iloc[0:1].copy()
+
+    def _score_full(prepared):
+        """Score via full 10-classifier cascade → dict with StuffRV + components."""
+        missing_cl = [c for c in _CLUSTER_FEATURES if c not in prepared.columns]
+        if missing_cl:
             return None
-        return prepared.loc[valid]
+        X_cl = prepared[_CLUSTER_FEATURES].astype(np.float32)
+        X_sc = cluster_scaler.transform(X_cl)
+        X_w = X_sc * weight_vec
+        X_pca = cluster_model["pca"].transform(X_w)
+        membership = _fuzzy_cmeans_predict(
+            X_pca, cluster_model["centers"], m=cluster_model.get("m", 1.5),
+        )
+        prep = prepared.copy()
+        for i, col in enumerate(cluster_cols):
+            prep[col] = float(membership[0, i])
 
-    def _score_rv(prepared):
-        """Score prepared features → mean StuffRV (lower = better)."""
-        X = prepared[feature_cols].astype(np.float32)
-        rv_r = distilled_models["StuffRV_vsR"].predict(X)
-        rv_l = distilled_models["StuffRV_vsL"].predict(X)
-        return float(0.5 * (rv_r[0] + rv_l[0]))
-
-    def _score_components(prepared):
-        """Score prepared features → dict of component RVs."""
-        X = prepared[feature_cols].astype(np.float32)
-        comp = {}
-        for key, _ in _COMPONENT_KEYS:
-            r_key, l_key = f"{key}_vsR", f"{key}_vsL"
-            if r_key in distilled_models and l_key in distilled_models:
-                rv_r = distilled_models[r_key].predict(X)
-                rv_l = distilled_models[l_key].predict(X)
-                comp[key] = float(0.5 * (rv_r[0] + rv_l[0]))
-        return comp
+        result = _simulate_pitchsim_targets(
+            prep, cluster_cols, context_distributions,
+            event_models, run_value_table, batch_size=1,
+        )
+        if result.empty:
+            return None
+        return {
+            "StuffRV": float(result["StuffRV"].iloc[0]),
+            "StuffWhiff": float(result["StuffWhiff"].iloc[0]),
+            "StuffCalledStrike": float(result["StuffCalledStrike"].iloc[0]),
+            "StuffBall": float(result["StuffBall"].iloc[0]),
+            "StuffHomeRun": float(result["StuffHomeRun"].iloc[0]),
+            "StuffDamage": float(result["StuffDamage"].iloc[0]),
+        }
 
     # Score baseline
     baseline_prep = _prepare_row(base_row)
     if baseline_prep is None:
         st.warning("Could not score baseline pitch vector.")
         return
-    baseline_rv = _score_rv(baseline_prep)
-    baseline_comps = _score_components(baseline_prep) if has_components else {}
+    baseline_result = _score_full(baseline_prep)
+    if baseline_result is None:
+        st.warning("Could not score baseline pitch vector through full cascade.")
+        return
+    baseline_rv = baseline_result["StuffRV"]
+    baseline_comps = {k: v for k, v in baseline_result.items() if k != "StuffRV"}
 
     # Convert RV to Stuff+ scale
     global_mu, global_sigma = pt_stats.get(str(sel_pt), pt_stats.get("__global__", (0.0, 1.0)))
@@ -2623,8 +2644,14 @@ def _render_improvement_lab(stuff_df, pitcher, data):
         if prep_up is None or prep_dn is None:
             continue
 
-        rv_up = _score_rv(prep_up)
-        rv_dn = _score_rv(prep_dn)
+        result_up = _score_full(prep_up)
+        result_dn = _score_full(prep_dn)
+
+        if result_up is None or result_dn is None:
+            continue
+
+        rv_up = result_up["StuffRV"]
+        rv_dn = result_dn["StuffRV"]
 
         stuff_up = 100.0 + (-(rv_up - global_mu) / global_sigma) * 10.0
         stuff_dn = 100.0 + (-(rv_dn - global_mu) / global_sigma) * 10.0
@@ -2648,17 +2675,14 @@ def _render_improvement_lab(stuff_df, pitcher, data):
             "delta_dn": delta_dn,
         }
 
-        # Component-level deltas for breakdown table
-        if has_components:
-            comps_up = _score_components(prep_up)
-            comps_dn = _score_components(prep_dn)
-            for key, comp_label in _COMPONENT_KEYS:
-                if key in baseline_comps and key in comps_up and key in comps_dn:
-                    # Component RVs: lower = better for pitcher
-                    c_delta_up = -(comps_up[key] - baseline_comps[key])
-                    c_delta_dn = -(comps_dn[key] - baseline_comps[key])
-                    entry[f"{comp_label} (+)"] = c_delta_up
-                    entry[f"{comp_label} (-)"] = c_delta_dn
+        # Component-level deltas from full cascade (comes "for free")
+        for key, comp_label in _COMPONENT_KEYS:
+            if key in baseline_comps:
+                # Component RVs: lower = better for pitcher → negate delta
+                c_delta_up = -(result_up.get(key, 0.0) - baseline_comps[key])
+                c_delta_dn = -(result_dn.get(key, 0.0) - baseline_comps[key])
+                entry[f"{comp_label} (+)"] = c_delta_up
+                entry[f"{comp_label} (-)"] = c_delta_dn
 
         results.append(entry)
 
@@ -2716,8 +2740,7 @@ def _render_improvement_lab(stuff_df, pitcher, data):
     if near_zero_count >= total_levers - 1:
         st.info(
             f"Most levers show near-zero sensitivity for this {sel_pt.lower()}. "
-            f"The distilled model may have limited resolution at this pitch's movement profile. "
-            f"Velocity is typically the most reliable lever across all pitch types."
+            f"This pitch type may already be near-optimal in its current profile."
         )
 
     # Summary table
