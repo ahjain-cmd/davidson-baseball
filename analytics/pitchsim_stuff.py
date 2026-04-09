@@ -1649,6 +1649,97 @@ def _compute_population_stats(
     return _population_stats_from_values(pitch_types, overall), _population_stats_from_values(pitch_types, fip_raw)
 
 
+def _compute_location_rv_stats(
+    df: pd.DataFrame,
+    distilled_models: Dict[str, object],
+    event_models: Dict[str, object],
+    run_value_table: Dict[str, np.ndarray],
+) -> Dict[str, Tuple[float, float]]:
+    """Compute LocationRV population stats for Command+ z-scoring.
+
+    LocationRV = FullRV(actual location+count) - StuffRV(grid-averaged).
+    Aggregated at pitcher×pitch-type level, then (mean, std) per pitch type.
+    """
+    event_features = event_models.get("event_features")
+    if event_features is None:
+        return {}
+
+    # Need valid distill features for StuffRV + event features for FullRV
+    required_cols = list(_DISTILL_FEATURES) + [
+        "PlateLocSide", "PlateLocHeight", "Balls", "Strikes",
+        "TaggedPitchType", "Pitcher",
+    ]
+    # Also need all event base features
+    for col in _EVENT_BASE_FEATURES:
+        if col not in required_cols:
+            required_cols.append(col)
+
+    valid = df[list(_DISTILL_FEATURES)].notna().all(axis=1) & df["TaggedPitchType"].notna()
+    for col in ["PlateLocSide", "PlateLocHeight", "Balls", "Strikes", "Pitcher"]:
+        valid = valid & df[col].notna()
+    for col in _EVENT_BASE_FEATURES:
+        if col in df.columns:
+            valid = valid & df[col].notna()
+
+    sub = df.loc[valid].copy()
+    if len(sub) < 1000:
+        return {}
+
+    # 1) Compute StuffRV via distilled models
+    X_distill = sub[list(_DISTILL_FEATURES)].astype(np.float32)
+    stuff_rv_r = distilled_models["StuffRV_vsR"].predict(X_distill)
+    stuff_rv_l = distilled_models["StuffRV_vsL"].predict(X_distill)
+    sub["StuffRV"] = 0.5 * (stuff_rv_r + stuff_rv_l)
+
+    # 2) Compute FullRV at actual location+count for each batter side
+    balls = sub["Balls"].astype(int).clip(0, 3).to_numpy()
+    strikes = sub["Strikes"].astype(int).clip(0, 2).to_numpy()
+
+    full_rv_sides = []
+    for side_label, side_enc in [("R", 0.0), ("L", 1.0)]:
+        X_event = sub[list(_EVENT_BASE_FEATURES) + ["PlateLocSide", "PlateLocHeight"]].copy()
+        X_event["BatterSide_enc"] = side_enc
+        X_event["Balls"] = balls.astype(float)
+        X_event["Strikes"] = strikes.astype(float)
+        X_event = X_event[event_features].astype(np.float32)
+
+        terminal_probs = _predict_terminal_probabilities(X_event, event_models)
+        rv = _expected_run_value(terminal_probs, run_value_table, balls, strikes)
+        full_rv_sides.append(rv)
+
+    sub["FullRV"] = 0.5 * (full_rv_sides[0] + full_rv_sides[1])
+
+    # 3) LocationRV = FullRV - StuffRV
+    sub["LocationRV"] = sub["FullRV"] - sub["StuffRV"]
+
+    # 4) Aggregate by (Pitcher, TaggedPitchType) → pitcher-level mean
+    pitcher_agg = (
+        sub.groupby(["Pitcher", "TaggedPitchType"], observed=False)["LocationRV"]
+        .agg(["mean", "count"])
+        .reset_index()
+    )
+    pitcher_agg = pitcher_agg[pitcher_agg["count"] >= 10]
+
+    # 5) Per pitch type: (mean, std) of pitcher means
+    loc_pt_stats: Dict[str, Tuple[float, float]] = {}
+    all_pitcher_means = []
+    for pt in pitcher_agg["TaggedPitchType"].unique():
+        pt_data = pitcher_agg[pitcher_agg["TaggedPitchType"] == pt]
+        if len(pt_data) < 10:
+            continue
+        pitcher_means = pt_data["mean"].to_numpy()
+        loc_pt_stats[str(pt)] = (float(np.mean(pitcher_means)), float(np.std(pitcher_means)))
+        all_pitcher_means.extend(pitcher_means.tolist())
+
+    if all_pitcher_means:
+        arr = np.array(all_pitcher_means)
+        loc_pt_stats["__global__"] = (float(np.mean(arr)), float(np.std(arr)))
+
+    print(f"  LocationRV stats: {len(loc_pt_stats)-1} pitch types, "
+          f"{len(pitcher_agg)} pitcher-type groups from {len(sub):,} pitches")
+    return loc_pt_stats
+
+
 def train_pitchsim_stuff_model(parquet_path: str, model_path: str) -> None:
     import joblib
 
@@ -1715,6 +1806,12 @@ def train_pitchsim_stuff_model(parquet_path: str, model_path: str) -> None:
     df = _prepare_pitchsim_frame(df, vaa_models=vaa_models)
     pt_stats, fip_pt_stats = _compute_population_stats(df, distilled_models)
 
+    # LocationRV population stats for Command+
+    print("  Computing LocationRV population stats for Command+ ...")
+    loc_pt_stats = _compute_location_rv_stats(
+        df, distilled_models, event_models, run_value_table,
+    )
+
     _validate_davidson_stuff(
         parquet_path=parquet_path,
         distilled_models=distilled_models,
@@ -1740,6 +1837,8 @@ def train_pitchsim_stuff_model(parquet_path: str, model_path: str) -> None:
         "vaa_models": vaa_models,
         "context_distributions": context_distributions,
         "run_value_table": run_value_table,
+        "event_models": event_models,
+        "loc_pt_stats": loc_pt_stats,
         "event_metrics": event_metrics,
         "weight_metrics": weight_metrics,
         "distill_metrics": distill_metrics,
@@ -1964,4 +2063,101 @@ def compute_pitchsim_stuff_plus(data: pd.DataFrame, artifact: dict) -> pd.DataFr
         z = (df.loc[mask, "StuffFIPRV"].astype(float) - mu) / sigma
         fip_scores.loc[mask] = 100.0 + (-z) * 10.0
     df["StuffFIPPlus"] = fip_scores
+    return df
+
+
+def compute_pitchsim_command_plus(data: pd.DataFrame, artifact: dict) -> pd.DataFrame:
+    """Compute PitchSim-aligned CommandPlus per pitch.
+
+    LocationRV = FullRV(actual location+count) - StuffRV(grid-averaged)
+    CommandPlus = 100 + (-z_score) * 10
+
+    Returns the input DataFrame with a ``CommandPlus`` column added.
+    """
+    if data is None or len(data) == 0:
+        return data
+
+    event_models = artifact.get("event_models")
+    if event_models is None:
+        # Old artifact without event models — skip gracefully
+        return data
+
+    distilled_models = artifact.get("distilled_models", {})
+    vaa_models = artifact.get("vaa_models")
+    loc_pt_stats = artifact.get("loc_pt_stats", {})
+    run_value_table = artifact.get("run_value_table")
+    feature_cols = artifact.get("features", list(_DISTILL_FEATURES))
+    event_features = event_models.get("event_features")
+
+    if not distilled_models or run_value_table is None or event_features is None:
+        return data
+    if not loc_pt_stats:
+        return data
+
+    df = _prepare_pitchsim_frame(data, vaa_models=vaa_models)
+    if df is None or len(df) == 0:
+        return data
+
+    for col in feature_cols:
+        if col not in df.columns:
+            df[col] = np.nan
+
+    # Require distill features + event base features + location + count
+    valid = df[feature_cols].notna().all(axis=1) & df["TaggedPitchType"].notna()
+    for col in ["PlateLocSide", "PlateLocHeight", "Balls", "Strikes"]:
+        valid = valid & df[col].notna()
+    for col in _EVENT_BASE_FEATURES:
+        if col in df.columns:
+            valid = valid & df[col].notna()
+
+    if not valid.any():
+        df["CommandPlus"] = np.nan
+        return df
+
+    sub = df.loc[valid]
+
+    # 1) StuffRV via distilled models
+    X_distill = sub[feature_cols].astype(np.float32)
+    stuff_rv = 0.5 * (
+        distilled_models["StuffRV_vsR"].predict(X_distill)
+        + distilled_models["StuffRV_vsL"].predict(X_distill)
+    )
+
+    # 2) FullRV at actual location+count for each batter side
+    balls = sub["Balls"].astype(int).clip(0, 3).to_numpy()
+    strikes = sub["Strikes"].astype(int).clip(0, 2).to_numpy()
+
+    full_rv_sides = []
+    for side_enc in [0.0, 1.0]:  # R, L
+        X_event = sub[list(_EVENT_BASE_FEATURES) + ["PlateLocSide", "PlateLocHeight"]].copy()
+        X_event["BatterSide_enc"] = side_enc
+        X_event["Balls"] = balls.astype(float)
+        X_event["Strikes"] = strikes.astype(float)
+        X_event = X_event[event_features].astype(np.float32)
+
+        terminal_probs = _predict_terminal_probabilities(X_event, event_models)
+        rv = _expected_run_value(terminal_probs, run_value_table, balls, strikes)
+        full_rv_sides.append(rv)
+
+    full_rv = 0.5 * (full_rv_sides[0] + full_rv_sides[1])
+
+    # 3) LocationRV = FullRV - StuffRV
+    location_rv = full_rv - stuff_rv
+
+    # 4) Z-score within pitch type → CommandPlus
+    global_mu, global_sigma = loc_pt_stats.get("__global__", (0.0, 1.0))
+    if not np.isfinite(global_sigma) or global_sigma <= 0:
+        global_sigma = 1.0
+
+    cmd_scores = np.full(len(df), np.nan, dtype=float)
+    pitch_types = sub["TaggedPitchType"].to_numpy()
+    for pt in np.unique(pitch_types):
+        pt_mask = pitch_types == pt
+        mu, sigma = loc_pt_stats.get(str(pt), (global_mu, global_sigma))
+        if not np.isfinite(sigma) or sigma <= 0:
+            sigma = global_sigma
+        z = (location_rv[pt_mask] - mu) / sigma
+        cmd_scores[valid.to_numpy().nonzero()[0][pt_mask]] = 100.0 + (-z) * 10.0
+
+    df["CommandPlus"] = cmd_scores
     return df

@@ -697,6 +697,25 @@ def _attach_stuff_plus(con, baselines_dict):
 
     df = _compute_stuff_plus(df, baselines_dict=baselines_dict)
     df = _compute_xwhiff(df)
+
+    # PitchSim-aligned CommandPlus (requires event_models in artifact)
+    try:
+        import joblib as _jl
+        from analytics.pitchsim_stuff import compute_pitchsim_command_plus
+        _stuff_model_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "models", "stuff_plus_xgb.joblib"
+        )
+        if os.path.exists(_stuff_model_path):
+            _artifact = _jl.load(_stuff_model_path)
+            if _artifact.get("event_models") is not None:
+                print("  Computing PitchSim Command+ ...")
+                df = compute_pitchsim_command_plus(df, _artifact)
+                n_cmd = df["CommandPlus"].notna().sum() if "CommandPlus" in df.columns else 0
+                print(f"  CommandPlus scored: {n_cmd:,} / {len(df):,} pitches")
+                del _artifact
+    except Exception as exc:
+        print(f"  CommandPlus skipped (error: {exc})")
+
     con.register("dav_df", df)
     con.execute("CREATE OR REPLACE TABLE davidson_data AS SELECT * FROM dav_df")
 

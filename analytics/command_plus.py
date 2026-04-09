@@ -554,24 +554,150 @@ def _compute_command_plus_spread(pdf, data=None):
 
 
 # =============================================================================
-#  Main entry point (same interface as before)
+#  PitchSim-aligned Command+ helpers
+# =============================================================================
+
+_PITCHSIM_MODEL_PATH = os.path.join(_MODEL_DIR, "stuff_plus_xgb.joblib")
+
+
+def _load_pitchsim_artifact():
+    """Load PitchSim Stuff+ artifact if it has event_models. Returns None otherwise."""
+    if not os.path.exists(_PITCHSIM_MODEL_PATH):
+        return None
+    import joblib
+    try:
+        art = joblib.load(_PITCHSIM_MODEL_PATH)
+        if art.get("event_models") is not None and art.get("loc_pt_stats"):
+            return art
+        return None
+    except Exception:
+        return None
+
+
+def _aggregate_precomputed_command_plus(pdf):
+    """Aggregate per-pitch CommandPlus to per-pitch-type summary table.
+
+    Returns DataFrame with same columns as other Command+ methods:
+    Pitch, Pitches, Loc Spread (ft), Zone%, Edge%, CSW%, Chase%, Command+, Percentile.
+    """
+    from config import ZONE_SIDE, ZONE_HEIGHT_BOT, ZONE_HEIGHT_TOP
+
+    cmd_rows = []
+    for pt in sorted(pdf["TaggedPitchType"].dropna().unique()):
+        ptd = pdf[pdf["TaggedPitchType"] == pt].copy()
+        ptd = ptd.dropna(subset=["PlateLocSide", "PlateLocHeight"])
+        ptd = ptd[
+            ptd["PlateLocSide"].between(-PLATE_SIDE_MAX, PLATE_SIDE_MAX) &
+            ptd["PlateLocHeight"].between(PLATE_HEIGHT_MIN, PLATE_HEIGHT_MAX)
+        ]
+        if len(ptd) < 10:
+            continue
+
+        # CommandPlus: pitcher mean from precomputed per-pitch values
+        cmd_vals = ptd["CommandPlus"].dropna()
+        if len(cmd_vals) < 5:
+            continue
+        cmd_plus = float(cmd_vals.mean())
+        # Approximate percentile from the plus score
+        pctl = min(99, max(1, 50 + (cmd_plus - 100) * 1.5))
+
+        # Standard summary stats
+        in_zone = in_zone_mask(ptd)
+        zone_pct = in_zone.mean() * 100
+        edge = (
+            ((ptd["PlateLocSide"].abs().between(0.5, 1.1)) |
+             (ptd["PlateLocHeight"].between(1.2, 1.8)) |
+             (ptd["PlateLocHeight"].between(3.2, 3.8))) &
+            (ptd["PlateLocSide"].abs() <= 1.5) &
+            ptd["PlateLocHeight"].between(0.5, 4.5)
+        )
+        edge_pct = edge.mean() * 100
+        csw = ptd["PitchCall"].isin(["StrikeCalled", "StrikeSwinging"]).mean() * 100
+        out_zone = ~in_zone
+        chase_swings = ptd[out_zone & ptd["PitchCall"].isin(SWING_CALLS)]
+        chase_pct = len(chase_swings) / max(out_zone.sum(), 1) * 100
+
+        loc_spread = np.sqrt(
+            ptd["PlateLocHeight"].std() ** 2 + ptd["PlateLocSide"].std() ** 2
+        )
+
+        cmd_rows.append({
+            "Pitch": pt,
+            "Pitches": len(ptd),
+            "Loc Spread (ft)": round(loc_spread, 2) if np.isfinite(loc_spread) else np.nan,
+            "Zone%": round(zone_pct, 1),
+            "Edge%": round(edge_pct, 1),
+            "CSW%": round(csw, 1),
+            "Chase%": round(chase_pct, 1),
+            "Command+": round(cmd_plus, 0),
+            "Percentile": round(pctl, 1),
+        })
+
+    if not cmd_rows:
+        return pd.DataFrame()
+    cmd_df = pd.DataFrame(cmd_rows)
+    return cmd_df.sort_values("Command+", ascending=False)
+
+
+def _has_pitchsim_physics_columns(pdf):
+    """Check if data has Trackman physics columns needed for PitchSim event models."""
+    required = {"RelSpeed", "InducedVertBreak", "HorzBreak", "Extension",
+                "RelHeight", "RelSide", "SpinRate", "vx0", "vy0", "vz0",
+                "ax0", "ay0", "az0", "PlateLocSide", "PlateLocHeight"}
+    return required.issubset(set(pdf.columns))
+
+
+def _compute_command_plus_pitchsim(pdf, pitchsim_artifact):
+    """Compute Command+ on-the-fly using PitchSim event models.
+
+    For opponent data with raw Trackman physics columns.
+    """
+    from analytics.pitchsim_stuff import compute_pitchsim_command_plus
+
+    scored = compute_pitchsim_command_plus(pdf, pitchsim_artifact)
+    if scored is None or "CommandPlus" not in scored.columns or scored["CommandPlus"].isna().all():
+        return None
+    return _aggregate_precomputed_command_plus(scored)
+
+
+# =============================================================================
+#  Main entry point — 4-tier priority
 # =============================================================================
 
 def _compute_command_plus(pdf, data=None):
     """Compute Command+ for each pitch type. Returns DataFrame with
     Pitch, Pitches, Loc Spread (ft), Zone%, Edge%, CSW%, Chase%, Command+, Percentile.
 
-    Uses XGBoost Location+ model if available, otherwise falls back to
-    spread-based method.
+    Priority:
+    1. Precomputed PitchSim CommandPlus (fast path for Davidson data)
+    2. PitchSim on-the-fly (opponent data with Trackman physics)
+    3. Legacy XGBoost Location+ model
+    4. Spread-based fallback
     """
     if pdf.empty:
         return pd.DataFrame()
 
+    # Tier 1: Precomputed CommandPlus column (from precompute.py)
+    if "CommandPlus" in pdf.columns and pdf["CommandPlus"].notna().any():
+        result = _aggregate_precomputed_command_plus(pdf)
+        if not result.empty:
+            return result
+
+    # Tier 2: PitchSim on-the-fly (requires physics columns + event models)
+    if _has_pitchsim_physics_columns(pdf):
+        pitchsim_art = _load_pitchsim_artifact()
+        if pitchsim_art is not None:
+            result = _compute_command_plus_pitchsim(pdf, pitchsim_art)
+            if result is not None and not result.empty:
+                return result
+
+    # Tier 3: Legacy XGBoost Location+ model
     artifact = _load_location_model()
     if artifact is not None:
         return _compute_command_plus_xgb(pdf, artifact, data=data)
-    else:
-        return _compute_command_plus_spread(pdf, data=data)
+
+    # Tier 4: Spread-based fallback
+    return _compute_command_plus_spread(pdf, data=data)
 
 
 # =============================================================================

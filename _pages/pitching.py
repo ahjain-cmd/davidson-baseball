@@ -978,6 +978,19 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
 
     # ── Section A: Stuff+ & Command+ Grades ──
     section_header("Stuff+ & Command+ Grades")
+    with st.expander("How does Stuff+ work?"):
+        st.markdown("""
+**Stuff+** grades the raw quality of a pitch based on its physical characteristics — velocity, movement, spin, release, and approach angle — independent of where it's thrown.
+
+The model simulates what would happen if a pitch with those characteristics were thrown to every possible location and count. By averaging across all locations, we isolate the **stuff** effect from the **location** effect. The result is scaled so that **100 = D1 average** and **each 10 points = one standard deviation**.
+
+**What drives high Stuff+ scores:**
+- **Fastballs** — Ride (induced vertical break), velocity, and vertical approach angle. A 91 mph fastball with 20" of ride that hitters swing under grades much higher than a 91 mph fastball with 14" of ride that's easy to barrel. Horizontal run also matters — more arm-side movement creates deception.
+- **Breaking balls** — Total movement (sweep + depth), difference from the fastball's movement profile, and spin efficiency. A slider that moves very differently from the pitcher's fastball grades highest.
+- **Offspeed** — Velocity separation from the fastball and sink. A changeup that's 10+ mph slower with arm-side fade and drop is hard to square up.
+
+**What doesn't affect Stuff+:** Location, pitch sequencing, game situation, or batter identity. A 95 mph fastball with elite ride gets the same Stuff+ whether it's thrown down the middle or at a batter's eyes.
+""")
     has_stuff = stuff_df is not None and "StuffPlus" in stuff_df.columns and not stuff_df.empty
     if has_stuff:
         arsenal_agg = stuff_df.groupby("TaggedPitchType").agg(
