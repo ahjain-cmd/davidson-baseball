@@ -2500,6 +2500,19 @@ def _render_improvement_lab(stuff_df, pitcher, data):
         st.warning("Distilled models not found in artifact.")
         return
 
+    # Component model keys for per-component breakdown
+    _COMPONENT_KEYS = [
+        ("StuffWhiff", "Whiff"),
+        ("StuffCalledStrike", "Called Strike"),
+        ("StuffBall", "Ball"),
+        ("StuffHomeRun", "Home Run"),
+        ("StuffDamage", "Damage"),
+    ]
+    has_components = all(
+        f"{key}_vsR" in distilled_models and f"{key}_vsL" in distilled_models
+        for key, _ in _COMPONENT_KEYS
+    )
+
     # Build mean feature vector for this pitch type
     from analytics.pitchsim_stuff import _prepare_pitchsim_frame
 
@@ -2522,6 +2535,8 @@ def _render_improvement_lab(stuff_df, pitcher, data):
         fb_ref_row["RelSpeed"] = fb_data["RelSpeed"].astype(float).mean()
 
     # Perturbation levers: (column, display_name, delta, unit)
+    # NOTE: VAA excluded — it's physics-derived (determined by velocity, release
+    # height, and extension), not an independently controllable lever.
     levers = [
         ("RelSpeed",         "Velocity",       1.0,   "mph"),
         ("InducedVertBreak", "Induced VBreak",  1.0,   "in"),
@@ -2529,42 +2544,56 @@ def _render_improvement_lab(stuff_df, pitcher, data):
         ("Extension",        "Extension",       0.25,  "ft"),
         ("SpinRate",         "Spin Rate",       100.0, "rpm"),
     ]
-    # Add VAA residual if present
-    if "VertApprAngle" in pt_data.columns:
-        levers.append(("VertApprAngle", "VAA", 0.5, "deg"))
 
-    def _score_single(row_df):
-        """Score a single-row DataFrame and return mean StuffRV.
+    def _prepare_row(row_df):
+        """Prepare a single-row DataFrame through the PitchSim feature pipeline.
 
         Appends a fastball reference row so _prepare_pitchsim_frame can
-        compute VeloDiff even for non-FB pitch types.
+        compute VeloDiff even for non-FB pitch types. Returns prepared
+        feature matrix (single row) or None.
         """
-        # Include FB reference so groupby('Pitcher') finds FB velo
         if fb_ref_row is not None and sel_pt not in _FB_TYPES:
             combo = pd.concat([row_df, fb_ref_row], ignore_index=True)
         else:
             combo = row_df
         prepared = _prepare_pitchsim_frame(combo, vaa_models=vaa_models)
         if prepared is None or prepared.empty:
-            return np.nan
-        # Keep only the first row (the one we want to score)
-        prepared = prepared.iloc[[0]]
+            return None
+        prepared = prepared.iloc[0:1]
         for col in feature_cols:
             if col not in prepared.columns:
                 prepared[col] = np.nan
         valid = prepared[feature_cols].notna().all(axis=1)
         if not valid.any():
-            return np.nan
-        X = prepared.loc[valid, feature_cols].astype(np.float32)
+            return None
+        return prepared.loc[valid]
+
+    def _score_rv(prepared):
+        """Score prepared features → mean StuffRV (lower = better)."""
+        X = prepared[feature_cols].astype(np.float32)
         rv_r = distilled_models["StuffRV_vsR"].predict(X)
         rv_l = distilled_models["StuffRV_vsL"].predict(X)
         return float(0.5 * (rv_r[0] + rv_l[0]))
 
+    def _score_components(prepared):
+        """Score prepared features → dict of component RVs."""
+        X = prepared[feature_cols].astype(np.float32)
+        comp = {}
+        for key, _ in _COMPONENT_KEYS:
+            r_key, l_key = f"{key}_vsR", f"{key}_vsL"
+            if r_key in distilled_models and l_key in distilled_models:
+                rv_r = distilled_models[r_key].predict(X)
+                rv_l = distilled_models[l_key].predict(X)
+                comp[key] = float(0.5 * (rv_r[0] + rv_l[0]))
+        return comp
+
     # Score baseline
-    baseline_rv = _score_single(base_row)
-    if np.isnan(baseline_rv):
+    baseline_prep = _prepare_row(base_row)
+    if baseline_prep is None:
         st.warning("Could not score baseline pitch vector.")
         return
+    baseline_rv = _score_rv(baseline_prep)
+    baseline_comps = _score_components(baseline_prep) if has_components else {}
 
     # Convert RV to Stuff+ scale
     global_mu, global_sigma = pt_stats.get(str(sel_pt), pt_stats.get("__global__", (0.0, 1.0)))
@@ -2584,15 +2613,18 @@ def _render_improvement_lab(stuff_df, pitcher, data):
         # Positive perturbation
         row_up = base_row.copy()
         row_up[col] = orig_val + delta
-        rv_up = _score_single(row_up)
+        prep_up = _prepare_row(row_up)
 
         # Negative perturbation
         row_dn = base_row.copy()
         row_dn[col] = orig_val - delta
-        rv_dn = _score_single(row_dn)
+        prep_dn = _prepare_row(row_dn)
 
-        if np.isnan(rv_up) or np.isnan(rv_dn):
+        if prep_up is None or prep_dn is None:
             continue
+
+        rv_up = _score_rv(prep_up)
+        rv_dn = _score_rv(prep_dn)
 
         stuff_up = 100.0 + (-(rv_up - global_mu) / global_sigma) * 10.0
         stuff_dn = 100.0 + (-(rv_dn - global_mu) / global_sigma) * 10.0
@@ -2607,20 +2639,38 @@ def _render_improvement_lab(stuff_df, pitcher, data):
             best_delta = delta_dn
             direction = f"-{delta} {unit}"
 
-        results.append({
+        entry = {
             "Lever": label,
             "Change": direction,
             "Stuff+ Delta": best_delta,
             "abs_delta": abs(best_delta),
             "delta_up": delta_up,
             "delta_dn": delta_dn,
-        })
+        }
+
+        # Component-level deltas for breakdown table
+        if has_components:
+            comps_up = _score_components(prep_up)
+            comps_dn = _score_components(prep_dn)
+            for key, comp_label in _COMPONENT_KEYS:
+                if key in baseline_comps and key in comps_up and key in comps_dn:
+                    # Component RVs: lower = better for pitcher
+                    c_delta_up = -(comps_up[key] - baseline_comps[key])
+                    c_delta_dn = -(comps_dn[key] - baseline_comps[key])
+                    entry[f"{comp_label} (+)"] = c_delta_up
+                    entry[f"{comp_label} (-)"] = c_delta_dn
+
+        results.append(entry)
 
     if not results:
         st.info("Could not compute perturbation results.")
         return
 
     results.sort(key=lambda x: x["abs_delta"], reverse=True)
+
+    # Check if most levers show near-zero sensitivity (model limitation)
+    near_zero_count = sum(1 for r in results if r["abs_delta"] < 0.05)
+    total_levers = len(results)
 
     # Tornado chart
     fig = go.Figure()
@@ -2631,12 +2681,12 @@ def _render_improvement_lab(stuff_df, pitcher, data):
     fig.add_trace(go.Bar(
         y=labels, x=deltas_up, orientation="h",
         name="Increase", marker_color="#1dbe3a",
-        text=[f"{d:+.1f}" for d in deltas_up], textposition="outside",
+        text=[f"{d:+.2f}" for d in deltas_up], textposition="outside",
     ))
     fig.add_trace(go.Bar(
         y=labels, x=deltas_dn, orientation="h",
         name="Decrease", marker_color="#d22d49",
-        text=[f"{d:+.1f}" for d in deltas_dn], textposition="outside",
+        text=[f"{d:+.2f}" for d in deltas_dn], textposition="outside",
     ))
     fig.add_vline(x=0, line_dash="solid", line_color="gray", line_width=1)
     fig.update_layout(
@@ -2651,11 +2701,24 @@ def _render_improvement_lab(stuff_df, pitcher, data):
 
     # Natural language recommendation
     top = results[0]
-    st.markdown(
-        f"**Top recommendation:** {top['Change']} of **{top['Lever'].lower()}** to your "
-        f"{sel_pt.lower()} would improve Stuff+ by **~{top['Stuff+ Delta']:.1f} points**. "
-        f"This is your highest-leverage adjustment."
-    )
+    if top["abs_delta"] >= 0.1:
+        st.markdown(
+            f"**Top recommendation:** {top['Change']} of **{top['Lever'].lower()}** to your "
+            f"{sel_pt.lower()} would improve Stuff+ by **~{top['Stuff+ Delta']:.1f} points**. "
+            f"This is your highest-leverage adjustment."
+        )
+    else:
+        st.markdown(
+            f"**Top recommendation:** {top['Change']} of **{top['Lever'].lower()}** to your "
+            f"{sel_pt.lower()} shows the largest effect (**{top['Stuff+ Delta']:+.2f} Stuff+**)."
+        )
+
+    if near_zero_count >= total_levers - 1:
+        st.info(
+            f"Most levers show near-zero sensitivity for this {sel_pt.lower()}. "
+            f"The distilled model may have limited resolution at this pitch's movement profile. "
+            f"Velocity is typically the most reliable lever across all pitch types."
+        )
 
     # Summary table
     summary_rows = []
@@ -2663,9 +2726,32 @@ def _render_improvement_lab(stuff_df, pitcher, data):
         summary_rows.append({
             "Lever": r["Lever"],
             "Best Direction": r["Change"],
-            "Stuff+ Delta": f"{r['Stuff+ Delta']:+.1f}",
+            "Stuff+ Delta": f"{r['Stuff+ Delta']:+.2f}",
         })
     st.dataframe(pd.DataFrame(summary_rows).set_index("Lever"), use_container_width=True)
+
+    # Component breakdown table (shows WHERE each lever's effect comes from)
+    if has_components:
+        with st.expander("Component Breakdown by Lever", expanded=False):
+            st.caption(
+                "Shows how each physical change affects individual Stuff+ components. "
+                "Positive = pitcher-favorable (fewer runs). Values are raw RV shifts (×100 for readability)."
+            )
+            comp_rows = []
+            for r in results:
+                row = {"Lever": r["Lever"], "Direction": r["Change"]}
+                # Use the best direction's component deltas
+                use_plus = r["delta_up"] >= r["delta_dn"]
+                for _, comp_label in _COMPONENT_KEYS:
+                    key_suffix = "(+)" if use_plus else "(-)"
+                    val = r.get(f"{comp_label} {key_suffix}", 0.0)
+                    row[comp_label] = f"{val * 100:+.1f}" if abs(val) >= 0.00005 else "—"
+                comp_rows.append(row)
+            if comp_rows:
+                st.dataframe(
+                    pd.DataFrame(comp_rows).set_index("Lever"),
+                    use_container_width=True,
+                )
 
 
 def _render_stuff_trend(stuff_df, pitcher):
