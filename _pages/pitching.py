@@ -36,6 +36,9 @@ from data.loader import query_population
 def _build_stuff_explanation(pt, stuff_df, baselines_dict):
     """Build a short natural-language explanation of what drives a pitch type's Stuff+ grade.
 
+    Uses per-pitch-type metric definitions with correct "good" direction
+    (e.g., more sink on a changeup is good, not bad).
+
     Returns an HTML string or None if insufficient data.
     """
     if baselines_dict is None:
@@ -49,58 +52,86 @@ def _build_stuff_explanation(pt, stuff_df, baselines_dict):
     if len(sub) < 5:
         return None
 
-    # Metric display names per pitch family
-    _FB_TYPES = {"Fastball", "Sinker"}
-    _BB_TYPES = {"Curveball", "Slider", "Cutter", "Sweeper"}
-    _OS_TYPES = {"Changeup", "Splitter"}
-
-    metric_labels = {
-        "RelSpeed": "velocity",
-        "InducedVertBreak": "ride" if pt in _FB_TYPES else ("depth" if pt == "Curveball" else "vertical movement"),
-        "HorzBreakAdj": "arm-side run" if pt in (_FB_TYPES | _OS_TYPES) else "sweep",
-        "Extension": "extension",
-        "SpinRate": "spin",
-    }
-
-    # Compute z-scores for each metric
-    factors = []
-    # For lefties, HorzBreak is already flipped to HorzBreakAdj in baselines,
-    # but stuff_df has raw HorzBreak. We need to adjust.
     throws = sub["PitcherThrows"].mode()
     is_lefty = len(throws) > 0 and throws.iloc[0] in ("Left", "L")
 
-    for metric, label in metric_labels.items():
-        col = metric
-        if metric == "HorzBreakAdj":
-            col = "HorzBreak"
-        if col not in sub.columns or metric not in pt_baselines:
+    # Per-pitch-type: (metric_key, display_label, higher_is_better)
+    # Only include the metrics that actually drive Stuff+ for each type.
+    _PITCH_METRICS = {
+        "Fastball": [
+            ("InducedVertBreak", "ride", True),       # more ride → whiffs up
+            ("RelSpeed",         "velocity", True),    # faster → less reaction time
+            ("HorzBreakAdj",     "arm-side run", True),# more run → deception
+        ],
+        "Sinker": [
+            ("InducedVertBreak", "sink", False),       # LESS IVB = more sink = good
+            ("RelSpeed",         "velocity", True),
+            ("HorzBreakAdj",     "arm-side run", True),
+        ],
+        "Changeup": [
+            ("InducedVertBreak", "sink", False),       # less IVB = more sink = good
+            ("HorzBreakAdj",     "arm-side fade", True),
+        ],
+        "Splitter": [
+            ("InducedVertBreak", "drop", False),
+            ("HorzBreakAdj",     "arm-side fade", True),
+        ],
+        "Curveball": [
+            ("InducedVertBreak", "drop", False),       # more negative IVB = more drop = good
+            ("HorzBreakAdj",     "sweep", True),       # more sweep = good
+        ],
+        "Slider": [
+            ("HorzBreakAdj",     "sweep", True),       # more sweep = good
+            ("RelSpeed",         "velocity", True),
+            ("InducedVertBreak", "vertical movement", False),  # less IVB = more drop/bite
+        ],
+        "Cutter": [
+            ("HorzBreakAdj",     "cut", True),
+            ("RelSpeed",         "velocity", True),
+        ],
+        "Sweeper": [
+            ("HorzBreakAdj",     "sweep", True),
+            ("InducedVertBreak", "vertical movement", False),
+        ],
+    }
+
+    metrics = _PITCH_METRICS.get(pt)
+    if not metrics:
+        return None
+
+    factors = []
+    for metric_key, label, higher_is_better in metrics:
+        col = "HorzBreak" if metric_key == "HorzBreakAdj" else metric_key
+        if col not in sub.columns or metric_key not in pt_baselines:
             continue
         vals = sub[col].dropna()
         if len(vals) < 3:
             continue
         pitcher_mean = vals.mean()
-        if metric == "HorzBreakAdj" and is_lefty:
+        if metric_key == "HorzBreakAdj" and is_lefty:
             pitcher_mean = -pitcher_mean
-        pop_mean, pop_std = pt_baselines[metric]
+        pop_mean, pop_std = pt_baselines[metric_key]
         if pop_std < 0.01:
             continue
         z = (pitcher_mean - pop_mean) / pop_std
 
-        # For curveballs, more negative IVB = more drop = better, so flip the sign for display
-        if pt == "Curveball" and metric == "InducedVertBreak":
-            z = -z  # positive z now means "more drop than average"
+        # Flip z so positive = "good for this pitch type"
+        if not higher_is_better:
+            z = -z
 
-        factors.append((label, z, pitcher_mean, pop_mean))
+        # Format value
+        if label == "velocity":
+            val_str = f"{pitcher_mean:.1f} mph"
+        else:
+            val_str = f'{abs(pitcher_mean):.1f}"'
+
+        factors.append((label, z, val_str))
 
     if not factors:
         return None
 
-    # Sort by absolute z-score, pick top 3
-    factors.sort(key=lambda x: abs(x[1]), reverse=True)
-    top = factors[:3]
-
     parts = []
-    for label, z, val, pop in top:
+    for label, z, val_str in factors:
         if abs(z) < 0.3:
             continue
         if z > 1.5:
@@ -113,22 +144,7 @@ def _build_stuff_explanation(pt, stuff_df, baselines_dict):
             desc = "below-avg"
         else:
             continue
-
-        # Format the value display
-        if label == "velocity":
-            val_str = f"{val:.1f} mph"
-        elif label in ("ride", "depth", "vertical movement", "arm-side run", "sweep"):
-            val_str = f'{abs(val):.1f}"'
-        elif label == "extension":
-            val_str = f"{val:.1f} ft"
-        elif label == "spin":
-            val_str = f"{val:.0f} rpm"
-        else:
-            val_str = f"{val:.1f}"
-
-        # Color: green for positive, red for negative
         color = "#2e7d32" if z > 0 else "#c62828"
-        arrow = "+" if z > 0 else "-"
         parts.append(f'<span style="color:{color};font-weight:600;">{desc} {label}</span> ({val_str})')
 
     if not parts:
