@@ -33,6 +33,110 @@ from config import safe_mode, _SWING_CALLS_SQL
 from data.loader import query_population
 
 
+def _build_stuff_explanation(pt, stuff_df, baselines_dict):
+    """Build a short natural-language explanation of what drives a pitch type's Stuff+ grade.
+
+    Returns an HTML string or None if insufficient data.
+    """
+    if baselines_dict is None:
+        return None
+    baseline_stats = baselines_dict.get("baseline_stats", {})
+    pt_baselines = baseline_stats.get(pt)
+    if not pt_baselines:
+        return None
+
+    sub = stuff_df[stuff_df["TaggedPitchType"] == pt]
+    if len(sub) < 5:
+        return None
+
+    # Metric display names per pitch family
+    _FB_TYPES = {"Fastball", "Sinker"}
+    _BB_TYPES = {"Curveball", "Slider", "Cutter", "Sweeper"}
+    _OS_TYPES = {"Changeup", "Splitter"}
+
+    metric_labels = {
+        "RelSpeed": "velocity",
+        "InducedVertBreak": "ride" if pt in _FB_TYPES else ("depth" if pt == "Curveball" else "vertical movement"),
+        "HorzBreakAdj": "arm-side run" if pt in (_FB_TYPES | _OS_TYPES) else "sweep",
+        "Extension": "extension",
+        "SpinRate": "spin",
+    }
+
+    # Compute z-scores for each metric
+    factors = []
+    # For lefties, HorzBreak is already flipped to HorzBreakAdj in baselines,
+    # but stuff_df has raw HorzBreak. We need to adjust.
+    throws = sub["PitcherThrows"].mode()
+    is_lefty = len(throws) > 0 and throws.iloc[0] in ("Left", "L")
+
+    for metric, label in metric_labels.items():
+        col = metric
+        if metric == "HorzBreakAdj":
+            col = "HorzBreak"
+        if col not in sub.columns or metric not in pt_baselines:
+            continue
+        vals = sub[col].dropna()
+        if len(vals) < 3:
+            continue
+        pitcher_mean = vals.mean()
+        if metric == "HorzBreakAdj" and is_lefty:
+            pitcher_mean = -pitcher_mean
+        pop_mean, pop_std = pt_baselines[metric]
+        if pop_std < 0.01:
+            continue
+        z = (pitcher_mean - pop_mean) / pop_std
+
+        # For curveballs, more negative IVB = more drop = better, so flip the sign for display
+        if pt == "Curveball" and metric == "InducedVertBreak":
+            z = -z  # positive z now means "more drop than average"
+
+        factors.append((label, z, pitcher_mean, pop_mean))
+
+    if not factors:
+        return None
+
+    # Sort by absolute z-score, pick top 3
+    factors.sort(key=lambda x: abs(x[1]), reverse=True)
+    top = factors[:3]
+
+    parts = []
+    for label, z, val, pop in top:
+        if abs(z) < 0.3:
+            continue
+        if z > 1.5:
+            desc = "elite"
+        elif z > 0.5:
+            desc = "above-avg"
+        elif z < -1.5:
+            desc = "well below-avg"
+        elif z < -0.5:
+            desc = "below-avg"
+        else:
+            continue
+
+        # Format the value display
+        if label == "velocity":
+            val_str = f"{val:.1f} mph"
+        elif label in ("ride", "depth", "vertical movement", "arm-side run", "sweep"):
+            val_str = f'{abs(val):.1f}"'
+        elif label == "extension":
+            val_str = f"{val:.1f} ft"
+        elif label == "spin":
+            val_str = f"{val:.0f} rpm"
+        else:
+            val_str = f"{val:.1f}"
+
+        # Color: green for positive, red for negative
+        color = "#2e7d32" if z > 0 else "#c62828"
+        arrow = "+" if z > 0 else "-"
+        parts.append(f'<span style="color:{color};font-weight:600;">{desc} {label}</span> ({val_str})')
+
+    if not parts:
+        return None
+
+    return ", ".join(parts)
+
+
 def _score_linear(val, lo, hi, invert=False):
     if pd.isna(val) or hi == lo:
         return np.nan
@@ -1035,16 +1139,25 @@ The model simulates what would happen if a pitch with those characteristics were
                 render_savant_percentile_section(xwhiff_metrics,
                                                  title="xWhiff Stuff+ Percentile Rankings")
 
-    # Command+ percentile bars
-    if not cmd_df.empty:
-        cmd_metrics = []
-        for _, row in cmd_df.iterrows():
-            cmd_val = row["Command+"]
-            pctl = row.get("Percentile", min(max((cmd_val - 80) * 2.5, 0), 100))
-            cmd_metrics.append((row["Pitch"], cmd_val, pctl, ".0f", True))
-        if cmd_metrics:
-            render_savant_percentile_section(cmd_metrics,
-                                             title="Command+ Percentile Rankings")
+    # Per-pitch Stuff+ explanations
+    if has_stuff:
+        baselines_dict = compute_stuff_baselines()
+        explanations = []
+        for pt in pitch_types:
+            expl = _build_stuff_explanation(pt, stuff_df, baselines_dict)
+            if expl:
+                pt_stuff = stuff_df[stuff_df["TaggedPitchType"] == pt]["xWhiffPlus" if "xWhiffPlus" in stuff_df.columns else "StuffPlus"]
+                mean_val = pt_stuff.mean() if len(pt_stuff) > 0 else None
+                explanations.append((pt, expl, mean_val))
+        if explanations:
+            for pt, expl, mean_val in explanations:
+                pc = PITCH_COLORS.get(pt, "#888")
+                st.markdown(
+                    f'<div style="font-size:13px;margin:2px 0;padding:4px 8px;'
+                    f'border-left:3px solid {pc};background:#fafafa;border-radius:3px;">'
+                    f'<b style="color:{pc};">{pt}</b>: {expl}</div>',
+                    unsafe_allow_html=True,
+                )
 
     # ── Section B: Best Pitch Locations (whiffs, called strikes, weak contact) ──
     st.markdown("")
