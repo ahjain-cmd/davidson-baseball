@@ -1110,6 +1110,10 @@ The model simulates what would happen if a pitch with those characteristics were
 - **Offspeed** — Velocity separation from the fastball and sink. A changeup that's 10+ mph slower with arm-side fade and drop is hard to square up.
 
 **What doesn't affect Stuff+:** Location, pitch sequencing, game situation, or batter identity. A 95 mph fastball with elite ride gets the same Stuff+ whether it's thrown down the middle or at a batter's eyes.
+
+---
+
+**Note from Ahan:** Apologies for the new model - the old xWhiff model was predicting whiffs and swinging strikes, not run value. This now predicts and is in-line with run-value. A few pitches' Stuff+ has changed, it now likes certain Slider shapes unlike before from a RV basis but this model is in-line with FanGraphs Stuff+ and MLB teams' Stuff+ models as well. I'm 100% confident in this one and am not touching it.
 """)
     has_stuff = stuff_df is not None and "StuffPlus" in stuff_df.columns and not stuff_df.empty
     if has_stuff:
