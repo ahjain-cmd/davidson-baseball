@@ -23,14 +23,14 @@ from viz.charts import (
     _add_grid_zone_outline,
 )
 from viz.percentiles import savant_color, render_savant_percentile_section
-from analytics.stuff_plus import _compute_stuff_plus, _compute_stuff_plus_all, _compute_xwhiff_all
+from analytics.stuff_plus import _compute_stuff_plus
 from analytics.tunnel import _compute_tunnel_score, _build_tunnel_population, _load_tunnel_benchmarks
 from analytics.command_plus import _compute_command_plus, _compute_pitch_pair_results
 from analytics.expected import _create_zone_grid_data
 
 # Import helpers that live in app.py
 from config import safe_mode, _SWING_CALLS_SQL
-from data.loader import query_population
+from data.loader import query_population, query_precompute
 
 
 def _build_stuff_explanation(pt, stuff_df, baselines_dict):
@@ -200,6 +200,37 @@ def _weighted_score(parts, weights):
 _MIN_STUFF_RANK_CURRENT_PITCHES = 5
 _MIN_STUFF_RANK_POP_PITCHES = 20
 _MIN_STUFF_RANK_PEERS = 5
+_FIXED_PERCENTILE_SEASON = 2025
+
+
+@st.cache_data(show_spinner=False)
+def _fixed_pitcher_percentile_population():
+    """Fixed D1 pitcher comparison set used for all percentile grades."""
+    return compute_pitcher_stats_pop(season_filter=[_FIXED_PERCENTILE_SEASON])
+
+
+@st.cache_data(show_spinner=False)
+def _fixed_stuff_percentile_population():
+    """Fixed D1 Stuff+ comparison set used for all PitchSim percentile grades."""
+    return query_precompute(
+        f"""
+        SELECT PitchUID, Pitcher, Season, Date, TaggedPitchType, StuffPlus
+        FROM stuff_plus
+        WHERE Season = {_FIXED_PERCENTILE_SEASON}
+          AND Pitcher IS NOT NULL
+          AND TaggedPitchType IS NOT NULL
+          AND StuffPlus IS NOT NULL
+        """
+    )
+
+
+def _fixed_pitcher_percentile_caption(pop_df):
+    n_pitchers = 0 if pop_df is None else len(pop_df)
+    return f"vs. {n_pitchers:,} D1 pitchers from {_FIXED_PERCENTILE_SEASON} (min 100 pitches)"
+
+
+def _fixed_stuff_percentile_title(base_title):
+    return f"{base_title} (vs {_FIXED_PERCENTILE_SEASON} D1 Pitchers)"
 
 
 def _filter_pitch_rank_population(pop_df, season_filter=None, game_mode="All"):
@@ -1156,7 +1187,7 @@ def _pitcher_card_content(
                 ("Extension", _safe_pr(pr, "Extension"), get_percentile(_safe_pr(pr, "Extension"), _safe_pop(all_stats, "Extension")), ".1f", True),
             ]
             render_savant_percentile_section(p_metrics, "Percentile Rankings")
-            st.caption(f"vs. {len(all_stats)} pitchers in database (min 100 pitches)")
+            st.caption(_fixed_pitcher_percentile_caption(all_stats))
 
     with pc_col2:
         section_header("Movement Profile (Induced Break)")
@@ -1294,19 +1325,13 @@ The production app then uses a distilled runtime model so scoring is fast enough
 
     # Stuff+ percentile bars
     if has_stuff:
-        all_stuff = _compute_stuff_plus_all(data)
-        all_stuff = _filter_pitch_rank_population(all_stuff, season_filter=season_filter, game_mode=game_mode)
+        all_stuff = _fixed_stuff_percentile_population()
         stuff_metrics = _build_pitch_percentile_metrics(stuff_df, all_stuff, "StuffPlus")
         stuff_metrics = [row for row in stuff_metrics if row[0] in pitch_types]
         if stuff_metrics:
             render_savant_percentile_section(
                 stuff_metrics,
-                title=_pitch_rank_section_title(
-                    "Stuff+ Percentile Rankings",
-                    season_filter=season_filter,
-                    all_seasons=all_seasons,
-                    game_mode=game_mode,
-                ),
+                title=_fixed_stuff_percentile_title("Stuff+ Percentile Rankings"),
             )
 
 
@@ -2465,7 +2490,7 @@ def _render_scrimmage_grading(data, pitcher, stuff_df):
         return
 
     # Percentile bars vs D1 population
-    all_stuff = _compute_stuff_plus_all(data)
+    all_stuff = _fixed_stuff_percentile_population()
     if all_stuff is not None and "StuffPlus" in all_stuff.columns:
         stuff_metrics = _build_pitch_percentile_metrics(scrim_scored, all_stuff, "StuffPlus")
         stuff_metrics = [
@@ -2474,7 +2499,7 @@ def _render_scrimmage_grading(data, pitcher, stuff_df):
         ]
         if stuff_metrics:
             render_savant_percentile_section(stuff_metrics,
-                                             title="Scrimmage Stuff+ vs D1 Population")
+                                             title=f"Scrimmage Stuff+ vs {_FIXED_PERCENTILE_SEASON} D1 Population")
 
     # Component breakdown if available
     component_cols = ["StuffWhiff", "StuffCalledStrike", "StuffHomeRun", "StuffDamage"]
@@ -2585,12 +2610,12 @@ def _render_csv_upload(data):
         st.dataframe(pd.DataFrame(rows).set_index("Pitch"), use_container_width=True)
 
     # Percentile bars vs D1 population
-    all_stuff = _compute_stuff_plus_all(data)
+    all_stuff = _fixed_stuff_percentile_population()
     if all_stuff is not None and "StuffPlus" in all_stuff.columns:
         stuff_metrics = _build_pitch_percentile_metrics(scored, all_stuff, "StuffPlus")
         if stuff_metrics:
             render_savant_percentile_section(stuff_metrics,
-                                             title="Uploaded Stuff+ vs D1 Population")
+                                             title=f"Uploaded Stuff+ vs {_FIXED_PERCENTILE_SEASON} D1 Population")
 
     # Component breakdown if available
     component_cols = ["StuffWhiff", "StuffCalledStrike", "StuffHomeRun", "StuffDamage"]
@@ -3045,25 +3070,20 @@ def page_pitching(data):
     with c1:
         pitcher = st.selectbox("Select Pitcher", pitchers, format_func=display_name, key="pitching_pitcher")
 
-    all_pitcher_stats = compute_pitcher_stats_pop(season_filter=season_filter)
-    pr = None
+    all_pitcher_stats = _fixed_pitcher_percentile_population()
     if all_pitcher_stats.empty:
-        st.info("Population stats unavailable — showing team data only.")
+        st.info(f"{_FIXED_PERCENTILE_SEASON} D1 pitcher population unavailable — showing team data only.")
         all_pitcher_stats = pd.DataFrame()
-    else:
-        if pitcher in all_pitcher_stats["Pitcher"].values:
-            pr = all_pitcher_stats[all_pitcher_stats["Pitcher"] == pitcher].iloc[0]
     pdf_raw = pitching[(pitching["Pitcher"] == pitcher) & (pitching["Season"].isin(season_filter))]
     pdf = filter_minor_pitches(pdf_raw)
     if pdf.empty or len(pdf) < 20:
         st.warning("Not enough pitch data (need 20+).")
         return
 
-    if pr is None:
-        # Fallback to pitcher-local stats if population stats missing
-        pr_local = compute_pitcher_stats(pdf, season_filter=None)
-        if not pr_local.empty:
-            pr = pr_local.iloc[0]
+    pr = None
+    pr_local = compute_pitcher_stats(pdf, season_filter=None)
+    if not pr_local.empty:
+        pr = pr_local.iloc[0]
 
     # Player header
     jersey = JERSEY.get(pitcher, "")
@@ -3174,23 +3194,6 @@ def _pitching_lab_content(
                 formatted[c] = formatted[c].apply(lambda x: f"{x:.1f}" if not pd.isna(x) else "-")
         formatted["Pitches"] = formatted["Pitches"].astype(int)
         st.dataframe(formatted, use_container_width=True)
-
-        # xWhiff Stuff+ percentile bars
-        if "xWhiffPlus" in stuff_df.columns:
-            all_xwhiff = _compute_xwhiff_all(data)
-            all_xwhiff = _filter_pitch_rank_population(all_xwhiff, season_filter=season_filter, game_mode=game_mode)
-            xwhiff_metrics = _build_pitch_percentile_metrics(stuff_df, all_xwhiff, "xWhiffPlus")
-            xwhiff_metrics = [row for row in xwhiff_metrics if row[0] in arsenal_summary.index]
-            if xwhiff_metrics:
-                render_savant_percentile_section(
-                    xwhiff_metrics,
-                    title=_pitch_rank_section_title(
-                        "xWhiff Stuff+ Percentile Rankings",
-                        season_filter=season_filter,
-                        all_seasons=all_seasons,
-                        game_mode=game_mode,
-                    ),
-                )
 
         # Stuff+ distribution violin plot
         section_header("Stuff+ Distribution by Pitch")
