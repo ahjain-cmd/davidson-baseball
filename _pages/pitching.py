@@ -197,6 +197,85 @@ def _weighted_score(parts, weights):
     return s / wsum if wsum else np.nan
 
 
+_MIN_STUFF_RANK_CURRENT_PITCHES = 5
+_MIN_STUFF_RANK_POP_PITCHES = 20
+_MIN_STUFF_RANK_PEERS = 5
+
+
+def _filter_pitch_rank_population(pop_df, season_filter=None, game_mode="All"):
+    """Match the percentile population to the active page filters."""
+    if pop_df is None or pop_df.empty:
+        return pop_df
+    out = pop_df.copy()
+    if season_filter and "Season" in out.columns:
+        out = out[out["Season"].isin(season_filter)].copy()
+    if "BatterTeam" in out.columns:
+        if game_mode == "Games Only":
+            out = out[out["BatterTeam"] != DAVIDSON_TEAM_ID].copy()
+        elif game_mode == "Scrimmages Only":
+            out = out[out["BatterTeam"] == DAVIDSON_TEAM_ID].copy()
+    return out
+
+
+def _pitch_rank_section_title(base_title, season_filter=None, all_seasons=None, game_mode="All"):
+    """Label percentile sections so the comparison set is explicit."""
+    if not season_filter:
+        return base_title
+    season_vals = sorted({int(s) for s in season_filter if pd.notna(s)})
+    all_vals = sorted({int(s) for s in (all_seasons or []) if pd.notna(s)})
+    if game_mode == "All" and season_vals and all_vals and season_vals == all_vals:
+        return f"{base_title} (vs All Pitchers in Database)"
+
+    if not season_vals:
+        season_label = "Selected Seasons"
+    elif len(season_vals) == 1:
+        season_label = str(season_vals[0])
+    else:
+        season_label = f"{season_vals[0]}-{season_vals[-1]}"
+    mode_label = {
+        "Games Only": "Games",
+        "Scrimmages Only": "Scrimmages",
+        "All": "All Games",
+    }.get(game_mode, "Selected Sample")
+    return f"{base_title} (vs {season_label} {mode_label} Population)"
+
+
+def _build_pitch_percentile_metrics(sample_df, population_df, metric_col, *,
+                                    min_current_pitches=_MIN_STUFF_RANK_CURRENT_PITCHES,
+                                    min_population_pitches=_MIN_STUFF_RANK_POP_PITCHES,
+                                    min_peer_pitchers=_MIN_STUFF_RANK_PEERS):
+    """Percentile-rank pitch-type means against pitcher-level peer means."""
+    if sample_df is None or population_df is None or sample_df.empty or population_df.empty:
+        return []
+    needed = {"TaggedPitchType", "Pitcher", metric_col}
+    if not needed.issubset(sample_df.columns) or not needed.issubset(population_df.columns):
+        return []
+
+    sample_work = sample_df.dropna(subset=["TaggedPitchType", metric_col]).copy()
+    pop_work = population_df.dropna(subset=["TaggedPitchType", "Pitcher", metric_col]).copy()
+    if sample_work.empty or pop_work.empty:
+        return []
+
+    metrics = []
+    for pt in sample_work["TaggedPitchType"].dropna().unique():
+        sample_pt = sample_work[sample_work["TaggedPitchType"] == pt]
+        if len(sample_pt) < min_current_pitches:
+            continue
+        my_val = float(sample_pt[metric_col].mean())
+        peer_means = (
+            pop_work[pop_work["TaggedPitchType"] == pt]
+            .groupby("Pitcher", observed=False)[metric_col]
+            .agg(["mean", "count"])
+        )
+        peer_means = peer_means[peer_means["count"] >= min_population_pitches]
+        peer_vals = peer_means["mean"].dropna()
+        if len(peer_vals) < min_peer_pitchers:
+            continue
+        pctl = float(percentileofscore(peer_vals, my_val, kind="rank"))
+        metrics.append((pt, my_val, pctl, ".0f", True))
+    return metrics
+
+
 def _build_pitch_metric_map(pdf, stuff_df=None, cmd_df=None):
     stuff_map = {}
     if isinstance(stuff_df, pd.DataFrame) and not stuff_df.empty and "StuffPlus" in stuff_df.columns:
@@ -1100,31 +1179,66 @@ def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_p
     section_header("Stuff+ & Command+ Grades")
     with st.expander("How does Stuff+ work?"):
         st.markdown("""
-**Stuff+** measures the raw quality of a pitch — how hard it is to hit based purely on its physical shape — independent of where it's thrown.
+**Stuff+** is a shape grade. It answers one question: if we ignore location and sequencing, how hard should this pitch be to hit based on its physical traits alone?
 
-**How the model works:** For every pitch, we feed its physical characteristics (velocity, movement, spin, release point, approach angle) into a cascade of **10 machine learning classifiers** trained on **~3.5 million D1 pitches**. These classifiers predict the full chain of outcomes: does the batter swing? Whiff? Make contact? Hit a single, double, or home run? Each classifier outputs a probability, and those probabilities are combined into an **expected run value** — how many runs that pitch shape is worth to the offense.
+**What goes into it:** velocity, IVB, horizontal break, extension, release traits, spin, and approach angle. The training set is roughly **3.5 million D1 pitches**.
 
-The key step is **location isolation**: we evaluate every pitch shape across a standardized grid of all possible locations and counts, then average the results. This strips out location entirely — a 92 mph fastball with elite ride gets the same Stuff+ whether it's thrown down the middle or at the batter's eyes. What's left is purely the **stuff effect**: how the pitch's physical properties influence outcomes.
+**How the model scores a pitch:** the full PitchSim pipeline estimates the probability chain for swing, whiff, contact quality, and damage, converts that into an expected run value, then averages that pitch shape across a standardized grid of counts and locations. That grid-average step is the key: it removes command, so the grade reflects the pitch's shape rather than where it was thrown.
 
-The final run values are then distilled into fast **XGBoost regressors** (one per batter-side) for real-time scoring. The result is scaled so **100 = D1 average** and **each 10 points = one standard deviation**.
+The production app then uses a distilled runtime model so scoring is fast enough to run live. The final scale is simple:
+- **100 = D1 average**
+- **110 = about one standard deviation better than average**
+- **90 = about one standard deviation worse than average**
 
 **What drives high Stuff+ scores:**
 - **Fastballs** — Ride (induced vertical break), velocity, and vertical approach angle.
-- **Breaking balls** — Total movement (sweep + depth), difference from the fastball's movement profile, and spin efficiency.
-- **Offspeed** — Velocity separation from the fastball and sink.
+- **Breaking balls** — Sweep or cut, depth, spin, and how distinct the shape is from the fastball.
+- **Offspeed** — Velocity separation, sink/fade, and extension.
 
 **What doesn't affect Stuff+:** Location, pitch sequencing, game situation, or batter identity.
+
+**Why the model likes Ed Hall's slider:** the shape is doing the work. At roughly **80.8 mph**, **-5.0" HB**, **-4.3" IVB**, and **2478 rpm**, it has real glove-side movement plus depth and solid spin for a college breaker. That is the kind of slider profile the model tends to reward because it projects more miss and weaker damage even before location is considered.
 """)
 
         st.markdown("**Does Stuff+ predict future performance?**")
-        st.markdown("How well Stuff+ predicts future pitching outcomes compared to 30+ other stats (D1 season-over-season validation):")
+        st.markdown(
+            "Backtest summary: on D1 season-over-season validation, Stuff+ finished near the top of the board against a pool of 29-31 candidate stats. "
+            "That pool included traditional results, bat-missing rates, contact-quality stats, and raw pitch traits."
+        )
         corr_data = {
             "Target": ["Future ERA", "Future FIP", "Future K-BB%"],
-            "IP Threshold": ["40+ IP (n=499)", "60+ IP (n=177)", "20+ IP (n=1,104)"],
+            "Sample": ["40+ IP (n=499)", "60+ IP (n=177)", "20+ IP (n=1,104)"],
             "Stuff+ r": ["-0.278", "-0.279", "+0.321"],
-            "Stuff+ Rank": ["#3 of 31", "#3 of 29", "#4 of 29"],
+            "Rank": ["#3 of 31", "#3 of 29", "#4 of 29"],
+            "Beats": ["28 of 31 stats", "26 of 29 stats", "25 of 29 stats"],
         }
         st.dataframe(pd.DataFrame(corr_data).set_index("Target"), use_container_width=True)
+        st.caption(
+            "Read the rank literally: for future ERA, only two tested stats beat Stuff+. "
+            "For future FIP, only two beat it. For future K-BB%, only three beat it."
+        )
+        st.markdown("**What was in the comparison pool?**")
+        pool_df = pd.DataFrame(
+            {
+                "Family": [
+                    "Run prevention",
+                    "Bat-missing / discipline",
+                    "Contact quality",
+                    "Raw pitch traits",
+                ],
+                "Examples from the tested pool": [
+                    "ERA, FIP, xFIP, WHIP, BB%, HR/9",
+                    "Whiff%, SwStr%, K%, K-BB%, Chase%, Contact%",
+                    "Exit velo, HardHit%, Barrel%, xAVG, xSLG, xwOBA",
+                    "FB velo, spin, IVB, HB, extension",
+                ],
+            }
+        )
+        st.dataframe(pool_df, hide_index=True, use_container_width=True)
+        st.caption(
+            "The exact pool size changes by target, which is why the table above shows 29-31 comparison stats. "
+            "The point of the backtest is that Stuff+ was not just beating one or two weak baselines; it was beating most of the common pitching and pitch-trait stats coaches actually use."
+        )
 
         st.markdown("""
 **How quickly does Stuff+ stabilize?**
@@ -1170,18 +1284,19 @@ The final run values are then distilled into fast **XGBoost regressors** (one pe
     # Stuff+ percentile bars
     if has_stuff:
         all_stuff = _compute_stuff_plus_all(data)
-        if all_stuff is not None and "StuffPlus" in all_stuff.columns:
-            stuff_metrics = []
-            for pt in pitch_types:
-                my_val = stuff_df[stuff_df["TaggedPitchType"] == pt]["StuffPlus"].mean()
-                all_stuff_pt = all_stuff[all_stuff["TaggedPitchType"] == pt]
-                all_pitcher_means = all_stuff_pt.groupby("Pitcher")["StuffPlus"].mean()
-                if len(all_pitcher_means) > 5 and not pd.isna(my_val):
-                    pctl = percentileofscore(all_pitcher_means.dropna(), my_val, kind="rank")
-                    stuff_metrics.append((pt, my_val, pctl, ".0f", True))
-            if stuff_metrics:
-                render_savant_percentile_section(stuff_metrics,
-                                                 title="Stuff+ Percentile Rankings")
+        all_stuff = _filter_pitch_rank_population(all_stuff, season_filter=season_filter, game_mode=game_mode)
+        stuff_metrics = _build_pitch_percentile_metrics(stuff_df, all_stuff, "StuffPlus")
+        stuff_metrics = [row for row in stuff_metrics if row[0] in pitch_types]
+        if stuff_metrics:
+            render_savant_percentile_section(
+                stuff_metrics,
+                title=_pitch_rank_section_title(
+                    "Stuff+ Percentile Rankings",
+                    season_filter=season_filter,
+                    all_seasons=all_seasons,
+                    game_mode=game_mode,
+                ),
+            )
 
 
     # ── Section B: Best Pitch Locations (whiffs, called strikes, weak contact) ──
@@ -1477,6 +1592,55 @@ _METRIC_UNITS = {
 }
 
 
+def _metric_label_for_pitch(pt, metric):
+    if metric == "HorzBreak":
+        return {
+            "Fastball": "Arm-side Run",
+            "Sinker": "Arm-side Run",
+            "Changeup": "Arm-side Fade",
+            "Splitter": "Arm-side Fade",
+            "Cutter": "Cut",
+            "Slider": "Sweep",
+            "Sweeper": "Sweep",
+            "Curveball": "Sweep",
+            "Knuckle Curve": "Sweep",
+        }.get(pt, "Horizontal Break")
+    if metric == "InducedVertBreak":
+        return {
+            "Fastball": "Ride",
+            "Cutter": "Ride",
+            "Sinker": "Sink",
+            "Changeup": "Sink",
+            "Splitter": "Drop",
+            "Slider": "Depth",
+            "Sweeper": "Depth",
+            "Curveball": "Depth",
+            "Knuckle Curve": "Depth",
+        }.get(pt, "IVB")
+    return _METRIC_LABELS.get(metric, metric)
+
+
+def _metric_direction_for_pitch(pt, metric, weight_sign):
+    if metric == "HorzBreak":
+        if pt in {"Fastball", "Sinker"}:
+            return "more arm-side run" if weight_sign > 0 else "less arm-side run"
+        if pt in {"Changeup", "Splitter"}:
+            return "more arm-side fade" if weight_sign > 0 else "less arm-side fade"
+        if pt == "Cutter":
+            return "more cut" if weight_sign < 0 else "less cut"
+        if pt in {"Slider", "Sweeper", "Curveball", "Knuckle Curve"}:
+            return "more sweep" if weight_sign < 0 else "less sweep"
+    if metric == "InducedVertBreak":
+        if pt in {"Fastball", "Cutter"}:
+            return "more ride" if weight_sign > 0 else "less ride"
+        if pt in {"Sinker", "Changeup"}:
+            return "more sink" if weight_sign < 0 else "less sink"
+        if pt in {"Splitter", "Slider", "Sweeper", "Curveball", "Knuckle Curve"}:
+            return "more depth" if weight_sign < 0 else "less depth"
+    label = _metric_label_for_pitch(pt, metric).lower()
+    return f"more {label}" if weight_sign > 0 else f"less {label}"
+
+
 
 def _compute_pitch_recommendations(pdf, data, tunnel_df):
     """For each pitch type, compute actionable improvement suggestions.
@@ -1484,23 +1648,24 @@ def _compute_pitch_recommendations(pdf, data, tunnel_df):
     Returns list of dicts: {pitch, metric, label, current, target, delta,
     direction, unit, tunnel_benefit}
 
-    HorzBreak is handled via absolute values so LHP (negative HB) and RHP
-    (positive HB) are compared on the same scale.  Displayed values are
-    converted back to the pitcher's sign convention.
+    HorzBreak is handedness-adjusted so arm-side movement is positive for both
+    RHP and LHP. Displayed values are converted back to the pitcher's raw sign
+    convention after the pitch-type-specific "good" direction is applied.
     """
     from scipy.stats import percentileofscore as _pctile
 
-    # Stuff+ weights define which direction is "better" for each metric
-    # For HorzBreak the weight sign describes *magnitude* direction after
-    # taking abs(); positive weight → more arm-side run is better.
+    # Stuff+ weights define which direction is "better" for each metric.
+    # For handedness-adjusted HorzBreak:
+    #   positive weight -> more arm-side movement/fade/run is better
+    #   negative weight -> more glove-side movement/cut/sweep is better
     weights = {
         "Fastball":       {"RelSpeed": 2.0, "InducedVertBreak": 2.5, "HorzBreak": 0.3, "Extension": 0.5, "SpinRate": 1.0},
         "Sinker":         {"RelSpeed": 2.5, "InducedVertBreak": -0.5, "HorzBreak": 1.5, "Extension": 0.5, "SpinRate": 0.8},
         "Cutter":         {"RelSpeed": 0.8, "InducedVertBreak": 0.3, "HorzBreak": -1.5, "Extension": -1.0, "SpinRate": 2.0},
-        "Slider":         {"RelSpeed": 1.0, "InducedVertBreak": -0.5, "HorzBreak": 1.0, "Extension": 0.3, "SpinRate": 1.5},
+        "Slider":         {"RelSpeed": 1.0, "InducedVertBreak": -0.5, "HorzBreak": -1.0, "Extension": 0.3, "SpinRate": 1.5},
         "Curveball":      {"RelSpeed": 1.5, "InducedVertBreak": -1.5, "HorzBreak": -1.5, "Extension": -1.5, "SpinRate": 0.5},
         "Changeup":       {"RelSpeed": 0.5, "InducedVertBreak": 1.5, "HorzBreak": 1.0, "Extension": 0.5, "SpinRate": 1.0},
-        "Sweeper":        {"RelSpeed": 1.5, "InducedVertBreak": -1.0, "HorzBreak": 2.0, "Extension": 0.8, "SpinRate": 0.5},
+        "Sweeper":        {"RelSpeed": 1.5, "InducedVertBreak": -1.0, "HorzBreak": -2.0, "Extension": 0.8, "SpinRate": 0.5},
         "Splitter":       {"RelSpeed": 1.0, "InducedVertBreak": -2.0, "HorzBreak": 0.5, "Extension": 1.0, "SpinRate": -0.3},
         "Knuckle Curve":  {"RelSpeed": 1.5, "InducedVertBreak": -1.5, "HorzBreak": -1.5, "Extension": -1.5, "SpinRate": 0.5},
     }
@@ -1623,22 +1788,13 @@ def _compute_pitch_recommendations(pdf, data, tunnel_df):
         # Take top 2 recommendations
         for g in gaps[:2]:
             m = g["metric"]
-            label = _METRIC_LABELS.get(m, m)
+            label = _metric_label_for_pitch(pt, m)
             unit = _METRIC_UNITS.get(m, "")
             current_val = g["current"]
             target_val = g["target"]
             ws = g["weight_sign"]
 
-            # Direction text (hand-aware for HB and clearer for IVB)
-            if m == "InducedVertBreak":
-                direction = "more IVB (more ride)" if ws > 0 else "less IVB (more drop)"
-            elif m == "HorzBreak":
-                direction = "more run" if ws > 0 else "more cut"
-            else:
-                if ws > 0:
-                    direction = f"more {label.lower()}"
-                else:
-                    direction = f"less {label.lower()}"
+            direction = _metric_direction_for_pitch(pt, m, ws)
 
             # For display: convert HorzBreak back to the pitcher's sign convention
             if m == "HorzBreak":
@@ -1934,11 +2090,12 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
         st.markdown("**Top 3 Improvement Targets**")
         for rec in top_recs:
             label = rec.get("label", rec.get("metric", "Metric"))
-            pctl_str = f"{rec['good_pctl']:.0f}th pctl"
+            pctl_str = f"{rec['good_pctl']:.0f}th pctl in the good direction"
             st.markdown(
                 f'<div style="padding:6px 12px;margin:4px 0;font-size:12px;'
                 f'background:#fff8e1;border-radius:4px;border-left:3px solid #f59e0b;">'
-                f'<b>{rec["pitch"]}</b>: {label} — {pctl_str}'
+                f'<b>{rec["pitch"]}</b>: {label} — {pctl_str} '
+                f'({rec["current"]:.1f} {rec["unit"]} now, target {rec["target"]:.1f} {rec["unit"]})'
                 f'</div>', unsafe_allow_html=True)
     else:
         st.markdown(
@@ -2299,15 +2456,11 @@ def _render_scrimmage_grading(data, pitcher, stuff_df):
     # Percentile bars vs D1 population
     all_stuff = _compute_stuff_plus_all(data)
     if all_stuff is not None and "StuffPlus" in all_stuff.columns:
-        stuff_metrics = []
-        for pt in sorted(scrim_scored["TaggedPitchType"].dropna().unique()):
-            my_val = scrim_scored[scrim_scored["TaggedPitchType"] == pt]["StuffPlus"].mean()
-            all_pt = all_stuff[all_stuff["TaggedPitchType"] == pt]
-            all_pitcher_means = all_pt.groupby("Pitcher")["StuffPlus"].mean()
-            if len(all_pitcher_means) > 5 and not pd.isna(my_val):
-                pctl = percentileofscore(all_pitcher_means.dropna(), my_val, kind="rank")
-                label = f"{pt} (NEW)" if pt in new_pitches else pt
-                stuff_metrics.append((label, my_val, pctl, ".0f", True))
+        stuff_metrics = _build_pitch_percentile_metrics(scrim_scored, all_stuff, "StuffPlus")
+        stuff_metrics = [
+            (f"{pt} (NEW)" if pt in new_pitches else pt, val, pct, fmt, hib)
+            for pt, val, pct, fmt, hib in stuff_metrics
+        ]
         if stuff_metrics:
             render_savant_percentile_section(stuff_metrics,
                                              title="Scrimmage Stuff+ vs D1 Population")
@@ -2423,14 +2576,7 @@ def _render_csv_upload(data):
     # Percentile bars vs D1 population
     all_stuff = _compute_stuff_plus_all(data)
     if all_stuff is not None and "StuffPlus" in all_stuff.columns:
-        stuff_metrics = []
-        for pt in sorted(scored["TaggedPitchType"].dropna().unique()):
-            my_val = scored[scored["TaggedPitchType"] == pt]["StuffPlus"].mean()
-            all_pt = all_stuff[all_stuff["TaggedPitchType"] == pt]
-            all_pitcher_means = all_pt.groupby("Pitcher")["StuffPlus"].mean()
-            if len(all_pitcher_means) > 5 and not pd.isna(my_val):
-                pctl = percentileofscore(all_pitcher_means.dropna(), my_val, kind="rank")
-                stuff_metrics.append((pt, my_val, pctl, ".0f", True))
+        stuff_metrics = _build_pitch_percentile_metrics(scored, all_stuff, "StuffPlus")
         if stuff_metrics:
             render_savant_percentile_section(stuff_metrics,
                                              title="Uploaded Stuff+ vs D1 Population")
@@ -2478,8 +2624,9 @@ def _render_improvement_lab(stuff_df, pitcher, data):
         st.info(f"Need at least 5 pitches of {sel_pt} for analysis (have {len(pt_data)}).")
         return
 
-    # Load the model artifact (perturbation requires the full PitchSim model)
+    # Load the model artifact
     from analytics.stuff_plus import _load_stuff_model, _MODEL_PATH
+    from analytics.pitchsim_stuff import _DISTILL_FEATURES, pitchsim_artifact_has_full_cascade
     artifact = _load_stuff_model()
     if artifact is None:
         st.warning(f"Stuff+ model not available for perturbation analysis. "
@@ -2491,6 +2638,8 @@ def _render_improvement_lab(stuff_df, pitcher, data):
         st.info("Perturbation analysis requires the PitchSim Stuff+ model.")
         return
 
+    distilled_models = artifact.get("distilled_models", {})
+    feature_cols = artifact.get("features", _DISTILL_FEATURES)
     vaa_models = artifact.get("vaa_models")
     pt_stats = artifact.get("pt_stats", {})
 
@@ -2503,14 +2652,20 @@ def _render_improvement_lab(stuff_df, pitcher, data):
     context_distributions = artifact.get("context_distributions", {})
     run_value_table = artifact.get("run_value_table")
 
-    has_full_cascade = all(x is not None for x in [
-        event_models, cluster_scaler, cluster_model,
-        weight_vec, run_value_table,
-    ]) and len(cluster_cols) > 0 and len(context_distributions) > 0
-    if not has_full_cascade:
-        st.warning("Full Stuff+ model not available for perturbation analysis. "
-                   "The model artifact may need to be retrained.")
+    required_distilled = [
+        "StuffRV_vsR", "StuffRV_vsL",
+        "StuffWhiff_vsR", "StuffWhiff_vsL",
+        "StuffCalledStrike_vsR", "StuffCalledStrike_vsL",
+        "StuffBall_vsR", "StuffBall_vsL",
+        "StuffHomeRun_vsR", "StuffHomeRun_vsL",
+        "StuffDamage_vsR", "StuffDamage_vsL",
+    ]
+    if any(k not in distilled_models for k in required_distilled):
+        st.warning("Stuff+ runtime models are not available for perturbation analysis.")
         return
+    has_full_cascade = pitchsim_artifact_has_full_cascade(artifact)
+    if not has_full_cascade:
+        st.caption("Using the runtime Stuff+ model for perturbation analysis. Results are directionally useful even without the full training cascade.")
 
     # Component model keys for per-component breakdown
     _COMPONENT_KEYS = [
@@ -2520,7 +2675,7 @@ def _render_improvement_lab(stuff_df, pitcher, data):
         ("StuffHomeRun", "Home Run"),
         ("StuffDamage", "Damage"),
     ]
-    has_components = True  # Full cascade always produces all components
+    has_components = True
 
     # Build mean feature vector for this pitch type
     from analytics.pitchsim_stuff import (
@@ -2573,11 +2728,42 @@ def _render_improvement_lab(stuff_df, pitcher, data):
             return None
         return prepared.iloc[0:1].copy()
 
+    def _score_distilled(prepared):
+        pred = prepared.copy()
+        for col in feature_cols:
+            if col not in pred.columns:
+                pred[col] = np.nan
+        if pred[feature_cols].isna().any(axis=None):
+            return None
+        X = pred[feature_cols].astype(np.float32)
+        rv_r = float(distilled_models["StuffRV_vsR"].predict(X)[0])
+        rv_l = float(distilled_models["StuffRV_vsL"].predict(X)[0])
+        whiff_r = float(distilled_models["StuffWhiff_vsR"].predict(X)[0])
+        whiff_l = float(distilled_models["StuffWhiff_vsL"].predict(X)[0])
+        cs_r = float(distilled_models["StuffCalledStrike_vsR"].predict(X)[0])
+        cs_l = float(distilled_models["StuffCalledStrike_vsL"].predict(X)[0])
+        ball_r = float(distilled_models["StuffBall_vsR"].predict(X)[0])
+        ball_l = float(distilled_models["StuffBall_vsL"].predict(X)[0])
+        hr_r = float(distilled_models["StuffHomeRun_vsR"].predict(X)[0])
+        hr_l = float(distilled_models["StuffHomeRun_vsL"].predict(X)[0])
+        damage_r = float(distilled_models["StuffDamage_vsR"].predict(X)[0])
+        damage_l = float(distilled_models["StuffDamage_vsL"].predict(X)[0])
+        return {
+            "StuffRV": 0.5 * (rv_r + rv_l),
+            "StuffWhiff": 0.5 * (whiff_r + whiff_l),
+            "StuffCalledStrike": 0.5 * (cs_r + cs_l),
+            "StuffBall": 0.5 * (ball_r + ball_l),
+            "StuffHomeRun": 0.5 * (hr_r + hr_l),
+            "StuffDamage": 0.5 * (damage_r + damage_l),
+        }
+
     def _score_full(prepared):
-        """Score via full 10-classifier cascade → dict with StuffRV + components."""
+        """Score via full 10-classifier cascade when available; otherwise use distilled runtime models."""
+        if not has_full_cascade:
+            return _score_distilled(prepared)
         missing_cl = [c for c in _CLUSTER_FEATURES if c not in prepared.columns]
         if missing_cl:
-            return None
+            return _score_distilled(prepared)
         X_cl = prepared[_CLUSTER_FEATURES].astype(np.float32)
         X_sc = cluster_scaler.transform(X_cl)
         X_w = X_sc * weight_vec
@@ -2594,7 +2780,7 @@ def _render_improvement_lab(stuff_df, pitcher, data):
             event_models, run_value_table, batch_size=1,
         )
         if result.empty:
-            return None
+            return _score_distilled(prepared)
         return {
             "StuffRV": float(result["StuffRV"].iloc[0]),
             "StuffWhiff": float(result["StuffWhiff"].iloc[0]),
@@ -2958,18 +3144,19 @@ def _pitching_lab_content(data, pitcher, season_filter, pdf, stuff_df,
         # xWhiff Stuff+ percentile bars
         if "xWhiffPlus" in stuff_df.columns:
             all_xwhiff = _compute_xwhiff_all(data)
-            if "xWhiffPlus" in all_xwhiff.columns:
-                section_header("xWhiff Stuff+ Percentile Rankings (vs All Pitchers in Database)")
-                xwhiff_metrics = []
-                for pt in arsenal_summary.index:
-                    my_val = stuff_df[stuff_df["TaggedPitchType"] == pt]["xWhiffPlus"].mean()
-                    all_xwhiff_pt = all_xwhiff[all_xwhiff["TaggedPitchType"] == pt]
-                    all_pitcher_means = all_xwhiff_pt.groupby("Pitcher")["xWhiffPlus"].mean()
-                    if len(all_pitcher_means) > 5 and not pd.isna(my_val):
-                        pctl = percentileofscore(all_pitcher_means.dropna(), my_val, kind="rank")
-                        xwhiff_metrics.append((pt, my_val, pctl, ".0f", True))
-                if xwhiff_metrics:
-                    render_savant_percentile_section(xwhiff_metrics)
+            all_xwhiff = _filter_pitch_rank_population(all_xwhiff, season_filter=season_filter, game_mode=game_mode)
+            xwhiff_metrics = _build_pitch_percentile_metrics(stuff_df, all_xwhiff, "xWhiffPlus")
+            xwhiff_metrics = [row for row in xwhiff_metrics if row[0] in arsenal_summary.index]
+            if xwhiff_metrics:
+                render_savant_percentile_section(
+                    xwhiff_metrics,
+                    title=_pitch_rank_section_title(
+                        "xWhiff Stuff+ Percentile Rankings",
+                        season_filter=season_filter,
+                        all_seasons=all_seasons,
+                        game_mode=game_mode,
+                    ),
+                )
 
         # Stuff+ distribution violin plot
         section_header("Stuff+ Distribution by Pitch")
