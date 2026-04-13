@@ -1120,7 +1120,18 @@ def _pitching_overview(data, pitcher, season_filter, pdf, pdf_raw, pr, all_pitch
 
 
 
-def _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher_stats, cmd_df=None):
+def _pitcher_card_content(
+    data,
+    pitcher,
+    season_filter,
+    all_seasons,
+    game_mode,
+    pdf,
+    stuff_df,
+    pr,
+    all_pitcher_stats,
+    cmd_df=None,
+):
     """Render a single-page Pitcher Card with arsenal, locations, tunnels,
     sequences, and platoon splits."""
     all_stats = all_pitcher_stats
@@ -3072,7 +3083,18 @@ def page_pitching(data):
 
     tab_card, tab_lab, tab_stuff_lab = st.tabs(["Pitcher Card", "Pitch Lab", "Stuff+ Lab"])
     with tab_card:
-        _pitcher_card_content(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher_stats, cmd_df=cmd_df)
+        _pitcher_card_content(
+            data,
+            pitcher,
+            season_filter,
+            all_seasons,
+            game_mode,
+            pdf,
+            stuff_df,
+            pr,
+            all_pitcher_stats,
+            cmd_df=cmd_df,
+        )
     with tab_lab:
         _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher_stats, cmd_df=cmd_df)
     with tab_stuff_lab:
@@ -3081,9 +3103,21 @@ def page_pitching(data):
 
 
 
-def _pitching_lab_content(data, pitcher, season_filter, pdf, stuff_df,
-                          tab_stuff, tab_tunnel, tab_seq, tab_loc,
-                          tab_sim, tab_cmd):
+def _pitching_lab_content(
+    data,
+    pitcher,
+    season_filter,
+    all_seasons,
+    game_mode,
+    pdf,
+    stuff_df,
+    tab_stuff,
+    tab_tunnel,
+    tab_seq,
+    tab_loc,
+    tab_sim,
+    tab_cmd,
+):
     """Render the Pitch Design Lab tabs. Called from page_pitching()."""
     if stuff_df is None or "StuffPlus" not in stuff_df.columns:
         with tab_stuff:
