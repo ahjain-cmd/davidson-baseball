@@ -3,6 +3,7 @@ __pycache__/
 .DS_Store
 .cache/
 *.parquet
+!models/stuff_plus_population_2025.parquet
 *.duckdb
 app_monolith.py
 v3/

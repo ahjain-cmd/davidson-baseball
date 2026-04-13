@@ -23,8 +23,13 @@ import pandas as pd
 from config import PITCH_TYPE_MAP, PITCH_TYPES_TO_DROP
 
 
-_ARTIFACT_VERSION = "d1_pitchsim_lite_v4"
+_ARTIFACT_VERSION = "d1_pitchsim_lite_v5"
 _D1_LEVEL = "D1"
+_DISPLAY_REFERENCE_SEASON = 2025
+_DISPLAY_STUFF_CENTER = 95.0
+_DISPLAY_STUFF_SCALE = 10.0
+_DISPLAY_VSR_WEIGHT = 0.6
+_DISPLAY_VSL_WEIGHT = 0.4
 
 _MODEL_PITCH_TYPE_MAP = {
     src: dst
@@ -183,6 +188,55 @@ _DISTILL_FEATURES = [
     "PitcherThrows_enc",
     "pitch_type_enc",
 ]
+
+_BASIC_ARTIFACT_KEYS = (
+    "features",
+    "distilled_models",
+    "pt_stats",
+    "fip_pt_stats",
+)
+
+_FULL_CASCADE_ARTIFACT_KEYS = (
+    "event_models",
+    "loc_pt_stats",
+    "run_value_table",
+    "cluster_scaler",
+    "cluster_model",
+    "cluster_weight_vector",
+    "cluster_cols",
+    "context_distributions",
+)
+
+
+def _artifact_value_present(value: object) -> bool:
+    if value is None:
+        return False
+    try:
+        return len(value) > 0  # type: ignore[arg-type]
+    except Exception:
+        return True
+
+
+def pitchsim_artifact_missing_keys(
+    artifact: Optional[dict],
+    require_full_cascade: bool = False,
+) -> List[str]:
+    if not isinstance(artifact, dict) or artifact.get("artifact_type") != "pitchsim_lite":
+        return []
+    required = list(_BASIC_ARTIFACT_KEYS)
+    if require_full_cascade:
+        required.extend(_FULL_CASCADE_ARTIFACT_KEYS)
+    missing = [key for key in required if not _artifact_value_present(artifact.get(key))]
+
+    event_models = artifact.get("event_models") or {}
+    if require_full_cascade and "event_models" not in missing:
+        if not isinstance(event_models, dict) or not _artifact_value_present(event_models.get("event_features")):
+            missing.append("event_models")
+    return sorted(set(missing))
+
+
+def pitchsim_artifact_has_full_cascade(artifact: Optional[dict]) -> bool:
+    return len(pitchsim_artifact_missing_keys(artifact, require_full_cascade=True)) == 0
 
 
 def _safe_corr(a: Sequence[float], b: Sequence[float]) -> float:
@@ -1250,8 +1304,10 @@ def _predict_terminal_probabilities(X: pd.DataFrame, event_models: Dict[str, obj
     swing = _predict_binary_prob(event_models.get("swing"), X)
     whiff_given_swing = _predict_binary_prob(event_models.get("whiff_given_swing"), X)
     called_strike_given_take = _predict_binary_prob(event_models.get("called_strike_given_take"), X)
-    ball_given_take = _predict_binary_prob(event_models.get("ball_given_take"), X)
-    hbp_given_take = _predict_binary_prob(event_models.get("hbp_given_take"), X)
+    hbp_given_noncall_take = _predict_binary_prob(
+        event_models.get("hbp_given_noncall_take", event_models.get("hbp_given_take")),
+        X,
+    )
     inplay_given_contact = _predict_binary_prob(event_models.get("inplay_given_contact"), X)
     single_given_inplay = _predict_binary_prob(event_models.get("single_given_inplay"), X)
     double_given_inplay = _predict_binary_prob(event_models.get("double_given_inplay"), X)
@@ -1259,10 +1315,12 @@ def _predict_terminal_probabilities(X: pd.DataFrame, event_models: Dict[str, obj
     home_run_given_inplay = _predict_binary_prob(event_models.get("home_run_given_inplay"), X)
 
     take = np.clip(1.0 - swing, 0.0, 1.0)
-    take_probs = np.column_stack([called_strike_given_take, ball_given_take, hbp_given_take]).astype(np.float32)
-    take_sum = take_probs.sum(axis=1, keepdims=True)
-    take_scale = np.where(take_sum > 1.0, take_sum, 1.0)
-    take_probs = take_probs / np.maximum(take_scale, 1e-12)
+    called_strike_given_take = np.clip(called_strike_given_take, 0.0, 1.0)
+    hbp_given_noncall_take = np.clip(hbp_given_noncall_take, 0.0, 1.0)
+    callstr = take * called_strike_given_take
+    take_after_call = np.clip(take - callstr, 0.0, 1.0)
+    hbp = take_after_call * hbp_given_noncall_take
+    ball = np.clip(take_after_call - hbp, 0.0, 1.0)
 
     whiff = swing * whiff_given_swing
     contact = swing * np.clip(1.0 - whiff_given_swing, 0.0, 1.0)
@@ -1288,9 +1346,9 @@ def _predict_terminal_probabilities(X: pd.DataFrame, event_models: Dict[str, obj
     x_home_run = inplay * hit_probs[:, 3]
     damage = (x_single + 2.0 * x_double + 3.0 * x_triple + 4.0 * x_home_run) / 4.0
     return {
-        "callstr": take * take_probs[:, 0],
-        "ball": take * take_probs[:, 1],
-        "hbp": take * take_probs[:, 2],
+        "callstr": callstr,
+        "ball": ball,
+        "hbp": hbp,
         "swstr": whiff,
         "foul": foul,
         "out": inplay_out,
@@ -1402,7 +1460,11 @@ def _fit_event_models(
     _fit_binary("whiff_given_swing", full[full["is_swing"] == 1], "is_whiff")
     _fit_binary("called_strike_given_take", full[full["is_take"] == 1], "is_called_strike")
     _fit_binary("ball_given_take", full[full["is_take"] == 1], "is_ball")
-    _fit_binary("hbp_given_take", full[full["is_take"] == 1], "is_hbp")
+    _fit_binary(
+        "hbp_given_noncall_take",
+        full[(full["is_take"] == 1) & (full["is_called_strike"] == 0)],
+        "is_hbp",
+    )
     _fit_binary("inplay_given_contact", full[full["is_contact"] == 1], "is_inplay")
     _fit_binary("single_given_inplay", full[full["is_inplay"] == 1], "is_single")
     _fit_binary("double_given_inplay", full[full["is_inplay"] == 1], "is_double")
@@ -1617,6 +1679,84 @@ def _population_stats_from_values(
     return pt_stats
 
 
+def _blend_display_stuff_rv(rv_r: np.ndarray, rv_l: np.ndarray) -> np.ndarray:
+    return (_DISPLAY_VSR_WEIGHT * np.asarray(rv_r, dtype=float)) + (
+        _DISPLAY_VSL_WEIGHT * np.asarray(rv_l, dtype=float)
+    )
+
+
+def _display_group_columns(df: pd.DataFrame) -> List[str]:
+    cols: List[str] = []
+    if "Pitcher" in df.columns:
+        cols.append("Pitcher")
+    if "Season" in df.columns and df["Season"].notna().any():
+        cols.append("Season")
+    cols.append("TaggedPitchType")
+    return cols
+
+
+def _display_stats_from_population(pop_df: pd.DataFrame) -> Dict[str, Tuple[float, float]]:
+    stats: Dict[str, Tuple[float, float]] = {}
+    if pop_df is None or pop_df.empty or "StuffRV100" not in pop_df.columns:
+        return stats
+    work = pop_df.dropna(subset=["TaggedPitchType", "StuffRV100"]).copy()
+    if work.empty:
+        return stats
+    for pt, sub in work.groupby("TaggedPitchType", observed=False):
+        vals = pd.to_numeric(sub["StuffRV100"], errors="coerce").dropna().to_numpy(dtype=float)
+        if vals.size < 25:
+            continue
+        sigma = float(np.std(vals))
+        if not np.isfinite(sigma) or sigma <= 0:
+            continue
+        stats[str(pt)] = (float(np.mean(vals)), sigma)
+    vals = pd.to_numeric(work["StuffRV100"], errors="coerce").dropna().to_numpy(dtype=float)
+    if vals.size:
+        stats["__global__"] = (float(np.mean(vals)), float(np.std(vals)))
+    return stats
+
+
+def _apply_display_stuff_plus(
+    df: pd.DataFrame,
+    valid_mask: pd.Series,
+    display_rv100: np.ndarray,
+    display_pt_stats: Optional[Dict[str, Tuple[float, float]]],
+) -> pd.Series:
+    scores = pd.Series(np.nan, index=df.index, dtype=float)
+    if not display_pt_stats:
+        return scores
+
+    group_cols = _display_group_columns(df)
+    sub = df.loc[valid_mask, group_cols].copy()
+    if sub.empty:
+        return scores
+    sub["_row_idx"] = sub.index
+    sub["StuffRV100"] = np.asarray(display_rv100, dtype=float)
+
+    grouped = (
+        sub.groupby(group_cols, observed=False)
+        .agg(StuffRV100=("StuffRV100", "mean"))
+        .reset_index()
+    )
+    grouped["StuffPlus"] = np.nan
+
+    global_mu, global_sigma = display_pt_stats.get("__global__", (0.0, 1.0))
+    if not np.isfinite(global_sigma) or global_sigma <= 0:
+        global_sigma = 1.0
+
+    for pt in grouped["TaggedPitchType"].dropna().unique():
+        mask = grouped["TaggedPitchType"] == pt
+        mu, sigma = display_pt_stats.get(str(pt), (global_mu, global_sigma))
+        if not np.isfinite(sigma) or sigma <= 0:
+            sigma = global_sigma
+        z = (grouped.loc[mask, "StuffRV100"].astype(float) - mu) / sigma
+        grouped.loc[mask, "StuffPlus"] = _DISPLAY_STUFF_CENTER + (-z) * _DISPLAY_STUFF_SCALE
+
+    sub = sub.merge(grouped[group_cols + ["StuffPlus"]], on=group_cols, how="left")
+    scores.loc[sub["_row_idx"].to_numpy()] = sub["StuffPlus"].to_numpy(dtype=float)
+    return scores
+
+
 def _compute_population_stats(
     df: pd.DataFrame,
     distilled_models: Dict[str, object],
@@ -1647,6 +1787,145 @@ def _compute_population_stats(
         damage=0.5 * (damage_r + damage_l),
     )
     return _population_stats_from_values(pitch_types, overall), _population_stats_from_values(pitch_types, fip_raw)
+
+
+def build_pitchsim_display_population(
+    parquet_path: str,
+    artifact: dict,
+    season: int = _DISPLAY_REFERENCE_SEASON,
+    chunk_count: int = 16,
+) -> pd.DataFrame:
+    import duckdb
+
+    models = artifact.get("distilled_models", {})
+    feature_cols = artifact.get("features", _DISTILL_FEATURES)
+    vaa_models = artifact.get("vaa_models")
+    if not models:
+        return pd.DataFrame()
+
+    pt_sql = _normalized_pitch_type_sql("TaggedPitchType")
+    key_sql = (
+        "COALESCE(CAST(PitchUID AS VARCHAR), "
+        "GameID || ':' || CAST(Inning AS VARCHAR) || ':' || CAST(PAofInning AS VARCHAR) || ':' || "
+        "CAST(PitchNo AS VARCHAR) || ':' || Pitcher || ':' || COALESCE(Batter, ''))"
+    )
+    base_query = f"""
+        SELECT
+            PitchUID,
+            GameID,
+            Inning,
+            PAofInning,
+            PitchNo,
+            Pitcher,
+            Batter,
+            YEAR(Date) AS Season,
+            CASE WHEN PitcherThrows IN ('Left', 'L') THEN 'L' ELSE 'R' END AS PitcherThrows,
+            CASE WHEN BatterSide IN ('Left', 'L') THEN 'L' ELSE 'R' END AS BatterSide,
+            Balls,
+            Strikes,
+            PitchCall,
+            PlayResult,
+            TaggedHitType,
+            KorBB,
+            RelSpeed,
+            InducedVertBreak,
+            HorzBreak,
+            Extension,
+            RelHeight,
+            RelSide,
+            VertApprAngle,
+            PlateLocHeight,
+            PlateLocSide,
+            SpinRate,
+            SpinAxis,
+            ExitSpeed,
+            Angle,
+            Distance,
+            vx0,
+            vy0,
+            vz0,
+            ax0,
+            ay0,
+            az0,
+            {pt_sql} AS TaggedPitchType
+        FROM read_parquet('{parquet_path}')
+        WHERE Level = '{_D1_LEVEL}'
+          AND YEAR(Date) = {int(season)}
+          AND PitchCall IS NOT NULL
+          AND TaggedPitchType IS NOT NULL
+          AND Pitcher IS NOT NULL
+          AND PitcherThrows IS NOT NULL
+          AND BatterSide IS NOT NULL
+          AND RelSpeed IS NOT NULL
+          AND InducedVertBreak IS NOT NULL
+          AND HorzBreak IS NOT NULL
+          AND Extension IS NOT NULL
+          AND RelHeight IS NOT NULL
+          AND RelSide IS NOT NULL
+          AND PlateLocHeight IS NOT NULL
+          AND PlateLocSide IS NOT NULL
+    """
+
+    con = duckdb.connect(":memory:")
+    parts: List[pd.DataFrame] = []
+    for chunk in range(int(chunk_count)):
+        sql = f"""
+            WITH base AS ({base_query})
+            SELECT *
+            FROM base
+            WHERE TaggedPitchType IS NOT NULL
+              AND TaggedPitchType NOT IN ('Undefined', 'Other', 'Knuckleball')
+              AND ABS(HASH({key_sql})) % {int(chunk_count)} = {chunk}
+        """
+        raw = con.execute(sql).fetchdf()
+        if raw.empty:
+            continue
+        df = _prepare_pitchsim_frame(raw, vaa_models=vaa_models)
+        if df is None or df.empty:
+            continue
+        for col in feature_cols:
+            if col not in df.columns:
+                df[col] = np.nan
+        valid = df[list(feature_cols)].notna().all(axis=1) & df["TaggedPitchType"].notna()
+        if not valid.any():
+            continue
+        X = df.loc[valid, list(feature_cols)].astype(np.float32)
+        rv_r = models["StuffRV_vsR"].predict(X)
+        rv_l = models["StuffRV_vsL"].predict(X)
+        display_rv100 = _blend_display_stuff_rv(rv_r, rv_l) * 100.0
+        group_cols = _display_group_columns(df)
+        part = (
+            df.loc[valid, group_cols]
+            .assign(PitchCount=1, StuffRV100=np.asarray(display_rv100, dtype=float))
+            .groupby(group_cols, observed=False)
+            .agg(PitchCount=("PitchCount", "sum"), StuffRV100Sum=("StuffRV100", "sum"))
+            .reset_index()
+        )
+        parts.append(part)
+
+    con.close()
+    if not parts:
+        return pd.DataFrame()
+
+    pop = pd.concat(parts, ignore_index=True)
+    group_cols = [c for c in pop.columns if c not in {"PitchCount", "StuffRV100Sum"}]
+    pop = pop.groupby(group_cols, observed=False).sum().reset_index()
+    pop["StuffRV100"] = pop["StuffRV100Sum"] / pop["PitchCount"]
+    pop = pop.drop(columns=["StuffRV100Sum"])
+
+    pt_stats = _display_stats_from_population(pop)
+    pop["StuffPlus"] = np.nan
+    global_mu, global_sigma = pt_stats.get("__global__", (0.0, 1.0))
+    if not np.isfinite(global_sigma) or global_sigma <= 0:
+        global_sigma = 1.0
+    for pt in pop["TaggedPitchType"].dropna().unique():
+        mask = pop["TaggedPitchType"] == pt
+        mu, sigma = pt_stats.get(str(pt), (global_mu, global_sigma))
+        if not np.isfinite(sigma) or sigma <= 0:
+            sigma = global_sigma
+        z = (pop.loc[mask, "StuffRV100"].astype(float) - mu) / sigma
+        pop.loc[mask, "StuffPlus"] = _DISPLAY_STUFF_CENTER + (-z) * _DISPLAY_STUFF_SCALE
+    return pop
 
 
 def _compute_location_rv_stats(
@@ -1704,7 +1983,7 @@ def _compute_location_rv_stats(
         X_event = X_event[event_features].astype(np.float32)
 
         terminal_probs = _predict_terminal_probabilities(X_event, event_models)
-        rv = _expected_run_value(terminal_probs, run_value_table, balls, strikes)
+        rv = _expected_run_value(terminal_probs, _run_value_lookup(run_value_table), balls, strikes)
         full_rv_sides.append(rv)
 
     sub["FullRV"] = 0.5 * (full_rv_sides[0] + full_rv_sides[1])
@@ -1843,9 +2122,17 @@ def train_pitchsim_stuff_model(parquet_path: str, model_path: str) -> None:
         "weight_metrics": weight_metrics,
         "distill_metrics": distill_metrics,
         "pitch_type_labels": _PITCH_TYPE_LABELS,
+        "full_cascade_ready": True,
     }
     os.makedirs(os.path.dirname(model_path), exist_ok=True)
     joblib.dump(artifact, model_path, compress=3)
+    saved_artifact = joblib.load(model_path)
+    if not pitchsim_artifact_has_full_cascade(saved_artifact):
+        missing = ", ".join(pitchsim_artifact_missing_keys(saved_artifact, require_full_cascade=True))
+        raise RuntimeError(
+            "Saved PitchSim artifact is incomplete after reload; missing full-cascade keys: "
+            f"{missing}"
+        )
     print(f"  Saved D1 PitchSim-style Stuff+ artifact to {model_path}")
 
 
@@ -1963,6 +2250,7 @@ def compute_pitchsim_stuff_plus(data: pd.DataFrame, artifact: dict) -> pd.DataFr
     vaa_models = artifact.get("vaa_models")
     pt_stats = artifact.get("pt_stats", {})
     fip_pt_stats = artifact.get("fip_pt_stats", {})
+    display_pt_stats = artifact.get("display_pt_stats", {})
 
     df = _prepare_pitchsim_frame(data, vaa_models=vaa_models)
     if df is None or len(df) == 0:
@@ -2035,20 +2323,28 @@ def compute_pitchsim_stuff_plus(data: pd.DataFrame, artifact: dict) -> pd.DataFr
         home_run=df.loc[valid, "StuffHomeRun"].to_numpy(dtype=float),
         damage=df.loc[valid, "StuffDamage"].to_numpy(dtype=float),
     )
-    df["StuffRV100"] = df["StuffRV"] * 100.0
+    display_rv100 = _blend_display_stuff_rv(rv_r, rv_l) * 100.0
+    df["StuffRV100"] = np.nan
+    df.loc[valid, "StuffRV100"] = display_rv100
     df["StuffFIPRV100"] = df["StuffFIPRV"] * 100.0
 
-    stuff_scores = pd.Series(np.nan, index=df.index, dtype=float)
-    global_mu, global_sigma = pt_stats.get("__global__", (0.0, 1.0))
-    if not np.isfinite(global_sigma) or global_sigma <= 0:
-        global_sigma = 1.0
-    for pt in df.loc[valid, "TaggedPitchType"].unique():
-        mask = df["TaggedPitchType"] == pt
-        mu, sigma = pt_stats.get(str(pt), (global_mu, global_sigma))
-        if not np.isfinite(sigma) or sigma <= 0:
-            sigma = global_sigma
-        z = (df.loc[mask, "StuffRV"].astype(float) - mu) / sigma
-        stuff_scores.loc[mask] = 100.0 + (-z) * 10.0
+    stuff_scores = _apply_display_stuff_plus(
+        df,
+        valid_mask=valid,
+        display_rv100=display_rv100,
+        display_pt_stats=display_pt_stats,
+    )
+    if stuff_scores.notna().sum() == 0:
+        global_mu, global_sigma = pt_stats.get("__global__", (0.0, 1.0))
+        if not np.isfinite(global_sigma) or global_sigma <= 0:
+            global_sigma = 1.0
+        for pt in df.loc[valid, "TaggedPitchType"].unique():
+            mask = df["TaggedPitchType"] == pt
+            mu, sigma = pt_stats.get(str(pt), (global_mu, global_sigma))
+            if not np.isfinite(sigma) or sigma <= 0:
+                sigma = global_sigma
+            z = (df.loc[mask, "StuffRV"].astype(float) - mu) / sigma
+            stuff_scores.loc[mask] = 100.0 + (-z) * 10.0
     df["StuffPlus"] = stuff_scores
 
     fip_scores = pd.Series(np.nan, index=df.index, dtype=float)
@@ -2136,7 +2432,7 @@ def compute_pitchsim_command_plus(data: pd.DataFrame, artifact: dict) -> pd.Data
         X_event = X_event[event_features].astype(np.float32)
 
         terminal_probs = _predict_terminal_probabilities(X_event, event_models)
-        rv = _expected_run_value(terminal_probs, run_value_table, balls, strikes)
+        rv = _expected_run_value(terminal_probs, _run_value_lookup(run_value_table), balls, strikes)
         full_rv_sides.append(rv)
 
     full_rv = 0.5 * (full_rv_sides[0] + full_rv_sides[1])

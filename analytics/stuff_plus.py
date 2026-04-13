@@ -21,7 +21,10 @@ from config import PITCH_TYPE_MAP, PITCH_TYPES_TO_DROP, normalize_pitch_types
 _APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _MODEL_DIR = os.path.join(_APP_DIR, "models")
 _MODEL_PATH = os.path.join(_MODEL_DIR, "stuff_plus_xgb.joblib")
+_DISPLAY_POP_PATH = os.path.join(_MODEL_DIR, "stuff_plus_population_2025.parquet")
 _XWHIFF_MODEL_PATH = os.path.join(_MODEL_DIR, "xwhiff_models.joblib")
+_DISPLAY_POP_CACHE: Optional[pd.DataFrame] = None
+_DISPLAY_STATS_CACHE: Optional[Dict[str, Tuple[float, float]]] = None
 
 # The app-wide normalizer merges Sweepers into Sliders and Knuckle Curves into
 # Curveballs. The trained XGBoost artifacts keep those pitch types separate, so
@@ -79,6 +82,43 @@ def _normalize_model_pitch_types(data: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _load_pitchsim_display_population() -> pd.DataFrame:
+    global _DISPLAY_POP_CACHE
+    if _DISPLAY_POP_CACHE is not None:
+        return _DISPLAY_POP_CACHE.copy()
+    if not os.path.exists(_DISPLAY_POP_PATH):
+        _DISPLAY_POP_CACHE = pd.DataFrame()
+        return _DISPLAY_POP_CACHE.copy()
+    try:
+        _DISPLAY_POP_CACHE = pd.read_parquet(_DISPLAY_POP_PATH)
+    except Exception:
+        _DISPLAY_POP_CACHE = pd.DataFrame()
+    return _DISPLAY_POP_CACHE.copy()
+
+
+def _load_pitchsim_display_stats() -> Dict[str, Tuple[float, float]]:
+    global _DISPLAY_STATS_CACHE
+    if _DISPLAY_STATS_CACHE is not None:
+        return dict(_DISPLAY_STATS_CACHE)
+    pop = _load_pitchsim_display_population()
+    stats: Dict[str, Tuple[float, float]] = {}
+    if not pop.empty and {"TaggedPitchType", "StuffRV100"}.issubset(pop.columns):
+        work = pop.dropna(subset=["TaggedPitchType", "StuffRV100"]).copy()
+        for pt, sub in work.groupby("TaggedPitchType", observed=False):
+            vals = pd.to_numeric(sub["StuffRV100"], errors="coerce").dropna().to_numpy(dtype=float)
+            if vals.size < 25:
+                continue
+            sigma = float(np.std(vals))
+            if not np.isfinite(sigma) or sigma <= 0:
+                continue
+            stats[str(pt)] = (float(np.mean(vals)), sigma)
+        vals = pd.to_numeric(work["StuffRV100"], errors="coerce").dropna().to_numpy(dtype=float)
+        if vals.size:
+            stats["__global__"] = (float(np.mean(vals)), float(np.std(vals)))
+    _DISPLAY_STATS_CACHE = stats
+    return dict(_DISPLAY_STATS_CACHE)
+
+
 # =============================================================================
 #  XGBoost Stuff+ training
 # =============================================================================
@@ -101,10 +141,26 @@ def _load_stuff_model():
     if not os.path.exists(_MODEL_PATH):
         return None
     import joblib
+    import warnings
     try:
-        return joblib.load(_MODEL_PATH)
+        artifact = joblib.load(_MODEL_PATH)
+        if artifact.get("artifact_type") == "pitchsim_lite":
+            from analytics.pitchsim_stuff import pitchsim_artifact_missing_keys
+
+            artifact = dict(artifact)
+            missing = pitchsim_artifact_missing_keys(artifact, require_full_cascade=True)
+            if missing:
+                warnings.warn(
+                    "PitchSim Stuff+ artifact is missing full-cascade keys "
+                    f"({', '.join(missing)}). Stuff+ scoring will still run, but "
+                    "PitchSim Command+/perturbation analysis requires retraining.",
+                    RuntimeWarning,
+                )
+            display_stats = _load_pitchsim_display_stats()
+            if display_stats:
+                artifact["display_pt_stats"] = display_stats
+        return artifact
     except Exception as e:
-        import warnings
         warnings.warn(f"Failed to load Stuff+ model from {_MODEL_PATH}: {e}")
         return None
 

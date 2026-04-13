@@ -23,7 +23,7 @@ from viz.charts import (
     _add_grid_zone_outline,
 )
 from viz.percentiles import savant_color, render_savant_percentile_section
-from analytics.stuff_plus import _compute_stuff_plus
+from analytics.stuff_plus import _compute_stuff_plus, _load_pitchsim_display_population
 from analytics.tunnel import _compute_tunnel_score, _build_tunnel_population, _load_tunnel_benchmarks
 from analytics.command_plus import _compute_command_plus, _compute_pitch_pair_results
 from analytics.expected import _create_zone_grid_data
@@ -212,16 +212,12 @@ def _fixed_pitcher_percentile_population():
 @st.cache_data(show_spinner=False)
 def _fixed_stuff_percentile_population():
     """Fixed D1 Stuff+ comparison set used for all PitchSim percentile grades."""
-    return query_precompute(
-        f"""
-        SELECT PitchUID, Pitcher, Season, Date, TaggedPitchType, StuffPlus
-        FROM stuff_plus
-        WHERE Season = {_FIXED_PERCENTILE_SEASON}
-          AND Pitcher IS NOT NULL
-          AND TaggedPitchType IS NOT NULL
-          AND StuffPlus IS NOT NULL
-        """
-    )
+    pop = _load_pitchsim_display_population()
+    if pop.empty:
+        return pop
+    if "Season" in pop.columns:
+        pop = pop[pop["Season"] == _FIXED_PERCENTILE_SEASON].copy()
+    return pop
 
 
 def _fixed_pitcher_percentile_caption(pop_df):
@@ -293,11 +289,17 @@ def _build_pitch_percentile_metrics(sample_df, population_df, metric_col, *,
         if len(sample_pt) < min_current_pitches:
             continue
         my_val = float(sample_pt[metric_col].mean())
-        peer_means = (
-            pop_work[pop_work["TaggedPitchType"] == pt]
-            .groupby("Pitcher", observed=False)[metric_col]
-            .agg(["mean", "count"])
-        )
+        pop_pt = pop_work[pop_work["TaggedPitchType"] == pt].copy()
+        if "PitchCount" in pop_pt.columns:
+            peer_means = (
+                pop_pt.groupby("Pitcher", observed=False)
+                .agg(mean=(metric_col, "mean"), count=("PitchCount", "sum"))
+            )
+        else:
+            peer_means = (
+                pop_pt.groupby("Pitcher", observed=False)[metric_col]
+                .agg(["mean", "count"])
+            )
         peer_means = peer_means[peer_means["count"] >= min_population_pitches]
         peer_vals = peer_means["mean"].dropna()
         if len(peer_vals) < min_peer_pitchers:
@@ -1228,9 +1230,9 @@ def _pitcher_card_content(
 **How the model scores a pitch:** the full PitchSim pipeline estimates the probability chain for swing, whiff, contact quality, and damage, converts that into an expected run value, then averages that pitch shape across a standardized grid of counts and locations. That grid-average step is the key: it removes command, so the grade reflects the pitch's shape rather than where it was thrown.
 
 The production app then uses a distilled runtime model so scoring is fast enough to run live. The final scale is simple:
-- **100 = D1 average**
-- **110 = about one standard deviation better than average**
-- **90 = about one standard deviation worse than average**
+- **95 = D1 average**
+- **105 = about one standard deviation better than average**
+- **85 = about one standard deviation worse than average**
 
 **What drives high Stuff+ scores:**
 - **Fastballs** — Ride (induced vertical break), velocity, and vertical approach angle.
