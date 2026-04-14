@@ -1657,6 +1657,12 @@ def _metric_label_for_pitch(pt, metric):
 
 
 def _metric_direction_for_pitch(pt, metric, weight_sign):
+    if metric == "RelSpeed":
+        return "more velocity" if weight_sign > 0 else "less velocity"
+    if metric == "SpinRate":
+        return "more spin" if weight_sign > 0 else "less spin"
+    if metric == "Extension":
+        return "more extension" if weight_sign > 0 else "less extension"
     if metric == "HorzBreak":
         if pt in {"Fastball", "Sinker"}:
             return "more arm-side run" if weight_sign > 0 else "less arm-side run"
@@ -1675,6 +1681,15 @@ def _metric_direction_for_pitch(pt, metric, weight_sign):
             return "more depth" if weight_sign < 0 else "less depth"
     label = _metric_label_for_pitch(pt, metric).lower()
     return f"more {label}" if weight_sign > 0 else f"less {label}"
+
+
+def _recommendation_display_value(metric, value):
+    """Show movement traits as magnitudes, not signed raw TrackMan values."""
+    if pd.isna(value):
+        return np.nan
+    if metric in {"HorzBreak", "InducedVertBreak"}:
+        return abs(float(value))
+    return float(value)
 
 
 
@@ -1840,8 +1855,10 @@ def _compute_pitch_recommendations(pdf, data, tunnel_df):
                 display_current = current_val
                 display_target = target_val
 
-            # Always show signed delta (target - current)
-            delta_display = display_target - display_current
+            # Recommendation cards should show pitch-shape magnitudes, not raw signs.
+            shown_current = _recommendation_display_value(m, display_current)
+            shown_target = _recommendation_display_value(m, display_target)
+            delta_display = shown_target - shown_current
 
             # Cross-reference with tunnel partners (no grades shown)
             tunnel_benefit = ""
@@ -1870,8 +1887,8 @@ def _compute_pitch_recommendations(pdf, data, tunnel_df):
                 "pitch": pt,
                 "metric": m,
                 "label": label,
-                "current": round(display_current, 1),
-                "target": round(display_target, 1),
+                "current": round(shown_current, 1),
+                "target": round(shown_target, 1),
                 "delta": f"{'+' if delta_display > 0 else ''}{delta_display:.1f} {unit}",
                 "direction": direction,
                 "unit": unit,
@@ -2125,12 +2142,13 @@ def _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher
     if top_recs:
         st.markdown("**Top 3 Improvement Targets**")
         for rec in top_recs:
-            label = rec.get("label", rec.get("metric", "Metric"))
-            pctl_str = f"{rec['good_pctl']:.0f}th pctl in the good direction"
+            direction = rec.get("direction", rec.get("label", rec.get("metric", "Metric")))
+            direction = f"{direction[:1].upper()}{direction[1:]}" if direction else "Improve trait"
+            pctl_str = f"{rec['good_pctl']:.0f}th percentile vs D1 peers"
             st.markdown(
                 f'<div style="padding:6px 12px;margin:4px 0;font-size:12px;'
                 f'background:#fff8e1;border-radius:4px;border-left:3px solid #f59e0b;">'
-                f'<b>{rec["pitch"]}</b>: {label} — {pctl_str} '
+                f'<b>{rec["pitch"]}</b>: {direction} — {pctl_str} '
                 f'({rec["current"]:.1f} {rec["unit"]} now, target {rec["target"]:.1f} {rec["unit"]})'
                 f'</div>', unsafe_allow_html=True)
     else:
