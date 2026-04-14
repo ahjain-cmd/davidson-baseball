@@ -701,18 +701,28 @@ def _attach_stuff_plus(con, baselines_dict):
     # PitchSim-aligned CommandPlus (requires event_models in artifact)
     try:
         import joblib as _jl
-        from analytics.pitchsim_stuff import compute_pitchsim_command_plus
+        from analytics.pitchsim_stuff import (
+            compute_pitchsim_command_plus,
+            pitchsim_artifact_has_full_cascade,
+            pitchsim_artifact_missing_keys,
+        )
         _stuff_model_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "models", "stuff_plus_xgb.joblib"
         )
         if os.path.exists(_stuff_model_path):
             _artifact = _jl.load(_stuff_model_path)
-            if _artifact.get("event_models") is not None:
+            if pitchsim_artifact_has_full_cascade(_artifact):
                 print("  Computing PitchSim Command+ ...")
                 df = compute_pitchsim_command_plus(df, _artifact)
                 n_cmd = df["CommandPlus"].notna().sum() if "CommandPlus" in df.columns else 0
                 print(f"  CommandPlus scored: {n_cmd:,} / {len(df):,} pitches")
-                del _artifact
+            elif _artifact.get("artifact_type") == "pitchsim_lite":
+                missing = ", ".join(pitchsim_artifact_missing_keys(_artifact, require_full_cascade=True))
+                print(
+                    "  CommandPlus skipped (PitchSim artifact is stale/incomplete; "
+                    f"missing: {missing})"
+                )
+            del _artifact
     except Exception as exc:
         print(f"  CommandPlus skipped (error: {exc})")
 
@@ -726,7 +736,11 @@ def _attach_stuff_plus(con, baselines_dict):
     df.to_feather(feather_path)
     print(f"  Exported {feather_path} ({len(df):,} rows)")
 
-    _stuff_cols = [c for c in ["PitchUID", "Pitcher", "Season", "Date", "TaggedPitchType", "StuffPlus"] if c in df.columns]
+    _stuff_cols = [
+        c for c in [
+            "PitchUID", "Pitcher", "Season", "Date", "TaggedPitchType", "StuffPlus", "StuffRV100",
+        ] if c in df.columns
+    ]
     stuff_df = df[_stuff_cols].copy()
     con.register("stuff_df", stuff_df)
     con.execute("CREATE OR REPLACE TABLE stuff_plus AS SELECT * FROM stuff_df")

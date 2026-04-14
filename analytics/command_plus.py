@@ -565,9 +565,11 @@ def _load_pitchsim_artifact():
     if not os.path.exists(_PITCHSIM_MODEL_PATH):
         return None
     import joblib
+    from analytics.pitchsim_stuff import pitchsim_artifact_has_full_cascade
+
     try:
         art = joblib.load(_PITCHSIM_MODEL_PATH)
-        if art.get("event_models") is not None and art.get("loc_pt_stats"):
+        if pitchsim_artifact_has_full_cascade(art):
             return art
         return None
     except Exception:
