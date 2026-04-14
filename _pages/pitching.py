@@ -1240,8 +1240,6 @@ The production app then uses a distilled runtime model so scoring is fast enough
 - **Offspeed** — Velocity separation, sink/fade, and extension.
 
 **What doesn't affect Stuff+:** Location, pitch sequencing, game situation, or batter identity.
-
-**Why the model likes Ed Hall's slider:** the shape is doing the work. At roughly **80.8 mph**, **-5.0" HB**, **-4.3" IVB**, and **2478 rpm**, it has real glove-side movement plus depth and solid spin for a college breaker. That is the kind of slider profile the model tends to reward because it projects more miss and weaker damage even before location is considered.
 """)
 
         st.markdown("**Does Stuff+ predict future performance?**")
@@ -3103,7 +3101,8 @@ def page_pitching(data):
     stuff_df = _compute_stuff_plus(pdf)
     cmd_df = _compute_command_plus(pdf, data)
 
-    tab_card, tab_lab, tab_stuff_lab = st.tabs(["Pitcher Card", "Pitch Lab", "Stuff+ Lab"])
+    tab_card, tab_lab = st.tabs(["Pitcher Card", "Pitch Lab"])
+    # tab_card, tab_lab, tab_stuff_lab = st.tabs(["Pitcher Card", "Pitch Lab", "Stuff+ Lab"])
     with tab_card:
         _pitcher_card_content(
             data,
@@ -3119,8 +3118,8 @@ def page_pitching(data):
         )
     with tab_lab:
         _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher_stats, cmd_df=cmd_df)
-    with tab_stuff_lab:
-        _stuff_lab_page(data, pitcher, season_filter, pdf, stuff_df)
+    # with tab_stuff_lab:
+    #     _stuff_lab_page(data, pitcher, season_filter, pdf, stuff_df)
 
 
 
