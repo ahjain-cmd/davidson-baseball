@@ -334,7 +334,7 @@ def _mpl_grade_cards(ax, grades):
     ax.axis("off")
 
 
-def _mpl_zone_scatter(ax, pdf):
+def _mpl_zone_scatter(ax, pdf, pitcher_view=False):
     """Pitch location scatter colored by pitch type with zone rectangle."""
     loc = pdf.dropna(subset=["PlateLocSide", "PlateLocHeight"])
     ax.set_xlim(-2.2, 2.2)
@@ -349,11 +349,13 @@ def _mpl_zone_scatter(ax, pdf):
     if not loc.empty and "TaggedPitchType" in loc.columns:
         for pt in loc["TaggedPitchType"].unique():
             sub = loc[loc["TaggedPitchType"] == pt]
-            ax.scatter(sub["PlateLocSide"], sub["PlateLocHeight"],
+            sub_side = -sub["PlateLocSide"] if pitcher_view else sub["PlateLocSide"]
+            ax.scatter(sub_side, sub["PlateLocHeight"],
                        c=PITCH_COLORS.get(pt, "#aaa"), s=18, alpha=0.8,
                        edgecolors="white", linewidths=0.3, zorder=10, label=pt)
-    ax.legend(fontsize=5, loc="upper right", framealpha=0.7)
-    ax.set_title("Pitch Locations", fontsize=8, fontweight="bold", color=_DARK, pad=3)
+        ax.legend(fontsize=5, loc="upper right", framealpha=0.7)
+    ax.set_title("Pitch Locations" + (" (Pitcher View)" if pitcher_view else ""),
+                 fontsize=8, fontweight="bold", color=_DARK, pad=3)
 
 
 def _mpl_pa_zone_plot(ax, ab_df):
@@ -1228,7 +1230,7 @@ def _render_pitching_summary_page(gd, game_label):
 
         # Zone scatter
         ax_zone = fig.add_subplot(inner[1, idx])
-        _mpl_zone_scatter(ax_zone, pdf)
+        _mpl_zone_scatter(ax_zone, pdf, pitcher_view=True)
 
     if n_pitchers > 4:
         fig.text(0.5, 0.01,
@@ -1291,7 +1293,7 @@ def _render_pitcher_page(pdf, data, pitcher, game_label):
 
     # Zone scatter
     ax_zone = fig.add_subplot(mix_zone_gs[0, 1])
-    _mpl_zone_scatter(ax_zone, pdf)
+    _mpl_zone_scatter(ax_zone, pdf, pitcher_view=True)
 
     # Row 2 right: Movement profile
     ax_mov = fig.add_subplot(outer[2, 1])

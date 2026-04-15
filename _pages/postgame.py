@@ -15,7 +15,7 @@ from config import (
     _friendly_team_name,
 )
 from viz.layout import CHART_LAYOUT, section_header
-from viz.charts import add_strike_zone, make_spray_chart, make_movement_profile, player_header, _add_grid_zone_outline
+from viz.charts import add_strike_zone, add_view_badge, make_spray_chart, make_movement_profile, player_header, _add_grid_zone_outline
 from viz.percentiles import render_savant_percentile_section, savant_color
 from analytics.stuff_plus import _compute_stuff_plus
 from analytics.command_plus import _compute_command_plus
@@ -199,7 +199,7 @@ _CALL_BORDER_COLORS = {
 }
 
 
-def _pg_mini_location_plot(ab_df, key_suffix=""):
+def _pg_mini_location_plot(ab_df, key_suffix="", pitcher_view=False):
     """Create a location scatter for a single at-bat with numbered pitches.
 
     Pitch numbers match the original PA sequence (1-based), so numbers
@@ -211,6 +211,7 @@ def _pg_mini_location_plot(ab_df, key_suffix=""):
     loc = ab_numbered.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
     if loc.empty:
         return None
+    loc["_PlotPlateLocSide"] = -loc["PlateLocSide"] if pitcher_view else loc["PlateLocSide"]
     fig = go.Figure()
     for _, row in loc.iterrows():
         pnum = int(row["_OrigPitchNum"])
@@ -230,14 +231,15 @@ def _pg_mini_location_plot(ab_df, key_suffix=""):
             hover_parts.append(extra_line)
         hover = "<br>".join(hover_parts)
         fig.add_trace(go.Scatter(
-            x=[row["PlateLocSide"]], y=[row["PlateLocHeight"]],
+            x=[row["_PlotPlateLocSide"]], y=[row["PlateLocHeight"]],
             mode="markers+text", text=[str(pnum)],
             textposition="top center", textfont=dict(size=10, color="#000000"),
             marker=dict(size=14, color=color, line=dict(width=2, color=border_color)),
             showlegend=False,
             hovertemplate=f"{hover}<extra></extra>",
         ))
-    add_strike_zone(fig, grid=True)
+    add_strike_zone(fig, grid=True, label=False)
+    add_view_badge(fig, "Pitcher" if pitcher_view else "Catcher")
     fig.update_layout(
         xaxis=dict(range=[-2.0, 2.0], showgrid=False, zeroline=False, showticklabels=False, fixedrange=True, scaleanchor="y"),
         yaxis=dict(range=[0.5, 4.5], showgrid=False, zeroline=False, showticklabels=False, fixedrange=True),
@@ -662,6 +664,8 @@ def _pg_pitcher_detail(pdf, data, pitcher):
         section_header("Pitch Locations")
         loc = pdf.dropna(subset=["PlateLocSide", "PlateLocHeight"])
         if not loc.empty and "TaggedPitchType" in loc.columns:
+            loc = loc.copy()
+            loc["_PlotPlateLocSide"] = -loc["PlateLocSide"]
             fig_loc = go.Figure()
             for pt in sorted(loc["TaggedPitchType"].unique()):
                 sub = loc[loc["TaggedPitchType"] == pt]
@@ -672,12 +676,13 @@ def _pg_pitcher_detail(pdf, data, pitcher):
                     r = row.get("PitchCall", "?")
                     hover_data.append(f"{pt} {v}mph<br>{r}")
                 fig_loc.add_trace(go.Scatter(
-                    x=sub["PlateLocSide"], y=sub["PlateLocHeight"],
+                    x=sub["_PlotPlateLocSide"], y=sub["PlateLocHeight"],
                     mode="markers", marker=dict(size=7, color=color, opacity=0.8,
                                                 line=dict(width=0.5, color="white")),
                     name=pt, text=hover_data, hoverinfo="text",
                 ))
-            add_strike_zone(fig_loc)
+            add_strike_zone(fig_loc, label=False)
+            add_view_badge(fig_loc, "Pitcher")
             fig_loc.update_layout(
                 xaxis=dict(range=[-2.5, 2.5], showgrid=False, zeroline=False, title="", fixedrange=True, scaleanchor="y"),
                 yaxis=dict(range=[0, 5], showgrid=False, zeroline=False, title="", fixedrange=True),
@@ -3319,7 +3324,7 @@ def _postgame_grades(gd, data):
                             if pitch_rows:
                                 st.dataframe(pd.DataFrame(pitch_rows), use_container_width=True, hide_index=True)
                         with col_zone:
-                            fig = _pg_mini_location_plot(ab_sorted, key_suffix=f"pit_{slug}_pa{pa_idx}")
+                            fig = _pg_mini_location_plot(ab_sorted, key_suffix=f"pit_{slug}_pa{pa_idx}", pitcher_view=True)
                             if fig:
                                 st.plotly_chart(fig, use_container_width=True, key=f"pg_pa_zone_pit_{slug}_{pa_idx}")
                             else:
