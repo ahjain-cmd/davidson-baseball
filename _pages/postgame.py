@@ -667,7 +667,7 @@ def _pg_pitcher_detail(pdf, data, pitcher):
             loc = loc.copy()
             loc["_PlotPlateLocSide"] = -loc["PlateLocSide"]
             fig_loc = go.Figure()
-            for pt in sorted(loc["TaggedPitchType"].unique()):
+            for pt in sorted(loc["TaggedPitchType"].dropna().unique()):
                 sub = loc[loc["TaggedPitchType"] == pt]
                 color = PITCH_COLORS.get(pt, "#aaa")
                 hover_data = []
@@ -779,7 +779,7 @@ def _pg_pitcher_detail(pdf, data, pitcher):
         velo_df = pdf.dropna(subset=["Inning", "RelSpeed"])
         if len(velo_df) > 3:
             fig_velo = go.Figure()
-            for pt in sorted(velo_df["TaggedPitchType"].unique()):
+            for pt in sorted(velo_df["TaggedPitchType"].dropna().unique()):
                 sub = velo_df[velo_df["TaggedPitchType"] == pt]
                 inn_avg = sub.groupby("Inning")["RelSpeed"].mean().reset_index()
                 color = PITCH_COLORS.get(pt, "#aaa")
@@ -848,7 +848,7 @@ def _pg_pitcher_detail(pdf, data, pitcher):
         rel = pdf.dropna(subset=["RelSide", "RelHeight"])
         if not rel.empty and "TaggedPitchType" in rel.columns:
             fig_rel = go.Figure()
-            for pt in sorted(rel["TaggedPitchType"].unique()):
+            for pt in sorted(rel["TaggedPitchType"].dropna().unique()):
                 sub = rel[rel["TaggedPitchType"] == pt]
                 color = PITCH_COLORS.get(pt, "#aaa")
                 fig_rel.add_trace(go.Scatter(
@@ -1034,7 +1034,7 @@ def _pg_hitter_detail(bdf, data, batter):
     section_header("Pitch Locations Seen")
     loc_all = bdf.dropna(subset=["PlateLocSide", "PlateLocHeight"])
     if not loc_all.empty and "TaggedPitchType" in loc_all.columns:
-        pt_types = sorted(loc_all["TaggedPitchType"].unique())
+        pt_types = sorted(loc_all["TaggedPitchType"].dropna().unique())
         n_types = len(pt_types)
         if n_types > 0:
             loc_cols = st.columns(min(n_types, 4))
