@@ -23,10 +23,10 @@ import pandas as pd
 from config import PITCH_TYPE_MAP, PITCH_TYPES_TO_DROP
 
 
-_ARTIFACT_VERSION = "d1_pitchsim_lite_v5"
+_ARTIFACT_VERSION = "d1_pitchsim_lite_v9"
 _D1_LEVEL = "D1"
 _DISPLAY_REFERENCE_SEASON = 2025
-_DISPLAY_STUFF_CENTER = 95.0
+_DISPLAY_STUFF_CENTER = 100.0
 _DISPLAY_STUFF_SCALE = 10.0
 _DISPLAY_VSR_WEIGHT = 0.6
 _DISPLAY_VSL_WEIGHT = 0.4
@@ -63,6 +63,10 @@ _BALL_CALLS = {
     "automaticball",
 }
 _HOME_RUN_RESULTS = {"homerun"}
+_INPLAY_HIT_RESULTS = {"single", "error", "double", "triple"}
+_XBH_RESULTS = {"double", "triple"}
+_AIR_HIT_TYPES = {"linedrive", "flyball", "popup"}
+_GROUND_HIT_TYPES = {"groundball", "bunt"}
 _PLAY_RESULT_DAMAGE = {
     "single": 1.0,
     "double": 2.0,
@@ -70,12 +74,56 @@ _PLAY_RESULT_DAMAGE = {
     "homerun": 4.0,
 }
 
+def _env_int(name: str, default: int, min_value: int = 1) -> int:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw.replace("_", ""))
+    except ValueError:
+        return default
+    return max(min_value, value)
+
+
+_FRAME_CATEGORY_COLUMNS = (
+    "GameID",
+    "Pitcher",
+    "PitcherThrows",
+    "BatterSide",
+    "TaggedPitchType",
+    "PitchCall",
+    "PlayResult",
+    "TaggedHitType",
+    "KorBB",
+    "Level",
+)
+
+_FRAME_DROP_AFTER_PREP = (
+    "Outs",
+    "OutsOnPlay",
+    "HorzBreak",
+    "RelSide",
+    "HorzRelAngle",
+    "SpinAxis",
+    "ExitSpeed",
+    "Angle",
+    "Distance",
+    "vx0",
+    "vy0",
+    "vz0",
+    "ax0",
+    "ay0",
+    "az0",
+)
+
 _CLUSTER_NAMES = [
     "sinker",
-    "fastball",
+    "low-slot fastball",
     "slider",
+    "sweeper",
     "offspeed",
     "curveball",
+    "high-slot fastball",
     "cutter",
 ]
 
@@ -83,8 +131,10 @@ _COUNTS = [(balls, strikes) for balls in range(4) for strikes in range(3)]
 _COUNT_TO_INDEX = {count: idx for idx, count in enumerate(_COUNTS)}
 _N_CLUSTERS = len(_CLUSTER_NAMES)
 _TRAIN_TARGET_ROWS = 2_500_000
-_SIM_TARGET_ROWS = 30_000
-_CLUSTER_FIT_ROWS = 350_000
+_SIM_TARGET_ROWS = _env_int("PITCHSIM_SIM_TARGET_ROWS", 12_000, min_value=2_000)
+_SIM_BATCH_SIZE = _env_int("PITCHSIM_SIM_BATCH_SIZE", 192, min_value=32)
+_SIM_PROGRESS_EVERY = _env_int("PITCHSIM_SIM_PROGRESS_EVERY", 5, min_value=1)
+_CLUSTER_ATTEMPT_ROWS = 100_000
 _WEIGHT_MODEL_ROWS = 600_000
 _MAX_DISTILL_ROWS = 80_000
 _MIN_CONTEXT_WEIGHT = 100.0
@@ -95,6 +145,7 @@ _XGB_TUNE_MAX_EVALS = 5
 _WEIGHT_TUNE_ROWS = 40_000
 _EVENT_TUNE_ROWS = 40_000
 _DISTILL_TUNE_ROWS = 20_000
+_CLUSTER_MAX_ATTEMPTS = 192
 _WEIGHT_BASE_ESTIMATORS = 200
 _EVENT_BASE_ESTIMATORS = 250
 _DISTILL_BASE_ESTIMATORS = 200
@@ -117,15 +168,7 @@ _KDE_JOBS = 8
 _FCM_M = 1.5
 _FCM_MAXITER = 100
 _FCM_ERROR = 1e-3
-
-_VAA_CONTEXT_FEATURES = [
-    "PlateLocHeight",
-    "RelHeight",
-    "RelSideAdj",
-    "Extension",
-    "RelSpeed",
-    "PitcherThrows_enc",
-]
+_CLUSTER_SOURCE_MIN_MEAN_PROB = 0.30
 
 _CLUSTER_FEATURES = [
     "physics_speed",
@@ -137,7 +180,14 @@ _CLUSTER_FEATURES = [
     "RelSideAdj",
     "release_pos_y",
     "RelHeight",
-    "VAAResidual",
+    "VertRelAngle",
+    "HorzRelAngleAdj",
+    "InducedVertBreak",
+    "HorzBreakAdj",
+    "VeloDiff",
+    "SpinRate",
+    "axis_sin",
+    "axis_cos",
 ]
 
 _EVENT_BASE_FEATURES = [
@@ -158,7 +208,8 @@ _EVENT_BASE_FEATURES = [
     "HorzBreakAdj",
     "total_break",
     "break_balance",
-    "VAAResidual",
+    "VertRelAngle",
+    "HorzRelAngleAdj",
     "PitcherThrows_enc",
 ]
 
@@ -184,7 +235,8 @@ _DISTILL_FEATURES = [
     "total_break",
     "break_balance",
     "speed_x_ivb",
-    "VAAResidual",
+    "VertRelAngle",
+    "HorzRelAngleAdj",
     "PitcherThrows_enc",
     "pitch_type_enc",
 ]
@@ -229,14 +281,53 @@ def pitchsim_artifact_missing_keys(
     missing = [key for key in required if not _artifact_value_present(artifact.get(key))]
 
     event_models = artifact.get("event_models") or {}
+    for stats_key in ("pt_stats", "fip_pt_stats"):
+        if stats_key not in missing:
+            stats = artifact.get(stats_key) or {}
+            global_stat = stats.get("__global__") if isinstance(stats, dict) else None
+            try:
+                global_sigma = float(global_stat[1])
+            except Exception:
+                global_sigma = np.nan
+            if not np.isfinite(global_sigma) or global_sigma <= 1e-8:
+                missing.append(stats_key)
     if require_full_cascade and "event_models" not in missing:
         if not isinstance(event_models, dict) or not _artifact_value_present(event_models.get("event_features")):
             missing.append("event_models")
+    if require_full_cascade and "cluster_model" not in missing:
+        cluster_model = artifact.get("cluster_model") or {}
+        cluster_taxonomy = cluster_model.get("taxonomy") or []
+        unique_heuristics = int(cluster_model.get("unique_heuristics") or 0)
+        if list(cluster_taxonomy) != list(_CLUSTER_NAMES) or unique_heuristics != _N_CLUSTERS:
+            missing.append("cluster_model")
+    if require_full_cascade and "cluster_summaries" not in missing:
+        cluster_summaries = artifact.get("cluster_summaries") or []
+        cluster_labels = {
+            str(summary.get("cluster") or summary.get("cluster_name") or "")
+            for summary in cluster_summaries
+            if isinstance(summary, dict)
+        }
+        heuristic_labels = {
+            str(summary.get("heuristic_name") or "")
+            for summary in cluster_summaries
+            if isinstance(summary, dict)
+        }
+        if (
+            not isinstance(cluster_summaries, list)
+            or len(cluster_summaries) != _N_CLUSTERS
+            or cluster_labels != set(_CLUSTER_NAMES)
+            or heuristic_labels != set(_CLUSTER_NAMES)
+        ):
+            missing.append("cluster_summaries")
     return sorted(set(missing))
 
 
 def pitchsim_artifact_has_full_cascade(artifact: Optional[dict]) -> bool:
     return len(pitchsim_artifact_missing_keys(artifact, require_full_cascade=True)) == 0
+
+
+def pitchsim_current_artifact_version() -> str:
+    return _ARTIFACT_VERSION
 
 
 def _safe_corr(a: Sequence[float], b: Sequence[float]) -> float:
@@ -441,6 +532,7 @@ def _normalize_model_pitch_types(data: pd.DataFrame) -> pd.DataFrame:
     if "TaggedPitchType" not in data.columns:
         return data
     df = data.copy()
+    df["TaggedPitchType"] = df["TaggedPitchType"].astype("object")
     df["TaggedPitchType"] = df["TaggedPitchType"].replace(_MODEL_PITCH_TYPE_MAP)
     df.loc[df["TaggedPitchType"].isin(PITCH_TYPES_TO_DROP), "TaggedPitchType"] = np.nan
     return df
@@ -477,6 +569,12 @@ def _compose_fip_raw(
         + 1.50 * damage_arr
         - 0.90 * whiff_arr
         - 0.60 * called_arr
+    )
+
+
+def _blend_platoon_sides(vs_r: np.ndarray | pd.Series, vs_l: np.ndarray | pd.Series) -> np.ndarray:
+    return (_DISPLAY_VSR_WEIGHT * np.asarray(vs_r, dtype=float)) + (
+        _DISPLAY_VSL_WEIGHT * np.asarray(vs_l, dtype=float)
     )
 
 
@@ -518,8 +616,10 @@ def _base_pitch_query(parquet_path: str) -> str:
             CASE WHEN BatterSide IN ('Left', 'L') THEN 'L' ELSE 'R' END AS BatterSide,
             Balls,
             Strikes,
+            Outs,
             PitchCall,
             PlayResult,
+            OutsOnPlay,
             TaggedHitType,
             KorBB,
             RelSpeed,
@@ -528,7 +628,8 @@ def _base_pitch_query(parquet_path: str) -> str:
             Extension,
             RelHeight,
             RelSide,
-            VertApprAngle,
+            VertRelAngle,
+            HorzRelAngle,
             PlateLocHeight,
             PlateLocSide,
             SpinRate,
@@ -557,6 +658,8 @@ def _base_pitch_query(parquet_path: str) -> str:
           AND Extension IS NOT NULL
           AND RelHeight IS NOT NULL
           AND RelSide IS NOT NULL
+          AND VertRelAngle IS NOT NULL
+          AND HorzRelAngle IS NOT NULL
           AND PlateLocHeight IS NOT NULL
           AND PlateLocSide IS NOT NULL
     """
@@ -575,7 +678,7 @@ def _sample_caps(counts: pd.DataFrame, target_total: int) -> Dict[str, int]:
     }
 
 
-def _fetch_training_frame(parquet_path: str, target_total: int = _TRAIN_TARGET_ROWS) -> pd.DataFrame:
+def _fetch_training_frame(parquet_path: str, target_total: Optional[int] = _TRAIN_TARGET_ROWS) -> pd.DataFrame:
     import duckdb
 
     con = duckdb.connect(":memory:")
@@ -590,6 +693,26 @@ def _fetch_training_frame(parquet_path: str, target_total: int = _TRAIN_TARGET_R
         ORDER BY 2 DESC
         """
     ).fetchdf()
+    filtered_cte = f"""
+        WITH base AS ({base_query}),
+        filtered AS (
+            SELECT *
+            FROM base
+            WHERE TaggedPitchType IS NOT NULL
+              AND TaggedPitchType NOT IN ('Undefined', 'Other', 'Knuckleball')
+        )
+    """
+    filtered_query = f"""
+        {filtered_cte}
+        SELECT *
+        FROM filtered
+    """
+    total_rows = int(pd.to_numeric(counts["n"], errors="coerce").fillna(0).sum())
+    if target_total is None or int(target_total) >= total_rows:
+        df = con.execute(filtered_query).fetchdf()
+        con.close()
+        return _normalize_model_pitch_types(df)
+
     caps = _sample_caps(counts, target_total=target_total)
     thresholds = {}
     for row in counts.itertuples(index=False):
@@ -602,13 +725,7 @@ def _fetch_training_frame(parquet_path: str, target_total: int = _TRAIN_TARGET_R
         f"WHEN '{pt}' THEN {thresholds.get(pt, 0)}" for pt in thresholds
     ) + " ELSE 0 END"
     query = f"""
-        WITH base AS ({base_query}),
-        filtered AS (
-            SELECT *
-            FROM base
-            WHERE TaggedPitchType IS NOT NULL
-              AND TaggedPitchType NOT IN ('Undefined', 'Other', 'Knuckleball')
-        )
+        {filtered_cte}
         SELECT *
         FROM filtered
         WHERE ABS(HASH(COALESCE(PitchUID, GameID || ':' || CAST(PitchNo AS VARCHAR) || ':' || Pitcher || ':' || COALESCE(Batter, '')))) % 1000000 < {case_expr}
@@ -618,28 +735,8 @@ def _fetch_training_frame(parquet_path: str, target_total: int = _TRAIN_TARGET_R
     return _normalize_model_pitch_types(df)
 
 
-def _fit_vaa_models(df: pd.DataFrame) -> Dict[str, object]:
-    from sklearn.linear_model import LinearRegression
-
-    models: Dict[str, object] = {}
-    if df.empty or "VertApprAngle" not in df.columns:
-        return models
-
-    for pt, pt_df in df.groupby("TaggedPitchType", observed=False):
-        if pd.isna(pt):
-            continue
-        X = pt_df[_VAA_CONTEXT_FEATURES].astype(float)
-        y = pd.to_numeric(pt_df["VertApprAngle"], errors="coerce")
-        valid = X.notna().all(axis=1) & y.notna()
-        if valid.sum() < 200:
-            continue
-        model = LinearRegression()
-        model.fit(X.loc[valid], y.loc[valid])
-        models[str(pt)] = model
-    return models
-
-
 def _prepare_pitchsim_frame(data: pd.DataFrame, vaa_models: Optional[Dict[str, object]] = None) -> pd.DataFrame:
+    del vaa_models
     df = _normalize_model_pitch_types(data)
     if df is None or len(df) == 0:
         return df
@@ -653,11 +750,22 @@ def _prepare_pitchsim_frame(data: pd.DataFrame, vaa_models: Optional[Dict[str, o
     df["BatterSide"] = stands.where(stands.isin(["L", "R"]), "R")
     df["PitcherThrows_enc"] = (df["PitcherThrows"] == "L").astype(int)
     df["BatterSide_enc"] = (df["BatterSide"] == "L").astype(int)
-    df["pitch_type_enc"] = df["TaggedPitchType"].map(_PITCH_TYPE_LABELS).fillna(-1).astype(int)
+    df["pitch_type_enc"] = (
+        df["TaggedPitchType"].astype("object").map(_PITCH_TYPE_LABELS).fillna(-1).astype(int)
+    )
 
     is_left = df["PitcherThrows"] == "L"
     df["HorzBreakAdj"] = np.where(is_left, -df["HorzBreak"].astype(float), df["HorzBreak"].astype(float))
     df["RelSideAdj"] = np.where(is_left, -df["RelSide"].astype(float), df["RelSide"].astype(float))
+    if "VertRelAngle" in df.columns:
+        df["VertRelAngle"] = pd.to_numeric(df["VertRelAngle"], errors="coerce").astype(float)
+    else:
+        df["VertRelAngle"] = np.nan
+    if "HorzRelAngle" in df.columns:
+        horz_rel_angle = pd.to_numeric(df["HorzRelAngle"], errors="coerce").astype(float)
+    else:
+        horz_rel_angle = pd.Series(np.nan, index=df.index, dtype=float)
+    df["HorzRelAngleAdj"] = np.where(is_left, -horz_rel_angle, horz_rel_angle)
     df["release_pos_y"] = 60.5 - df["Extension"].astype(float)
 
     fb_velo = df[df["TaggedPitchType"].isin(_FB_TYPES)].groupby("Pitcher", observed=False)["RelSpeed"].mean()
@@ -721,22 +829,6 @@ def _prepare_pitchsim_frame(data: pd.DataFrame, vaa_models: Optional[Dict[str, o
         df["Pitcher"].map(fb_transverse).astype(float) - df["transverse_pit"].astype(float)
     )
 
-    df["VAAResidual"] = 0.0
-    if vaa_models and "VertApprAngle" in df.columns:
-        for pt, model in vaa_models.items():
-            mask = df["TaggedPitchType"] == pt
-            if mask.sum() == 0:
-                continue
-            X_pt = df.loc[mask, _VAA_CONTEXT_FEATURES].astype(float)
-            y_pt = pd.to_numeric(df.loc[mask, "VertApprAngle"], errors="coerce")
-            valid = X_pt.notna().all(axis=1) & y_pt.notna()
-            if not valid.any():
-                continue
-            pred = model.predict(X_pt.loc[valid])
-            resid = y_pt.copy()
-            resid.loc[valid] = resid.loc[valid] - pred
-            df.loc[mask, "VAAResidual"] = resid.fillna(0.0).values
-
     df["is_swing"] = df["PitchCall"].isin(_SWING_CALLS).astype(int)
     df["is_take"] = 1 - df["is_swing"]
     df["is_whiff"] = (df["PitchCall"] == "StrikeSwinging").astype(int)
@@ -761,6 +853,60 @@ def _prepare_pitchsim_frame(data: pd.DataFrame, vaa_models: Optional[Dict[str, o
     df["is_single"] = (df["is_inplay"] == 1) & play_result_norm.isin({"single", "error"})
     df["is_double"] = (df["is_inplay"] == 1) & (play_result_norm == "double")
     df["is_triple"] = (df["is_inplay"] == 1) & (play_result_norm == "triple")
+    df["is_air_inplay"] = ((df["is_inplay"] == 1) & tagged_hit_type_norm.isin(_AIR_HIT_TYPES)).astype(int)
+    df["is_popup"] = ((df["is_air_inplay"] == 1) & (tagged_hit_type_norm == "popup")).astype(int)
+    df["is_ground_inplay"] = ((df["is_inplay"] == 1) & tagged_hit_type_norm.isin(_GROUND_HIT_TYPES)).astype(int)
+    df["is_air_hit_non_hr"] = (
+        (df["is_air_inplay"] == 1)
+        & (df["is_popup"] == 0)
+        & (df["is_home_run"] == 0)
+        & play_result_norm.isin(_INPLAY_HIT_RESULTS)
+    ).astype(int)
+    df["is_air_out"] = (
+        (df["is_air_inplay"] == 1)
+        & (df["is_popup"] == 0)
+        & (df["is_home_run"] == 0)
+        & (df["is_air_hit_non_hr"] == 0)
+    ).astype(int)
+    df["is_ground_hit"] = (
+        (df["is_ground_inplay"] == 1)
+        & play_result_norm.isin(_INPLAY_HIT_RESULTS)
+    ).astype(int)
+    df["is_if1b"] = (
+        (df["is_ground_inplay"] == 1)
+        & play_result_norm.isin({"single", "error"})
+    ).astype(int)
+    outs_before = (
+        pd.to_numeric(df["Outs"], errors="coerce")
+        if "Outs" in df.columns
+        else pd.Series(np.nan, index=df.index, dtype=float)
+    )
+    outs_on_play = (
+        pd.to_numeric(df["OutsOnPlay"], errors="coerce")
+        if "OutsOnPlay" in df.columns
+        else pd.Series(0.0, index=df.index, dtype=float)
+    )
+    df["is_gidp"] = (
+        (df["is_ground_inplay"] == 1)
+        & (df["is_ground_hit"] == 0)
+        & (outs_before < 2)
+        & (outs_on_play >= 2)
+    ).astype(int)
+    df["is_ground_out"] = (
+        (df["is_ground_inplay"] == 1)
+        & (df["is_ground_hit"] == 0)
+        & (df["is_gidp"] == 0)
+    ).astype(int)
+    df["is_hit_non_hr_non_if1b"] = (
+        (df["is_inplay"] == 1)
+        & (df["is_home_run"] == 0)
+        & play_result_norm.isin(_INPLAY_HIT_RESULTS)
+        & (df["is_if1b"] == 0)
+    ).astype(int)
+    df["is_xbh_non_if1b"] = (
+        (df["is_hit_non_hr_non_if1b"] == 1)
+        & play_result_norm.isin(_XBH_RESULTS)
+    ).astype(int)
     df["is_out_inplay"] = (
         (df["is_inplay"] == 1)
         & ~(df["is_single"] | df["is_double"] | df["is_triple"] | (df["is_home_run"] == 1))
@@ -776,7 +922,46 @@ def _prepare_pitchsim_frame(data: pd.DataFrame, vaa_models: Optional[Dict[str, o
         0.0,
     )
 
+    drop_cols = [col for col in _FRAME_DROP_AFTER_PREP if col in df.columns]
+    if drop_cols:
+        df = df.drop(columns=drop_cols)
+
+    for col in _FRAME_CATEGORY_COLUMNS:
+        if col in df.columns and pd.api.types.is_object_dtype(df[col]):
+            df[col] = df[col].astype("category")
+
+    float_cols = list(df.select_dtypes(include=["float64"]).columns)
+    if float_cols:
+        df[float_cols] = df[float_cols].astype(np.float32)
+
+    int_cols = list(df.select_dtypes(include=["int64"]).columns)
+    if int_cols:
+        for col in int_cols:
+            df[col] = pd.to_numeric(df[col], downcast="integer")
+
     return df
+
+
+def _overlay_pitchsim_columns(
+    base: pd.DataFrame,
+    scored: pd.DataFrame,
+    overwrite: Optional[Sequence[str]] = None,
+) -> pd.DataFrame:
+    """Return original Trackman rows plus PitchSim-generated columns.
+
+    _prepare_pitchsim_frame drops several raw physics columns to keep training
+    frames smaller. Runtime/precompute scoring should not replace the app's
+    source dataframe with that reduced frame.
+    """
+    if base is None or scored is None or len(base) == 0:
+        return base
+
+    out = base.copy()
+    overwrite_set = set(overwrite or ())
+    for col in scored.columns:
+        if col not in out.columns or col in overwrite_set:
+            out[col] = scored[col].reindex(out.index)
+    return out
 
 
 def _fit_weight_model(df: pd.DataFrame) -> Tuple[Dict[str, float], Dict[str, float]]:
@@ -892,82 +1077,91 @@ def _fuzzy_cmeans_predict(
     return (inv / np.maximum(inv.sum(axis=1, keepdims=True), 1e-12)).astype(np.float32)
 
 
-def _cluster_name_from_summary(summary: Dict[str, object]) -> str:
-    dominant_pt = str(summary.get("dominant_pitch_type", "Unknown"))
-    if dominant_pt in {"Changeup", "Splitter"}:
+def _cluster_type_from_pitchsim_rules(
+    dominant_pitch_type: str,
+    mean_rel_height: float,
+    mean_transverse_pit: float,
+) -> str:
+    if dominant_pitch_type in {"Changeup", "Splitter"}:
         return "offspeed"
-    if dominant_pt in {"Curveball", "Knuckle Curve"}:
+    if dominant_pitch_type in {"Curveball", "Knuckle Curve"}:
         return "curveball"
-    if dominant_pt == "Cutter":
+    if dominant_pitch_type == "Cutter":
         return "cutter"
-    if dominant_pt == "Sinker":
+    if dominant_pitch_type == "Sinker":
         return "sinker"
-    if dominant_pt == "Fastball":
-        return "fastball"
-    if dominant_pt in {"Slider", "Sweeper"}:
-        return "slider"
+    if dominant_pitch_type == "Fastball":
+        return "low-slot fastball" if mean_rel_height < 6.0 else "high-slot fastball"
+    if dominant_pitch_type in {"Slider", "Sweeper"}:
+        return "slider" if mean_transverse_pit > -5.5 else "sweeper"
     return "offspeed"
 
 
-def _cluster_assignment_scores(summary: Dict[str, object]) -> Dict[str, float]:
-    shares = summary.get("pitch_type_share", {})
-    fastball_share = float(shares.get("Fastball", 0.0))
-    sinker_share = float(shares.get("Sinker", 0.0))
-    cutter_share = float(shares.get("Cutter", 0.0))
-    slider_share = float(shares.get("Slider", 0.0)) + float(shares.get("Sweeper", 0.0))
-    curve_share = float(shares.get("Curveball", 0.0) + shares.get("Knuckle Curve", 0.0))
-    offspeed_share = float(shares.get("Changeup", 0.0) + shares.get("Splitter", 0.0))
-    return {
-        "sinker": 4.0 * sinker_share,
-        "fastball": 4.0 * fastball_share,
-        "slider": 4.0 * slider_share,
-        "offspeed": 4.0 * offspeed_share,
-        "curveball": 4.0 * curve_share,
-        "cutter": 4.0 * cutter_share,
-    }
+def _derive_rule_bucket(frame: pd.DataFrame) -> pd.Series:
+    pitch_type = frame["TaggedPitchType"].astype(str)
+    rel_height = pd.to_numeric(frame["RelHeight"], errors="coerce").to_numpy(dtype=float)
+    transverse = pd.to_numeric(frame["transverse_pit"], errors="coerce").to_numpy(dtype=float)
+    bucket = np.full(len(frame), "other", dtype=object)
+    bucket[np.isin(pitch_type, ["Changeup", "Splitter"])] = "offspeed"
+    bucket[np.isin(pitch_type, ["Curveball", "Knuckle Curve"])] = "curveball"
+    bucket[pitch_type == "Cutter"] = "cutter"
+    bucket[pitch_type == "Sinker"] = "sinker"
+    fastball_mask = pitch_type == "Fastball"
+    bucket[fastball_mask & (rel_height < 6.0)] = "low-slot fastball"
+    bucket[fastball_mask & (rel_height >= 6.0)] = "high-slot fastball"
+    slider_mask = np.isin(pitch_type, ["Slider", "Sweeper"])
+    bucket[slider_mask & (transverse > -5.5)] = "slider"
+    bucket[slider_mask & (transverse <= -5.5)] = "sweeper"
+    return pd.Series(bucket, index=frame.index, dtype="object")
 
 
 def _summarize_fuzzy_clusters(
     train: pd.DataFrame,
     probs: np.ndarray,
-) -> Tuple[List[Dict[str, object]], Dict[int, str], int]:
-    from scipy.optimize import linear_sum_assignment
-
+) -> Tuple[List[Dict[str, object]], pd.DataFrame]:
     pt_dummies = pd.get_dummies(train["TaggedPitchType"])
+    source_bucket = pd.Categorical(train["rule_bucket"], categories=_CLUSTER_NAMES, ordered=True)
+    mean_prob_by_source = (
+        pd.DataFrame(probs, index=train.index, columns=_CLUSTER_NAMES)
+        .groupby(source_bucket, observed=False)
+        .mean()
+        .reindex(_CLUSTER_NAMES)
+        .fillna(0.0)
+    )
     summaries: List[Dict[str, object]] = []
-    heuristic_map: Dict[int, str] = {}
-    score_matrix = np.zeros((probs.shape[1], len(_CLUSTER_NAMES)), dtype=float)
-
-    for idx in range(probs.shape[1]):
+    for idx, cluster_name in enumerate(_CLUSTER_NAMES):
         w = probs[:, idx].astype(float)
         w_sum = float(w.sum()) or 1.0
         weighted_pt = (pt_dummies.mul(w, axis=0).sum(axis=0) / w_sum).sort_values(ascending=False)
         pitch_type_share = {str(k): float(v) for k, v in weighted_pt.items()}
         dominant_pt = str(weighted_pt.index[0]) if len(weighted_pt) else "Unknown"
+        weighted_bucket = (
+            pd.get_dummies(source_bucket)
+            .reindex(columns=_CLUSTER_NAMES, fill_value=0)
+            .mul(w, axis=0)
+            .sum(axis=0)
+            / w_sum
+        ).sort_values(ascending=False)
         summary = {
             "cluster_index": idx,
+            "cluster": cluster_name,
+            "cluster_name": cluster_name,
+            "heuristic_name": cluster_name,
             "dominant_pitch_type": dominant_pt,
             "pitch_type_share": pitch_type_share,
+            "rule_bucket_share": {str(k): float(v) for k, v in weighted_bucket.items()},
+            "dominant_rule_bucket": str(weighted_bucket.index[0]) if len(weighted_bucket) else cluster_name,
             "mean_speed": float(np.average(train["RelSpeed"], weights=w)),
             "mean_ivb": float(np.average(train["InducedVertBreak"], weights=w)),
             "mean_hb_adj": float(np.average(train["HorzBreakAdj"], weights=w)),
             "mean_break_balance": float(np.average(train["break_balance"], weights=w)),
             "mean_rel_height": float(np.average(train["RelHeight"], weights=w)),
             "mean_transverse_pit": float(np.average(train["transverse_pit"], weights=w)),
+            "source_mean_prob": float(mean_prob_by_source.loc[cluster_name, cluster_name]),
         }
-        heuristic_name = _cluster_name_from_summary(summary)
-        heuristic_map[idx] = heuristic_name
         summaries.append(summary)
-        scores = _cluster_assignment_scores(summary)
-        score_matrix[idx] = np.array([scores[name] for name in _CLUSTER_NAMES], dtype=float)
 
-    unique_heuristics = len(set(heuristic_map.values()))
-    row_ind, col_ind = linear_sum_assignment(-score_matrix)
-    fixed_map = {int(r): _CLUSTER_NAMES[int(c)] for r, c in zip(row_ind, col_ind)}
-    for summary in summaries:
-        summary["heuristic_name"] = heuristic_map[int(summary["cluster_index"])]
-        summary["cluster_name"] = fixed_map[int(summary["cluster_index"])]
-    return summaries, fixed_map, unique_heuristics
+    return summaries, mean_prob_by_source
 
 
 def _fit_cluster_model(
@@ -978,70 +1172,75 @@ def _fit_cluster_model(
     from sklearn.preprocessing import StandardScaler
 
     cluster_cols = list(_CLUSTER_NAMES)
-    valid = df[_CLUSTER_FEATURES].notna().all(axis=1)
-    train = df.loc[valid].copy()
+    train = df.copy()
+    for col in ("speed_diff", "lift_diff", "transverse_pit_diff"):
+        if col in train.columns:
+            train[col] = pd.to_numeric(train[col], errors="coerce").fillna(0.0)
+    valid = train[_CLUSTER_FEATURES].notna().all(axis=1)
+    train = train.loc[valid].copy()
+    train["rule_bucket"] = _derive_rule_bucket(train)
+    train = train.loc[train["rule_bucket"].isin(cluster_cols)].copy()
+    source_counts = train["rule_bucket"].value_counts()
+    missing_sources = [cluster_name for cluster_name in cluster_cols if int(source_counts.get(cluster_name, 0)) == 0]
+    if missing_sources:
+        raise RuntimeError(
+            "Missing anchored archetype source buckets in D1 training frame: "
+            + ", ".join(missing_sources)
+        )
     X = train[_CLUSTER_FEATURES].astype(np.float32)
     scaler = StandardScaler()
-    if len(train) > _CLUSTER_FIT_ROWS:
-        fit_idx = train.sample(_CLUSTER_FIT_ROWS, random_state=42).index
-        scaler.fit(X.loc[fit_idx])
-    else:
-        scaler.fit(X)
+    scaler.fit(X)
     X_scaled = scaler.transform(X)
-    weight_vec = np.array([feature_weights.get(col, 1.0) for col in _CLUSTER_FEATURES], dtype=float)
+    del feature_weights
+    weight_vec = np.ones(len(_CLUSTER_FEATURES), dtype=float)
     X_weighted = X_scaled * weight_vec
     pca = PCA(n_components=6, random_state=42)
-    if len(train) > _CLUSTER_FIT_ROWS:
-        take = np.random.default_rng(42).choice(len(train), size=_CLUSTER_FIT_ROWS, replace=False)
-        pca.fit(X_weighted[take])
-    else:
-        pca.fit(X_weighted)
+    pca.fit(X_weighted)
     X_pca = pca.transform(X_weighted).astype(np.float32)
-
-    best_centers: Optional[np.ndarray] = None
-    best_probs: Optional[np.ndarray] = None
-    best_summaries: Optional[List[Dict[str, object]]] = None
-    best_map: Optional[Dict[int, str]] = None
-    best_unique = -1
-    for seed in range(42, 54):
-        fit_sample = X_pca
-        if len(X_pca) > 100_000:
-            take = np.random.default_rng(seed).choice(len(X_pca), size=100_000, replace=False)
-            fit_sample = X_pca[take]
-        centers, _ = _fuzzy_cmeans_fit(fit_sample, random_state=seed)
-        probs = _fuzzy_cmeans_predict(X_pca, centers)
-        summaries, name_map, unique_count = _summarize_fuzzy_clusters(train, probs)
-        if unique_count > best_unique:
-            best_centers = centers
-            best_probs = probs
-            best_summaries = summaries
-            best_map = name_map
-            best_unique = unique_count
-        if unique_count == _N_CLUSTERS:
-            break
-
-    if best_centers is None or best_probs is None or best_summaries is None or best_map is None:
-        raise RuntimeError("Failed to fit fuzzy archetypes")
-
-    ordered_idx = [next(idx for idx, name in best_map.items() if name == cluster_name) for cluster_name in cluster_cols]
-    ordered_probs = best_probs[:, ordered_idx]
+    centers = np.vstack(
+        [X_pca[train["rule_bucket"].to_numpy() == cluster_name].mean(axis=0) for cluster_name in cluster_cols]
+    ).astype(np.float32)
+    probs = _fuzzy_cmeans_predict(X_pca, centers)
+    summaries, mean_prob_by_source = _summarize_fuzzy_clusters(train, probs)
+    mean_prob_argmax = mean_prob_by_source.idxmax(axis=1).to_dict()
+    failed_sources = [
+        cluster_name
+        for cluster_name in cluster_cols
+        if mean_prob_argmax.get(cluster_name) != cluster_name
+        or float(mean_prob_by_source.loc[cluster_name, cluster_name]) < _CLUSTER_SOURCE_MIN_MEAN_PROB
+    ]
+    if failed_sources:
+        diag = ", ".join(
+            f"{name}->{mean_prob_argmax.get(name, 'missing')} "
+            f"({float(mean_prob_by_source.loc[name, name]):.3f})"
+            for name in failed_sources
+        )
+        raise RuntimeError(
+            "Anchored fuzzy archetypes failed source-bucket validation: "
+            + diag
+        )
+    for col in ("speed_diff", "lift_diff", "transverse_pit_diff"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
     for col_idx, col in enumerate(cluster_cols):
         df[col] = np.nan
-        df.loc[valid, col] = ordered_probs[:, col_idx]
+        df.loc[train.index, col] = probs[:, col_idx]
 
-    renamed_summaries: List[Dict[str, object]] = []
-    for summary in best_summaries:
-        summary = dict(summary)
-        summary["cluster"] = best_map[int(summary.pop("cluster_index"))]
-        renamed_summaries.append(summary)
-    renamed_summaries.sort(key=lambda row: cluster_cols.index(str(row["cluster"])))
     cluster_model = {
-        "centers": best_centers[ordered_idx],
+        "centers": centers,
         "m": _FCM_M,
         "taxonomy": cluster_cols,
-        "unique_heuristics": best_unique,
+        "unique_heuristics": _N_CLUSTERS,
+        "fit_attempts": 1,
+        "cluster_mode": "anchored_fuzzy_prototypes",
+        "source_bucket_argmax": mean_prob_argmax,
+        "source_bucket_mean_prob": {
+            cluster_name: float(mean_prob_by_source.loc[cluster_name, cluster_name])
+            for cluster_name in cluster_cols
+        },
     }
-    return scaler, {"pca": pca, **cluster_model}, weight_vec, cluster_cols, df, renamed_summaries
+    summaries.sort(key=lambda row: cluster_cols.index(str(row["cluster"])))
+    return scaler, {"pca": pca, **cluster_model}, weight_vec, cluster_cols, df, summaries
 
 
 def _build_context_priors(
@@ -1309,10 +1508,15 @@ def _predict_terminal_probabilities(X: pd.DataFrame, event_models: Dict[str, obj
         X,
     )
     inplay_given_contact = _predict_binary_prob(event_models.get("inplay_given_contact"), X)
-    single_given_inplay = _predict_binary_prob(event_models.get("single_given_inplay"), X)
-    double_given_inplay = _predict_binary_prob(event_models.get("double_given_inplay"), X)
-    triple_given_inplay = _predict_binary_prob(event_models.get("triple_given_inplay"), X)
-    home_run_given_inplay = _predict_binary_prob(event_models.get("home_run_given_inplay"), X)
+    air_given_inplay = _predict_binary_prob(event_models.get("air_given_inplay"), X)
+    pop_given_air = _predict_binary_prob(event_models.get("pop_given_air"), X)
+    home_run_given_air_no_pop = _predict_binary_prob(event_models.get("home_run_given_air_no_pop"), X)
+    hit_given_air_no_pop_no_hr = _predict_binary_prob(event_models.get("hit_given_air_no_pop_no_hr"), X)
+    ground_hit_given_ground = _predict_binary_prob(event_models.get("ground_hit_given_ground"), X)
+    if1b_given_ground_hit = _predict_binary_prob(event_models.get("if1b_given_ground_hit"), X)
+    gidp_given_ground_out = _predict_binary_prob(event_models.get("gidp_given_ground_out"), X)
+    xbh_given_non_if1b_hit = _predict_binary_prob(event_models.get("xbh_given_non_if1b_hit"), X)
+    triple_given_xbh = _predict_binary_prob(event_models.get("triple_given_xbh"), X)
 
     take = np.clip(1.0 - swing, 0.0, 1.0)
     called_strike_given_take = np.clip(called_strike_given_take, 0.0, 1.0)
@@ -1327,35 +1531,46 @@ def _predict_terminal_probabilities(X: pd.DataFrame, event_models: Dict[str, obj
     inplay = contact * inplay_given_contact
     foul = contact * np.clip(1.0 - inplay_given_contact, 0.0, 1.0)
 
-    hit_probs = np.column_stack(
-        [
-            single_given_inplay,
-            double_given_inplay,
-            triple_given_inplay,
-            home_run_given_inplay,
-        ]
-    ).astype(np.float32)
-    hit_sum = hit_probs.sum(axis=1, keepdims=True)
-    hit_scale = np.where(hit_sum > 1.0, hit_sum, 1.0)
-    hit_probs = hit_probs / np.maximum(hit_scale, 1e-12)
-    inplay_out = inplay * np.clip(1.0 - hit_probs.sum(axis=1), 0.0, 1.0)
+    air = inplay * air_given_inplay
+    ground = np.clip(inplay - air, 0.0, 1.0)
 
-    x_single = inplay * hit_probs[:, 0]
-    x_double = inplay * hit_probs[:, 1]
-    x_triple = inplay * hit_probs[:, 2]
-    x_home_run = inplay * hit_probs[:, 3]
-    damage = (x_single + 2.0 * x_double + 3.0 * x_triple + 4.0 * x_home_run) / 4.0
+    pop = air * pop_given_air
+    air_after_pop = np.clip(air - pop, 0.0, 1.0)
+    home_run = air_after_pop * home_run_given_air_no_pop
+    air_live = np.clip(air_after_pop - home_run, 0.0, 1.0)
+    air_hit = air_live * hit_given_air_no_pop_no_hr
+    air_out = np.clip(air_live - air_hit, 0.0, 1.0)
+
+    ground_hit = ground * ground_hit_given_ground
+    ground_out_total = np.clip(ground - ground_hit, 0.0, 1.0)
+    if1b = ground_hit * if1b_given_ground_hit
+    other_ground_hit = np.clip(ground_hit - if1b, 0.0, 1.0)
+    gidp = ground_out_total * gidp_given_ground_out
+    gbout = np.clip(ground_out_total - gidp, 0.0, 1.0)
+
+    other_hit = np.clip(air_hit + other_ground_hit, 0.0, 1.0)
+    xbh = other_hit * xbh_given_non_if1b_hit
+    triple = xbh * triple_given_xbh
+    double = np.clip(xbh - triple, 0.0, 1.0)
+    single = np.clip(other_hit - xbh, 0.0, 1.0)
+    out = np.clip(pop + gbout + gidp + air_out, 0.0, 1.0)
+    damage = (if1b + single + 2.0 * double + 3.0 * triple + 4.0 * home_run) / 4.0
     return {
         "callstr": callstr,
         "ball": ball,
         "hbp": hbp,
         "swstr": whiff,
         "foul": foul,
-        "out": inplay_out,
-        "single": x_single,
-        "double": x_double,
-        "triple": x_triple,
-        "home_run": x_home_run,
+        "pop": pop,
+        "if1b": if1b,
+        "gbout": gbout,
+        "gidp": gidp,
+        "air_out": air_out,
+        "single": single,
+        "double": double,
+        "triple": triple,
+        "home_run": home_run,
+        "out": out,
         "damage": damage,
     }
 
@@ -1371,8 +1586,13 @@ def _expected_run_value(
         + terminal_probs["ball"] * rv_lookup["rv_ball"][balls, strikes]
         + terminal_probs["hbp"] * rv_lookup["rv_hbp"][balls, strikes]
         + terminal_probs["foul"] * rv_lookup["rv_foul"][balls, strikes]
-        + terminal_probs["out"] * rv_lookup["rv_out"][balls, strikes]
-        + terminal_probs["single"] * rv_lookup["rv_single"][balls, strikes]
+        + (
+            terminal_probs["pop"]
+            + terminal_probs["gbout"]
+            + terminal_probs["gidp"]
+            + terminal_probs["air_out"]
+        ) * rv_lookup["rv_out"][balls, strikes]
+        + (terminal_probs["if1b"] + terminal_probs["single"]) * rv_lookup["rv_single"][balls, strikes]
         + terminal_probs["double"] * rv_lookup["rv_double"][balls, strikes]
         + terminal_probs["triple"] * rv_lookup["rv_triple"][balls, strikes]
         + terminal_probs["home_run"] * rv_lookup["rv_home_run"][balls, strikes]
@@ -1459,17 +1679,33 @@ def _fit_event_models(
     _fit_binary("swing", full, "is_swing")
     _fit_binary("whiff_given_swing", full[full["is_swing"] == 1], "is_whiff")
     _fit_binary("called_strike_given_take", full[full["is_take"] == 1], "is_called_strike")
-    _fit_binary("ball_given_take", full[full["is_take"] == 1], "is_ball")
     _fit_binary(
         "hbp_given_noncall_take",
         full[(full["is_take"] == 1) & (full["is_called_strike"] == 0)],
         "is_hbp",
     )
     _fit_binary("inplay_given_contact", full[full["is_contact"] == 1], "is_inplay")
-    _fit_binary("single_given_inplay", full[full["is_inplay"] == 1], "is_single")
-    _fit_binary("double_given_inplay", full[full["is_inplay"] == 1], "is_double")
-    _fit_binary("triple_given_inplay", full[full["is_inplay"] == 1], "is_triple")
-    _fit_binary("home_run_given_inplay", full[full["is_inplay"] == 1], "is_home_run")
+    _fit_binary("air_given_inplay", full[full["is_inplay"] == 1], "is_air_inplay")
+    _fit_binary("pop_given_air", full[full["is_air_inplay"] == 1], "is_popup")
+    _fit_binary(
+        "home_run_given_air_no_pop",
+        full[(full["is_air_inplay"] == 1) & (full["is_popup"] == 0)],
+        "is_home_run",
+    )
+    _fit_binary(
+        "hit_given_air_no_pop_no_hr",
+        full[(full["is_air_inplay"] == 1) & (full["is_popup"] == 0) & (full["is_home_run"] == 0)],
+        "is_air_hit_non_hr",
+    )
+    _fit_binary("ground_hit_given_ground", full[full["is_ground_inplay"] == 1], "is_ground_hit")
+    _fit_binary("if1b_given_ground_hit", full[full["is_ground_hit"] == 1], "is_if1b")
+    _fit_binary(
+        "gidp_given_ground_out",
+        full[(full["is_ground_inplay"] == 1) & (full["is_ground_hit"] == 0)],
+        "is_gidp",
+    )
+    _fit_binary("xbh_given_non_if1b_hit", full[full["is_hit_non_hr_non_if1b"] == 1], "is_xbh_non_if1b")
+    _fit_binary("triple_given_xbh", full[full["is_xbh_non_if1b"] == 1], "is_triple")
     models["event_features"] = event_features
     return models, metrics
 
@@ -1523,13 +1759,14 @@ def _simulate_pitchsim_targets(
     context_distributions: Dict[Tuple[str, str, str], np.ndarray],
     event_models: Dict[str, object],
     run_value_table: pd.DataFrame,
-    batch_size: int = 128,
+    batch_size: int = _SIM_BATCH_SIZE,
 ) -> pd.DataFrame:
     event_features = event_models["event_features"]
     out = sim_df.copy()
     rv_lookup = _run_value_lookup(run_value_table)
     context_balls = _CONTEXT_BALLS.astype(int)
     context_strikes = _CONTEXT_STRIKES.astype(int)
+    total_batches = (len(sim_df) + batch_size - 1) // batch_size
 
     for stand in ("R", "L"):
         side_suffix = "vsR" if stand == "R" else "vsL"
@@ -1539,8 +1776,19 @@ def _simulate_pitchsim_targets(
         ball_vals = np.zeros(len(sim_df), dtype=np.float32)
         hr_vals = np.zeros(len(sim_df), dtype=np.float32)
         damage_vals = np.zeros(len(sim_df), dtype=np.float32)
+        print(
+            f"    Simulating {side_suffix}: {total_batches:,} batches of up to {batch_size:,} pitch-shapes",
+            flush=True,
+        )
 
         for start in range(0, len(sim_df), batch_size):
+            batch_number = start // batch_size + 1
+            if (
+                batch_number == 1
+                or batch_number % _SIM_PROGRESS_EVERY == 0
+                or batch_number == total_batches
+            ):
+                print(f"      {side_suffix} batch {batch_number:,}/{total_batches:,}", flush=True)
             batch_idx = np.arange(start, min(start + batch_size, len(sim_df)))
             batch = sim_df.iloc[batch_idx].copy()
             context_weights = _mix_context_distribution(batch, cluster_cols, context_distributions, stand)
@@ -1567,12 +1815,12 @@ def _simulate_pitchsim_targets(
         out[f"StuffHomeRun_{side_suffix}"] = hr_vals
         out[f"StuffDamage_{side_suffix}"] = damage_vals
 
-    out["StuffRV"] = 0.5 * (out["StuffRV_vsR"] + out["StuffRV_vsL"])
-    out["StuffWhiff"] = 0.5 * (out["StuffWhiff_vsR"] + out["StuffWhiff_vsL"])
-    out["StuffCalledStrike"] = 0.5 * (out["StuffCalledStrike_vsR"] + out["StuffCalledStrike_vsL"])
-    out["StuffBall"] = 0.5 * (out["StuffBall_vsR"] + out["StuffBall_vsL"])
-    out["StuffHomeRun"] = 0.5 * (out["StuffHomeRun_vsR"] + out["StuffHomeRun_vsL"])
-    out["StuffDamage"] = 0.5 * (out["StuffDamage_vsR"] + out["StuffDamage_vsL"])
+    out["StuffRV"] = _blend_platoon_sides(out["StuffRV_vsR"], out["StuffRV_vsL"])
+    out["StuffWhiff"] = _blend_platoon_sides(out["StuffWhiff_vsR"], out["StuffWhiff_vsL"])
+    out["StuffCalledStrike"] = _blend_platoon_sides(out["StuffCalledStrike_vsR"], out["StuffCalledStrike_vsL"])
+    out["StuffBall"] = _blend_platoon_sides(out["StuffBall_vsR"], out["StuffBall_vsL"])
+    out["StuffHomeRun"] = _blend_platoon_sides(out["StuffHomeRun_vsR"], out["StuffHomeRun_vsL"])
+    out["StuffDamage"] = _blend_platoon_sides(out["StuffDamage_vsR"], out["StuffDamage_vsL"])
     out["StuffFIPRV"] = _compose_fip_raw(
         whiff=out["StuffWhiff"],
         called_strike=out["StuffCalledStrike"],
@@ -1616,37 +1864,33 @@ def _fit_distilled_models(sim_df: pd.DataFrame) -> Tuple[Dict[str, object], Dict
 
     models: Dict[str, object] = {"features": list(_DISTILL_FEATURES)}
     metrics: Dict[str, Dict[str, float]] = {}
-    base_params = dict(
-        n_estimators=_DISTILL_BASE_ESTIMATORS,
-        max_depth=4,
-        learning_rate=0.05,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        min_child_weight=16,
-        gamma=0.1,
-        reg_alpha=0.5,
-        reg_lambda=6.0,
+    params = dict(
+        n_estimators=450,
+        max_depth=3,
+        learning_rate=0.035,
+        subsample=0.9,
+        colsample_bytree=0.9,
+        min_child_weight=2,
+        gamma=0.0,
+        reg_alpha=0.0,
+        reg_lambda=1.5,
         objective="reg:squarederror",
         eval_metric="rmse",
         tree_method="hist",
         random_state=42,
-        early_stopping_rounds=_EARLY_STOPPING_ROUNDS,
     )
-    params, tune_meta = _tune_xgb_params(
-        frame=frame,
-        features=_DISTILL_FEATURES,
-        target=targets[0],
-        group_col="Pitcher",
-        model_cls=XGBRegressor,
-        base_params=base_params,
-        task="regression",
-        label="distill",
-        max_rows=_DISTILL_TUNE_ROWS,
-    )
-    metrics["distill_tuning"] = tune_meta
+    metrics["distill_tuning"] = {
+        "skipped": True,
+        "reason": "fixed_low_regularization_fast_distill",
+        "sample_rows": int(len(frame)),
+        "params": dict(params),
+    }
     for target in targets:
         model = XGBRegressor(**params)
         y = frame[target].astype(np.float32)
+        target_std = float(np.std(y.to_numpy(dtype=float)))
+        if target_std <= 1e-10:
+            raise RuntimeError(f"Distillation target {target} collapsed before model fit")
         model.fit(
             X.iloc[train_idx],
             y.iloc[train_idx],
@@ -1655,10 +1899,17 @@ def _fit_distilled_models(sim_df: pd.DataFrame) -> Tuple[Dict[str, object], Dict
         )
         pred = model.predict(X.iloc[val_idx])
         truth = y.iloc[val_idx].to_numpy(dtype=float)
+        pred_std = float(np.std(pred.astype(float)))
         metrics[target] = {
             "val_rmse": float(np.sqrt(np.mean(np.square(truth - pred)))),
             "val_corr": _safe_corr(truth, pred),
+            "target_std": target_std,
+            "pred_std": pred_std,
         }
+        if target in {"StuffRV_vsR", "StuffRV_vsL"} and pred_std <= max(1e-8, target_std * 0.01):
+            raise RuntimeError(
+                f"Distilled {target} collapsed: target_std={target_std:.8f}, pred_std={pred_std:.8f}"
+            )
         models[target] = model
     return models, metrics
 
@@ -1680,9 +1931,7 @@ def _population_stats_from_values(
 
 
 def _blend_display_stuff_rv(rv_r: np.ndarray, rv_l: np.ndarray) -> np.ndarray:
-    return (_DISPLAY_VSR_WEIGHT * np.asarray(rv_r, dtype=float)) + (
-        _DISPLAY_VSL_WEIGHT * np.asarray(rv_l, dtype=float)
-    )
+    return _blend_platoon_sides(rv_r, rv_l)
 
 
 def _display_group_columns(df: pd.DataFrame) -> List[str]:
@@ -1778,13 +2027,13 @@ def _compute_population_stats(
     damage_r = distilled_models["StuffDamage_vsR"].predict(pred_frame)
     damage_l = distilled_models["StuffDamage_vsL"].predict(pred_frame)
 
-    overall = 0.5 * (rv_r + rv_l)
+    overall = _blend_platoon_sides(rv_r, rv_l)
     fip_raw = _compose_fip_raw(
-        whiff=0.5 * (whiff_r + whiff_l),
-        called_strike=0.5 * (cs_r + cs_l),
-        ball=0.5 * (ball_r + ball_l),
-        home_run=0.5 * (hr_r + hr_l),
-        damage=0.5 * (damage_r + damage_l),
+        whiff=_blend_platoon_sides(whiff_r, whiff_l),
+        called_strike=_blend_platoon_sides(cs_r, cs_l),
+        ball=_blend_platoon_sides(ball_r, ball_l),
+        home_run=_blend_platoon_sides(hr_r, hr_l),
+        damage=_blend_platoon_sides(damage_r, damage_l),
     )
     return _population_stats_from_values(pitch_types, overall), _population_stats_from_values(pitch_types, fip_raw)
 
@@ -1823,8 +2072,10 @@ def build_pitchsim_display_population(
             CASE WHEN BatterSide IN ('Left', 'L') THEN 'L' ELSE 'R' END AS BatterSide,
             Balls,
             Strikes,
+            Outs,
             PitchCall,
             PlayResult,
+            OutsOnPlay,
             TaggedHitType,
             KorBB,
             RelSpeed,
@@ -1833,7 +2084,8 @@ def build_pitchsim_display_population(
             Extension,
             RelHeight,
             RelSide,
-            VertApprAngle,
+            VertRelAngle,
+            HorzRelAngle,
             PlateLocHeight,
             PlateLocSide,
             SpinRate,
@@ -1862,6 +2114,8 @@ def build_pitchsim_display_population(
           AND Extension IS NOT NULL
           AND RelHeight IS NOT NULL
           AND RelSide IS NOT NULL
+          AND VertRelAngle IS NOT NULL
+          AND HorzRelAngle IS NOT NULL
           AND PlateLocHeight IS NOT NULL
           AND PlateLocSide IS NOT NULL
     """
@@ -1968,7 +2222,7 @@ def _compute_location_rv_stats(
     X_distill = sub[list(_DISTILL_FEATURES)].astype(np.float32)
     stuff_rv_r = distilled_models["StuffRV_vsR"].predict(X_distill)
     stuff_rv_l = distilled_models["StuffRV_vsL"].predict(X_distill)
-    sub["StuffRV"] = 0.5 * (stuff_rv_r + stuff_rv_l)
+    sub["StuffRV"] = _blend_platoon_sides(stuff_rv_r, stuff_rv_l)
 
     # 2) Compute FullRV at actual location+count for each batter side
     balls = sub["Balls"].astype(int).clip(0, 3).to_numpy()
@@ -1986,7 +2240,7 @@ def _compute_location_rv_stats(
         rv = _expected_run_value(terminal_probs, _run_value_lookup(run_value_table), balls, strikes)
         full_rv_sides.append(rv)
 
-    sub["FullRV"] = 0.5 * (full_rv_sides[0] + full_rv_sides[1])
+    sub["FullRV"] = _blend_platoon_sides(full_rv_sides[0], full_rv_sides[1])
 
     # 3) LocationRV = FullRV - StuffRV
     sub["LocationRV"] = sub["FullRV"] - sub["StuffRV"]
@@ -2028,9 +2282,8 @@ def train_pitchsim_stuff_model(parquet_path: str, model_path: str) -> None:
     df = df.dropna(subset=["TaggedPitchType"]).copy()
     print(f"  After D1 pitch filters: {len(df):,} pitches")
 
-    warm_df = _prepare_pitchsim_frame(df)
-    vaa_models = _fit_vaa_models(warm_df)
-    df = _prepare_pitchsim_frame(df, vaa_models=vaa_models)
+    df = _prepare_pitchsim_frame(df)
+    vaa_models: Dict[str, object] = {}
 
     weights, weight_metrics = _fit_weight_model(df)
     print(
@@ -2056,13 +2309,20 @@ def train_pitchsim_stuff_model(parquet_path: str, model_path: str) -> None:
         f" swing_auc={event_metrics.get('swing', {}).get('val_auc', np.nan):.4f}"
         f" whiff_auc={event_metrics.get('whiff_given_swing', {}).get('val_auc', np.nan):.4f}"
         f" take_cs_auc={event_metrics.get('called_strike_given_take', {}).get('val_auc', np.nan):.4f}"
-        f" take_ball_auc={event_metrics.get('ball_given_take', {}).get('val_auc', np.nan):.4f}"
-        f" hr_auc={event_metrics.get('home_run_given_inplay', {}).get('val_auc', np.nan):.4f}"
+        f" air_auc={event_metrics.get('air_given_inplay', {}).get('val_auc', np.nan):.4f}"
+        f" hr_auc={event_metrics.get('home_run_given_air_no_pop', {}).get('val_auc', np.nan):.4f}"
     )
 
     sim_df = _stratified_sample_by_pitch_type(df, total_rows=_SIM_TARGET_ROWS, min_rows=40)
     sim_df = sim_df.dropna(subset=list(_EVENT_BASE_FEATURES) + list(cluster_cols))
-    print(f"  Simulating standardized stuff outcomes for {len(sim_df):,} pitch-shape rows ...")
+    sim_actual_rows = len(sim_df)
+    synthetic_contexts = sim_actual_rows * _CONTEXT_LEN * 2
+    print(
+        "  Simulating standardized stuff outcomes for"
+        f" {sim_actual_rows:,} pitch-shape rows"
+        f" ({synthetic_contexts:,} contexts; batch_size={_SIM_BATCH_SIZE:,}) ...",
+        flush=True,
+    )
 
     # Free the large training frame before simulation to avoid OOM
     del df
@@ -2074,6 +2334,7 @@ def train_pitchsim_stuff_model(parquet_path: str, model_path: str) -> None:
         context_distributions=context_distributions,
         event_models=event_models,
         run_value_table=run_value_table,
+        batch_size=_SIM_BATCH_SIZE,
     )
 
     distilled_models, distill_metrics = _fit_distilled_models(sim_df)
@@ -2084,6 +2345,9 @@ def train_pitchsim_stuff_model(parquet_path: str, model_path: str) -> None:
     df = df.dropna(subset=["TaggedPitchType"]).copy()
     df = _prepare_pitchsim_frame(df, vaa_models=vaa_models)
     pt_stats, fip_pt_stats = _compute_population_stats(df, distilled_models)
+    global_mu, global_sigma = pt_stats.get("__global__", (np.nan, np.nan))
+    if not np.isfinite(global_mu) or not np.isfinite(global_sigma) or float(global_sigma) <= 1e-8:
+        raise RuntimeError(f"Stuff+ population normalization collapsed: global_sigma={global_sigma}")
 
     # LocationRV population stats for Command+
     print("  Computing LocationRV population stats for Command+ ...")
@@ -2121,18 +2385,23 @@ def train_pitchsim_stuff_model(parquet_path: str, model_path: str) -> None:
         "event_metrics": event_metrics,
         "weight_metrics": weight_metrics,
         "distill_metrics": distill_metrics,
+        "sim_target_rows": int(_SIM_TARGET_ROWS),
+        "sim_actual_rows": int(sim_actual_rows),
+        "sim_batch_size": int(_SIM_BATCH_SIZE),
         "pitch_type_labels": _PITCH_TYPE_LABELS,
         "full_cascade_ready": True,
     }
     os.makedirs(os.path.dirname(model_path), exist_ok=True)
-    joblib.dump(artifact, model_path, compress=3)
-    saved_artifact = joblib.load(model_path)
+    tmp_model_path = f"{model_path}.tmp"
+    joblib.dump(artifact, tmp_model_path, compress=3)
+    saved_artifact = joblib.load(tmp_model_path)
     if not pitchsim_artifact_has_full_cascade(saved_artifact):
         missing = ", ".join(pitchsim_artifact_missing_keys(saved_artifact, require_full_cascade=True))
         raise RuntimeError(
             "Saved PitchSim artifact is incomplete after reload; missing full-cascade keys: "
             f"{missing}"
         )
+    os.replace(tmp_model_path, model_path)
     print(f"  Saved D1 PitchSim-style Stuff+ artifact to {model_path}")
 
 
@@ -2183,7 +2452,7 @@ def _validate_davidson_stuff(
     X = scored.loc[valid, feature_cols].astype(np.float32)
     rv_r = distilled_models["StuffRV_vsR"].predict(X)
     rv_l = distilled_models["StuffRV_vsL"].predict(X)
-    scored.loc[valid, "StuffRV"] = 0.5 * (rv_r + rv_l)
+    scored.loc[valid, "StuffRV"] = _blend_platoon_sides(rv_r, rv_l)
 
     global_mu, global_sigma = pt_stats.get("__global__", (0.0, 1.0))
     if not np.isfinite(global_sigma) or global_sigma <= 0:
@@ -2245,6 +2514,7 @@ def compute_pitchsim_stuff_plus(data: pd.DataFrame, artifact: dict) -> pd.DataFr
     if data is None or len(data) == 0:
         return data
 
+    base = data.copy()
     models = artifact.get("distilled_models", {})
     feature_cols = artifact.get("features", _DISTILL_FEATURES)
     vaa_models = artifact.get("vaa_models")
@@ -2263,7 +2533,7 @@ def compute_pitchsim_stuff_plus(data: pd.DataFrame, artifact: dict) -> pd.DataFr
     if not valid.any():
         df["StuffPlus"] = np.nan
         df["StuffFIPPlus"] = np.nan
-        return df
+        return _overlay_pitchsim_columns(base, df, overwrite=("StuffPlus", "StuffFIPPlus"))
 
     X = df.loc[valid, feature_cols].astype(np.float32)
     rv_r = models["StuffRV_vsR"].predict(X)
@@ -2300,22 +2570,22 @@ def compute_pitchsim_stuff_plus(data: pd.DataFrame, artifact: dict) -> pd.DataFr
     df["StuffFIPRV"] = np.nan
     df.loc[valid, "StuffRV_vsR"] = rv_r
     df.loc[valid, "StuffRV_vsL"] = rv_l
-    df.loc[valid, "StuffRV"] = 0.5 * (rv_r + rv_l)
+    df.loc[valid, "StuffRV"] = _blend_platoon_sides(rv_r, rv_l)
     df.loc[valid, "StuffWhiff_vsR"] = whiff_r
     df.loc[valid, "StuffWhiff_vsL"] = whiff_l
-    df.loc[valid, "StuffWhiff"] = 0.5 * (whiff_r + whiff_l)
+    df.loc[valid, "StuffWhiff"] = _blend_platoon_sides(whiff_r, whiff_l)
     df.loc[valid, "StuffCalledStrike_vsR"] = cs_r
     df.loc[valid, "StuffCalledStrike_vsL"] = cs_l
-    df.loc[valid, "StuffCalledStrike"] = 0.5 * (cs_r + cs_l)
+    df.loc[valid, "StuffCalledStrike"] = _blend_platoon_sides(cs_r, cs_l)
     df.loc[valid, "StuffBall_vsR"] = ball_r
     df.loc[valid, "StuffBall_vsL"] = ball_l
-    df.loc[valid, "StuffBall"] = 0.5 * (ball_r + ball_l)
+    df.loc[valid, "StuffBall"] = _blend_platoon_sides(ball_r, ball_l)
     df.loc[valid, "StuffHomeRun_vsR"] = hr_r
     df.loc[valid, "StuffHomeRun_vsL"] = hr_l
-    df.loc[valid, "StuffHomeRun"] = 0.5 * (hr_r + hr_l)
+    df.loc[valid, "StuffHomeRun"] = _blend_platoon_sides(hr_r, hr_l)
     df.loc[valid, "StuffDamage_vsR"] = damage_r
     df.loc[valid, "StuffDamage_vsL"] = damage_l
-    df.loc[valid, "StuffDamage"] = 0.5 * (damage_r + damage_l)
+    df.loc[valid, "StuffDamage"] = _blend_platoon_sides(damage_r, damage_l)
     df.loc[valid, "StuffFIPRV"] = _compose_fip_raw(
         whiff=df.loc[valid, "StuffWhiff"].to_numpy(dtype=float),
         called_strike=df.loc[valid, "StuffCalledStrike"].to_numpy(dtype=float),
@@ -2359,7 +2629,35 @@ def compute_pitchsim_stuff_plus(data: pd.DataFrame, artifact: dict) -> pd.DataFr
         z = (df.loc[mask, "StuffFIPRV"].astype(float) - mu) / sigma
         fip_scores.loc[mask] = 100.0 + (-z) * 10.0
     df["StuffFIPPlus"] = fip_scores
-    return df
+    return _overlay_pitchsim_columns(
+        base,
+        df,
+        overwrite=(
+            "StuffRV_vsR",
+            "StuffRV_vsL",
+            "StuffRV",
+            "StuffWhiff_vsR",
+            "StuffWhiff_vsL",
+            "StuffWhiff",
+            "StuffCalledStrike_vsR",
+            "StuffCalledStrike_vsL",
+            "StuffCalledStrike",
+            "StuffBall_vsR",
+            "StuffBall_vsL",
+            "StuffBall",
+            "StuffHomeRun_vsR",
+            "StuffHomeRun_vsL",
+            "StuffHomeRun",
+            "StuffDamage_vsR",
+            "StuffDamage_vsL",
+            "StuffDamage",
+            "StuffFIPRV",
+            "StuffRV100",
+            "StuffFIPRV100",
+            "StuffPlus",
+            "StuffFIPPlus",
+        ),
+    )
 
 
 def compute_pitchsim_command_plus(data: pd.DataFrame, artifact: dict) -> pd.DataFrame:
@@ -2373,6 +2671,7 @@ def compute_pitchsim_command_plus(data: pd.DataFrame, artifact: dict) -> pd.Data
     if data is None or len(data) == 0:
         return data
 
+    base = data.copy()
     event_models = artifact.get("event_models")
     if event_models is None:
         # Old artifact without event models — skip gracefully
@@ -2408,15 +2707,15 @@ def compute_pitchsim_command_plus(data: pd.DataFrame, artifact: dict) -> pd.Data
 
     if not valid.any():
         df["CommandPlus"] = np.nan
-        return df
+        return _overlay_pitchsim_columns(base, df, overwrite=("CommandPlus",))
 
     sub = df.loc[valid]
 
     # 1) StuffRV via distilled models
     X_distill = sub[feature_cols].astype(np.float32)
-    stuff_rv = 0.5 * (
-        distilled_models["StuffRV_vsR"].predict(X_distill)
-        + distilled_models["StuffRV_vsL"].predict(X_distill)
+    stuff_rv = _blend_platoon_sides(
+        distilled_models["StuffRV_vsR"].predict(X_distill),
+        distilled_models["StuffRV_vsL"].predict(X_distill),
     )
 
     # 2) FullRV at actual location+count for each batter side
@@ -2435,7 +2734,7 @@ def compute_pitchsim_command_plus(data: pd.DataFrame, artifact: dict) -> pd.Data
         rv = _expected_run_value(terminal_probs, _run_value_lookup(run_value_table), balls, strikes)
         full_rv_sides.append(rv)
 
-    full_rv = 0.5 * (full_rv_sides[0] + full_rv_sides[1])
+    full_rv = _blend_platoon_sides(full_rv_sides[0], full_rv_sides[1])
 
     # 3) LocationRV = FullRV - StuffRV
     location_rv = full_rv - stuff_rv
@@ -2456,4 +2755,4 @@ def compute_pitchsim_command_plus(data: pd.DataFrame, artifact: dict) -> pd.Data
         cmd_scores[valid.to_numpy().nonzero()[0][pt_mask]] = 100.0 + (-z) * 10.0
 
     df["CommandPlus"] = cmd_scores
-    return df
+    return _overlay_pitchsim_columns(base, df, overwrite=("CommandPlus",))

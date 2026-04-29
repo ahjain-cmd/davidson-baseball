@@ -145,6 +145,8 @@ _ALL_PIT_COLS = _dedup_cols(
     _PIT_PITCHTYPE_COLS, _PIT_COUNTING_COLS, _PIT_ZONE_COLS,
 )
 
+_GAME_PITCHES_EXPECTED_COLS = "[xWOBA|EVENT],[WOBA],[xPitchRV],[xPitchRV|PIT]"
+
 
 # ── Token management ─────────────────────────────────────────────────────────
 
@@ -1053,7 +1055,8 @@ def fetch_team_all_pitches_trackman(team_id, season_year=2026):
         return pd.DataFrame()
 
     # Smaller batches with escalating timeouts reduce dropped requests on larger schedules.
-    batch_size = 20
+    # A tighter batch size is slower but materially more reliable for some D1 team schedules.
+    batch_size = 8
     all_dfs = []
     failed_batches = []
     for i in range(0, len(game_ids), batch_size):
@@ -1061,7 +1064,7 @@ def fetch_team_all_pitches_trackman(team_id, season_year=2026):
         batch_str = ",".join(str(g) for g in batch)
         df = _query_csv_with_retries(
             "GamePitchesTrackman",
-            {"gameId": batch_str},
+            {"gameId": batch_str, "columns": _GAME_PITCHES_EXPECTED_COLS, "format": "RAW"},
             tok,
             timeouts=(45, 90, 150),
             retry_on_empty=True,
@@ -1121,6 +1124,18 @@ def fetch_team_all_pitches_trackman(team_id, season_year=2026):
         # Batted ball
         "exitVelocity": "ExitSpeed",
         "launchAngle": "Angle",
+        # TrueMedia expected/actual value columns, when returned by the API.
+        # These are preserved as API-sourced values; downstream models should
+        # not synthesize local xWOBA if these are absent.
+        "xWOBA|EVENT": "xWOBA",
+        "xWOBA_EVENT": "xWOBA",
+        "xWOBA": "xWOBA",
+        "xwOBA": "xWOBA",
+        "battedBallExpWOBA": "xWOBA",
+        "WOBA": "WOBA",
+        "wOBA": "WOBA",
+        "xPitchRV": "xPitchRV",
+        "xPitchRV.1": "xPitchRV_PIT",
         # Called-strike probability (used for attackable-zone filtering)
         "pCallSRTK%": "CalledStrikeProb",
         "pCallSRTK": "CalledStrikeProb",
@@ -1214,6 +1229,147 @@ def fetch_team_all_pitches_trackman(team_id, season_year=2026):
     return combined
 
 
+def normalize_game_pitches_trackman(combined):
+    """Normalize GamePitchesTrackman API output to local TrackMan-style columns."""
+    if combined.empty:
+        return combined
+
+    combined = combined.copy()
+    combined["__source"] = "truemedia"
+
+    tm_to_trackman_cols = {
+        "gameId": "GameID", "gameID": "GameID", "game_id": "GameID",
+        "pitchNumber": "PitchNo", "pitchNo": "PitchNo", "pitchSequence": "PitchNo",
+        "pitchOfPA": "PitchofPA", "pitchOfPa": "PitchofPA",
+        "paOfInning": "PAofInning", "paInning": "PAofInning", "plateAppearanceInInning": "PAofInning",
+        "pitcherName": "Pitcher", "batterName": "Batter",
+        "pitchingTeamName": "PitcherTeam", "battingTeamName": "BatterTeam",
+        "pitcherTeam": "PitcherTeam", "batterTeam": "BatterTeam",
+        "pitchType": "TaggedPitchType",
+        "pitchResult": "PitchCall",
+        "atBatResult": "PlayResult",
+        "pitcherHand": "PitcherThrows",
+        "batterHand": "BatterSide",
+        "releaseVelocity": "RelSpeed",
+        "spinRate": "SpinRate",
+        "inducedVertBreak": "InducedVertBreak",
+        "horzBreak": "HorzBreak",
+        "vertApprAngle": "VertApprAngle",
+        "horzApprAngle": "HorzApprAngle",
+        "extension": "Extension",
+        "spinDir": "SpinDirection",
+        "exitVelocity": "ExitSpeed",
+        "launchAngle": "Angle",
+        "xWOBA|EVENT": "xWOBA",
+        "xWOBA_EVENT": "xWOBA",
+        "xWOBA": "xWOBA",
+        "xwOBA": "xWOBA",
+        "battedBallExpWOBA": "xWOBA",
+        "WOBA": "WOBA",
+        "wOBA": "WOBA",
+        "xPitchRV": "xPitchRV",
+        "xPitchRV.1": "xPitchRV_PIT",
+        "pCallSRTK%": "CalledStrikeProb",
+        "pCallSRTK": "CalledStrikeProb",
+        "calledStrikeProb": "CalledStrikeProb",
+        "calledStrikeProbability": "CalledStrikeProb",
+        "balls": "Balls", "strikes": "Strikes", "outs": "Outs",
+        "inning": "Inning", "side": "Top/Bottom",
+    }
+    combined.rename(
+        columns={k: v for k, v in tm_to_trackman_cols.items() if k in combined.columns and v not in combined.columns},
+        inplace=True,
+    )
+
+    if "pxNorm" in combined.columns and "PlateLocSide" not in combined.columns:
+        combined["PlateLocSide"] = pd.to_numeric(combined["pxNorm"], errors="coerce") * 0.83
+    if "pzNorm" in combined.columns and "PlateLocHeight" not in combined.columns:
+        combined["PlateLocHeight"] = pd.to_numeric(combined["pzNorm"], errors="coerce") * 1.0 + 2.5
+
+    if "PitchCall" in combined.columns:
+        combined["PitchCall"] = combined["PitchCall"].replace({
+            "SS": "StrikeSwinging",
+            "SL": "StrikeCalled",
+            "F": "FoulBall",
+            "B": "BallCalled",
+            "IP": "InPlay",
+            "HBP": "HitByPitch",
+        })
+
+    if "PlayResult" in combined.columns:
+        combined["PlayResult"] = combined["PlayResult"].replace({
+            "S": "Single",
+            "D": "Double",
+            "T": "Triple",
+            "HR": "HomeRun",
+            "K": "Strikeout",
+            "BB": "Walk",
+            "HBP": "HitByPitch",
+            "IP_OUT": "Out",
+            "DP": "Out",
+            "FC": "FieldersChoice",
+            "SF": "SacFly",
+            "SH": "SacBunt",
+            "ROE": "Error",
+        })
+
+    if "TaggedPitchType" in combined.columns:
+        combined["TaggedPitchType"] = combined["TaggedPitchType"].replace({
+            "FA": "Fastball", "FF": "Fastball", "Four-Seam": "Fastball", "FourSeam": "Fastball",
+            "SI": "Sinker", "FT": "Sinker", "Two-Seam": "Sinker", "TwoSeam": "Sinker",
+            "FC": "Cutter", "CT": "Cutter",
+            "SL": "Slider",
+            "CU": "Curveball", "CB": "Curveball", "Curve": "Curveball",
+            "CH": "Changeup",
+            "FS": "Splitter", "Split-Finger": "Splitter",
+            "SW": "Sweeper", "ST": "Sweeper",
+            "KC": "Knuckle Curve",
+        })
+
+    if "PitcherThrows" in combined.columns:
+        combined["PitcherThrows"] = combined["PitcherThrows"].replace({
+            "R": "Right", "L": "Left", "RHP": "Right", "LHP": "Left",
+        })
+    if "BatterSide" in combined.columns:
+        combined["BatterSide"] = combined["BatterSide"].replace({
+            "R": "Right", "L": "Left", "S": "Both",
+        })
+
+    if "CalledStrikeProb" in combined.columns:
+        cs_vals = pd.to_numeric(combined["CalledStrikeProb"], errors="coerce")
+        combined["CalledStrikeProb"] = cs_vals / 100.0 if cs_vals.dropna().max() > 1.5 else cs_vals
+
+    return combined
+
+
+def fetch_game_pitches_trackman(game_ids, *, batch_size=8):
+    """Fetch and normalize GamePitchesTrackman rows for explicit game IDs."""
+    tok = get_temp_token()
+    if not tok:
+        return pd.DataFrame()
+
+    ids = [str(g) for g in game_ids if pd.notna(g)]
+    if not ids:
+        return pd.DataFrame()
+
+    all_dfs = []
+    for i in range(0, len(ids), int(batch_size)):
+        batch = ids[i:i + int(batch_size)]
+        df = _query_csv_with_retries(
+            "GamePitchesTrackman",
+            {"gameId": ",".join(batch), "columns": _GAME_PITCHES_EXPECTED_COLS, "format": "RAW"},
+            tok,
+            timeouts=(45, 90, 150),
+            retry_on_empty=True,
+        )
+        if not df.empty:
+            all_dfs.append(df)
+
+    if not all_dfs:
+        return pd.DataFrame()
+    return normalize_game_pitches_trackman(pd.concat(all_dfs, ignore_index=True))
+
+
 def _normalize_tm_df(df):
     """In-place normalization of TrueMedia aggregate DataFrames (column names + percentage scaling)."""
     if df.empty:
@@ -1243,7 +1399,7 @@ def _normalize_tm_df(df):
 # COUNT-FILTERED AGGREGATE STATS
 # ══════════════════════════════════════════════════════════════════════════════
 
-_COUNT_SPLIT_COLS = "[PA],[AB],[AVG],[SLG],[OPS],[WOBA],[K%],[BB%],[Chase%],[SwStrk%],[Contact%],[Swing%],[ExitVel],[Barrel%],[HardHit%]"
+_COUNT_SPLIT_COLS = "[PA],[AB],[AVG],[SLG],[OPS],[WOBA],[xAVG],[xSLG],[xWOBA],[K%],[BB%],[Chase%],[SwStrk%],[Contact%],[Swing%],[ExitVel],[Barrel%],[HardHit%]"
 
 _COUNT_FILTERS = {
     "first_pitch": "event.balls = 0 AND event.strikes = 0",
@@ -1253,6 +1409,21 @@ _COUNT_FILTERS = {
     "two_zero": "event.balls = 2 AND event.strikes = 0",
     "two_one": "event.balls = 2 AND event.strikes = 1",
     "three_one": "event.balls = 3 AND event.strikes = 1",
+}
+
+_EXACT_COUNT_FILTERS = {
+    (0, 0): "event.balls = 0 AND event.strikes = 0",
+    (0, 1): "event.balls = 0 AND event.strikes = 1",
+    (0, 2): "event.balls = 0 AND event.strikes = 2",
+    (1, 0): "event.balls = 1 AND event.strikes = 0",
+    (1, 1): "event.balls = 1 AND event.strikes = 1",
+    (1, 2): "event.balls = 1 AND event.strikes = 2",
+    (2, 0): "event.balls = 2 AND event.strikes = 0",
+    (2, 1): "event.balls = 2 AND event.strikes = 1",
+    (2, 2): "event.balls = 2 AND event.strikes = 2",
+    (3, 0): "event.balls = 3 AND event.strikes = 0",
+    (3, 1): "event.balls = 3 AND event.strikes = 1",
+    (3, 2): "event.balls = 3 AND event.strikes = 2",
 }
 
 
@@ -1288,5 +1459,39 @@ def fetch_hitter_count_splits(team_id, season_year=2026):
         except Exception as e:
             logger.warning("Count split fetch failed (%s): %s", key, e)
             results[key] = pd.DataFrame()
+
+    return results
+
+
+@st.cache_data(ttl=1800, show_spinner="Loading exact-count xWOBA splits...")
+def fetch_hitter_exact_count_splits(team_id, season_year=2026):
+    """Fetch hitter aggregate stats for each exact count.
+
+    Returns dict of {(balls, strikes): DataFrame}.
+    """
+    tok = get_temp_token()
+    if not tok:
+        return {}
+
+    results = {}
+    for count_key, filt in _EXACT_COUNT_FILTERS.items():
+        params = {
+            "teamId": team_id,
+            "seasonYear": season_year,
+            "columns": _COUNT_SPLIT_COLS,
+            "format": "RAW",
+            "filters": f"(({filt}))",
+            "token": tok,
+        }
+        try:
+            res = requests.get(f"{_DQ_BASE}/PlayerTotals.csv", params=params, timeout=30)
+            res.raise_for_status()
+            df = pd.read_csv(StringIO(res.text))
+            if not df.empty:
+                _normalize_tm_df(df)
+            results[count_key] = df
+        except Exception as e:
+            logger.warning("Exact count split fetch failed (%s): %s", count_key, e)
+            results[count_key] = pd.DataFrame()
 
     return results

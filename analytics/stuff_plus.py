@@ -1,7 +1,7 @@
-"""Stuff+ computation — XGBoost run-value model with z-score fallback.
+"""Stuff+ computation — PitchSim-aligned run-value model with z-score fallback.
 
-FanGraphs-style Stuff+: XGBoost trained on per-pitch run values (PitchRV)
-using only physical pitch characteristics.  Falls back to the original
+The primary path uses the local PitchSim-style artifact trained on per-pitch
+run value and distilled for fast runtime scoring. Falls back to the original
 hand-tuned z-score composite when the model file is absent.
 
 Scale: 100 = average, each 10 = 1 stdev better (higher = better stuff).
@@ -125,11 +125,23 @@ def _load_pitchsim_display_stats() -> Dict[str, Tuple[float, float]]:
 
 def train_stuff_plus_model(parquet_path: str) -> None:
     """Train the D1 PitchSim-style Stuff+ artifact."""
+    global _DISPLAY_POP_CACHE, _DISPLAY_STATS_CACHE
+
     from config import PARQUET_PATH
-    from analytics.pitchsim_stuff import train_pitchsim_stuff_model
+    from analytics.pitchsim_stuff import build_pitchsim_display_population, train_pitchsim_stuff_model
+    import joblib
 
     pq = parquet_path or PARQUET_PATH
     train_pitchsim_stuff_model(parquet_path=pq, model_path=_MODEL_PATH)
+    artifact = joblib.load(_MODEL_PATH)
+    if artifact.get("artifact_type") == "pitchsim_lite":
+        pop = build_pitchsim_display_population(parquet_path=pq, artifact=artifact)
+        if pop.empty:
+            raise RuntimeError("PitchSim display population build returned no rows.")
+        os.makedirs(os.path.dirname(_DISPLAY_POP_PATH), exist_ok=True)
+        pop.to_parquet(_DISPLAY_POP_PATH, index=False)
+        _DISPLAY_POP_CACHE = None
+        _DISPLAY_STATS_CACHE = None
 
 
 # =============================================================================
@@ -145,17 +157,31 @@ def _load_stuff_model():
     try:
         artifact = joblib.load(_MODEL_PATH)
         if artifact.get("artifact_type") == "pitchsim_lite":
-            from analytics.pitchsim_stuff import pitchsim_artifact_missing_keys
+            from analytics.pitchsim_stuff import (
+                pitchsim_artifact_missing_keys,
+                pitchsim_current_artifact_version,
+            )
 
             artifact = dict(artifact)
+            expected_version = pitchsim_current_artifact_version()
+            artifact_version = str(artifact.get("artifact_version") or "")
+            if artifact_version != expected_version:
+                warnings.warn(
+                    "PitchSim Stuff+ artifact version mismatch "
+                    f"(found {artifact_version or 'unknown'}, expected {expected_version}). "
+                    "Falling back to the legacy z-score model until the artifact is retrained.",
+                    RuntimeWarning,
+                )
+                return None
             missing = pitchsim_artifact_missing_keys(artifact, require_full_cascade=True)
             if missing:
                 warnings.warn(
                     "PitchSim Stuff+ artifact is missing full-cascade keys "
-                    f"({', '.join(missing)}). Stuff+ scoring will still run, but "
-                    "PitchSim Command+/perturbation analysis requires retraining.",
+                    f"({', '.join(missing)}). The artifact is no longer treated as production-ready. "
+                    "Falling back to the legacy z-score model until retrained.",
                     RuntimeWarning,
                 )
+                return None
             display_stats = _load_pitchsim_display_stats()
             if display_stats:
                 artifact["display_pt_stats"] = display_stats

@@ -8,11 +8,16 @@ import os
 import numpy as np
 import pandas as pd
 
+from trackman_path import resolve_latest_trackman_parquet
+
 # ── Paths ──────────────────────────────────────
 _APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_ROOT = os.environ.get("TRACKMAN_CSV_ROOT", os.path.join(_APP_DIR, "v3"))
 PARQUET_FIXED_PATH = os.path.join(_APP_DIR, "all_trackman_fixed.parquet")
-PARQUET_PATH = PARQUET_FIXED_PATH if os.path.exists(PARQUET_FIXED_PATH) else os.path.join(_APP_DIR, "all_trackman.parquet")
+try:
+    PARQUET_PATH = os.environ.get("TRACKMAN_PARQUET_PATH") or resolve_latest_trackman_parquet(_APP_DIR)
+except FileNotFoundError:
+    PARQUET_PATH = PARQUET_FIXED_PATH
 BLAST_CSV_PATH = os.path.join(_APP_DIR, "Metrics - All Players - 2019-09-11 - 2026-02-18 - 1772478721.csv")
 _BLAST_EXCLUDE = {"Parker Nolan", "Parker Noland"}
 DUCKDB_PATH = os.path.join(_APP_DIR, "davidson.duckdb")

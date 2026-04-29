@@ -12,6 +12,7 @@ from config import (
     _name_sql,
     _SWING_CALLS_SQL,
     _CONTACT_CALLS_SQL,
+    PARQUET_PATH,
     _HAS_LOC,
     ZONE_HEIGHT_BOT,
     ZONE_HEIGHT_TOP,
@@ -26,8 +27,6 @@ from data.loader import query_population, query_precompute, _precompute_table_ex
 
 # ── Paths for tunnel caching (mirrors app.py constants) ──────────
 _APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_PARQUET_FIXED_PATH = os.path.join(_APP_DIR, "all_trackman_fixed.parquet")
-PARQUET_PATH = _PARQUET_FIXED_PATH if os.path.exists(_PARQUET_FIXED_PATH) else os.path.join(_APP_DIR, "all_trackman.parquet")
 CACHE_DIR = os.path.join(_APP_DIR, ".cache")
 TUNNEL_BENCH_PATH = os.path.join(CACHE_DIR, "tunnel_benchmarks.json")
 TUNNEL_WEIGHTS_PATH = os.path.join(CACHE_DIR, "tunnel_weights.json")

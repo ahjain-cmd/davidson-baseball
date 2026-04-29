@@ -33,6 +33,106 @@ from config import safe_mode, _SWING_CALLS_SQL
 from data.loader import query_population, query_precompute
 
 
+_PITCHLAB_VAA_Y0_FT = 50.0
+_PITCHLAB_VAA_YF_FT = 17.0 / 12.0
+_PITCHLAB_VAA_EPS = 1e-9
+
+
+def _pitchlab_plate_state(vy0, ay0):
+    """Return plate time and y-velocity using the Pitch Lab VAA convention."""
+    vy0_arr = np.asarray(vy0, dtype=float)
+    ay0_arr = np.asarray(ay0, dtype=float)
+    delta_y = _PITCHLAB_VAA_Y0_FT - _PITCHLAB_VAA_YF_FT
+
+    t = np.full(vy0_arr.shape, np.nan, dtype=float)
+    vy_f = np.full(vy0_arr.shape, np.nan, dtype=float)
+
+    finite = np.isfinite(vy0_arr) & np.isfinite(ay0_arr)
+    if not finite.any():
+        return t, vy_f
+
+    disc = vy0_arr[finite] ** 2 - 2.0 * ay0_arr[finite] * delta_y
+    valid_disc = disc >= 0.0
+    if valid_disc.any():
+        finite_idx = np.flatnonzero(finite)
+        idx = finite_idx[valid_disc]
+        vy_f[idx] = -np.sqrt(disc[valid_disc])
+
+    linear = finite & (np.abs(ay0_arr) <= _PITCHLAB_VAA_EPS) & (np.abs(vy0_arr) > _PITCHLAB_VAA_EPS)
+    if linear.any():
+        t_linear = -delta_y / vy0_arr[linear]
+        t[linear] = np.where(t_linear > 0.0, t_linear, np.nan)
+        vy_f[linear] = vy0_arr[linear]
+
+    curved = finite & (np.abs(ay0_arr) > _PITCHLAB_VAA_EPS) & np.isfinite(vy_f)
+    if curved.any():
+        t_curved = (vy_f[curved] - vy0_arr[curved]) / ay0_arr[curved]
+        t[curved] = np.where(t_curved > 0.0, t_curved, np.nan)
+
+    return t, vy_f
+
+
+def _recalculate_pitchlab_vaa(frame, reference=None):
+    """Recompute VAA to match the exact Pitch Lab / WildCatsDB physics formula."""
+    if frame is None or frame.empty:
+        return frame
+
+    required = {"vy0", "ay0", "vz0", "az0"}
+    if not required.issubset(frame.columns):
+        return frame
+
+    out = frame.copy()
+    vy0 = pd.to_numeric(out["vy0"], errors="coerce").to_numpy(dtype=float)
+    ay0 = pd.to_numeric(out["ay0"], errors="coerce").to_numpy(dtype=float)
+    vz0 = pd.to_numeric(out["vz0"], errors="coerce").to_numpy(dtype=float)
+    az0 = pd.to_numeric(out["az0"], errors="coerce").to_numpy(dtype=float)
+
+    ref = None
+    if reference is not None and not reference.empty:
+        ref = reference.reindex(out.index)
+
+    if ref is not None:
+        if {"RelSpeed"}.issubset(out.columns) and {"RelSpeed", "vy0", "vz0"}.issubset(ref.columns):
+            curr_vel = pd.to_numeric(out["RelSpeed"], errors="coerce").to_numpy(dtype=float)
+            ref_vel = pd.to_numeric(ref["RelSpeed"], errors="coerce").to_numpy(dtype=float)
+            scale = np.ones(len(out), dtype=float)
+            valid_scale = np.isfinite(curr_vel) & np.isfinite(ref_vel) & (np.abs(ref_vel) > _PITCHLAB_VAA_EPS)
+            scale[valid_scale] = curr_vel[valid_scale] / ref_vel[valid_scale]
+            vy0 = np.where(np.isfinite(vy0), vy0 * scale, vy0)
+            vz0 = np.where(np.isfinite(vz0), vz0 * scale, vz0)
+
+        if {"InducedVertBreak"}.issubset(out.columns) and {"InducedVertBreak", "az0"}.issubset(ref.columns):
+            ref_az0 = pd.to_numeric(ref["az0"], errors="coerce").to_numpy(dtype=float)
+            curr_ivb = pd.to_numeric(out["InducedVertBreak"], errors="coerce").to_numpy(dtype=float)
+            ref_ivb = pd.to_numeric(ref["InducedVertBreak"], errors="coerce").to_numpy(dtype=float)
+            t_for_delta, _ = _pitchlab_plate_state(vy0, ay0)
+            ivb_delta_ft = (curr_ivb - ref_ivb) / 12.0
+            valid_delta = (
+                np.isfinite(ref_az0)
+                & np.isfinite(ivb_delta_ft)
+                & np.isfinite(t_for_delta)
+                & (t_for_delta > _PITCHLAB_VAA_EPS)
+            )
+            az0 = np.where(
+                valid_delta,
+                ref_az0 + (2.0 * ivb_delta_ft / np.square(t_for_delta)),
+                az0,
+            )
+
+    t, vy_f = _pitchlab_plate_state(vy0, ay0)
+    vz_f = vz0 + az0 * t
+    vaa = np.full(len(out), np.nan, dtype=float)
+    valid = np.isfinite(t) & np.isfinite(vy_f) & np.isfinite(vz_f) & (np.abs(vy_f) > _PITCHLAB_VAA_EPS)
+    vaa[valid] = -np.degrees(np.arctan(vz_f[valid] / vy_f[valid]))
+
+    if "VertApprAngle" in out.columns:
+        existing = pd.to_numeric(out["VertApprAngle"], errors="coerce").to_numpy(dtype=float)
+        vaa = np.where(valid, vaa, existing)
+
+    out["VertApprAngle"] = vaa
+    return out
+
+
 def _build_stuff_explanation(pt, stuff_df, baselines_dict):
     """Build a short natural-language explanation of what drives a pitch type's Stuff+ grade.
 
@@ -151,6 +251,309 @@ def _build_stuff_explanation(pt, stuff_df, baselines_dict):
         return None
 
     return ", ".join(parts)
+
+
+def _format_model_lever(label, direction, delta, unit):
+    if label == "Arm-side HB":
+        if direction > 0:
+            return f"Add {delta:g} {unit} arm-side"
+        return f"Add {delta:g} {unit} glove-side/cut"
+    if label == "Release slot side":
+        if direction > 0:
+            return f"Move release slot {delta:g} {unit} arm-side"
+        return f"Move release slot {delta:g} {unit} glove-side"
+    display_label = label if label == "IVB" else label.lower()
+    if direction > 0:
+        return f"Increase {display_label} by {delta:g} {unit}"
+    return f"Decrease {display_label} by {delta:g} {unit}"
+
+
+def _model_lever_caveat(label):
+    if label in {"Release slot height", "Release slot side"}:
+        return "Slot/context"
+    return "Shape lever"
+
+
+def _development_focus(pitch_type, lever):
+    label = lever.get("label", "")
+    direction = int(lever.get("direction", 0))
+    pt = str(pitch_type)
+
+    if label == "Spin rate":
+        if direction > 0:
+            return "Improve spin/shape quality"
+        return "Improve kill-spin shape"
+    if label == "IVB":
+        if direction > 0:
+            if pt in {"Fastball", "Cutter"}:
+                return "Add ride / carry"
+            return "Raise vertical shape"
+        if pt in {"Changeup", "Splitter", "Sinker"}:
+            return "Add sink"
+        return "Add depth"
+    if label == "Arm-side HB":
+        return "Add arm-side run/fade" if direction > 0 else "Add glove-side cut/sweep"
+    if label == "Velocity":
+        if direction > 0:
+            return "Add velocity"
+        if pt in {"Changeup", "Splitter"}:
+            return "Increase velocity separation"
+        return "Review velocity band"
+    if label == "Extension":
+        return "Improve extension" if direction > 0 else "Review extension fit"
+    if label in {"Release slot height", "Release slot side"}:
+        return "Review release-slot fit"
+    return _format_model_lever(label, direction, lever.get("delta", 0), lever.get("unit", ""))
+
+
+def _why_model_likes_change(baseline_scored, candidate_scored, pt_mask):
+    component_defs = [
+        ("StuffWhiff", "more whiff", True),
+        ("StuffCalledStrike", "more called strikes", True),
+        ("StuffBall", "fewer balls", False),
+        ("StuffHomeRun", "less HR risk", False),
+        ("StuffDamage", "less contact damage", False),
+    ]
+    improvements = []
+    for col, label, higher_is_good in component_defs:
+        if col not in baseline_scored.columns or col not in candidate_scored.columns:
+            continue
+        before = pd.to_numeric(baseline_scored.loc[pt_mask, col], errors="coerce").mean()
+        after = pd.to_numeric(candidate_scored.loc[pt_mask, col], errors="coerce").mean()
+        if not np.isfinite(before) or not np.isfinite(after):
+            continue
+        delta = float(after - before)
+        good_delta = delta if higher_is_good else -delta
+        if good_delta <= 0.0005:
+            continue
+        improvements.append((good_delta, label, delta))
+
+    if not improvements:
+        return "Better modeled run value"
+
+    improvements.sort(reverse=True, key=lambda item: item[0])
+    parts = []
+    for _, label, delta in improvements[:2]:
+        parts.append(f"{label} ({delta * 100:+.1f} pp)")
+    return "; ".join(parts)
+
+
+def _build_model_stuff_recommendations(stuff_df, raw_df=None, min_pitches=5):
+    """Strict model sensitivity table for each pitch type in the selected pitcher view."""
+    if (stuff_df is None or stuff_df.empty) and (raw_df is None or raw_df.empty):
+        return pd.DataFrame()
+
+    try:
+        from analytics.stuff_plus import _load_stuff_model
+        from analytics.pitchsim_stuff import compute_pitchsim_stuff_plus
+    except Exception:
+        return pd.DataFrame()
+
+    artifact = _load_stuff_model()
+    if not isinstance(artifact, dict) or artifact.get("artifact_type") != "pitchsim_lite":
+        return pd.DataFrame()
+
+    numeric_cols = [
+        "RelSpeed", "InducedVertBreak", "HorzBreak", "Extension", "RelHeight",
+        "RelSide", "SpinRate", "SpinAxis", "VertRelAngle", "HorzRelAngle",
+        "vx0", "vy0", "vz0", "ax0", "ay0", "az0",
+    ]
+    required_shape_cols = [
+        "Pitcher", "TaggedPitchType", "PitcherThrows", "BatterSide", "Balls",
+        "Strikes", "PitchCall", "RelSpeed", "InducedVertBreak", "HorzBreak",
+        "Extension", "RelHeight", "RelSide", "VertRelAngle", "HorzRelAngle",
+        "vx0", "vy0", "vz0", "ax0", "ay0", "az0",
+    ]
+    def _prepare_recommendation_source(source):
+        if source is None or source.empty:
+            return pd.DataFrame()
+        work = _recalculate_pitchlab_vaa(source)
+        if (
+            stuff_df is not None
+            and not stuff_df.empty
+            and "PitchUID" in work.columns
+            and {"PitchUID", "StuffPlus"}.issubset(stuff_df.columns)
+        ):
+            score_cols = ["PitchUID", "StuffPlus"]
+            if "StuffRV100" in stuff_df.columns:
+                score_cols.append("StuffRV100")
+            scores = stuff_df[score_cols].drop_duplicates("PitchUID")
+            work = work.drop(columns=[c for c in score_cols if c in work.columns and c != "PitchUID"])
+            work = work.merge(scores, on="PitchUID", how="left")
+
+        if "TaggedPitchType" not in work.columns:
+            return pd.DataFrame()
+        missing = [col for col in required_shape_cols if col not in work.columns]
+        if missing:
+            return pd.DataFrame()
+
+        try:
+            work = compute_pitchsim_stuff_plus(work, artifact)
+        except Exception:
+            if "StuffPlus" not in work.columns or pd.to_numeric(work["StuffPlus"], errors="coerce").notna().sum() == 0:
+                return pd.DataFrame()
+
+        if "StuffPlus" not in work.columns:
+            return pd.DataFrame()
+        return work
+
+    work = _prepare_recommendation_source(raw_df)
+    if work.empty:
+        work = _prepare_recommendation_source(stuff_df)
+    if work.empty:
+        return pd.DataFrame()
+    work = work.reset_index(drop=True)
+    model_reference = work.drop(columns=["_model_baseline_stuff"], errors="ignore").copy()
+
+    levers = [
+        ("RelSpeed", "Velocity", 1.0, "mph", "raw"),
+        ("InducedVertBreak", "IVB", 1.0, "inch", "raw"),
+        ("HorzBreak", "Arm-side HB", 1.0, "inch", "handed"),
+        ("Extension", "Extension", 0.25, "ft", "raw"),
+        ("RelHeight", "Release slot height", 0.25, "ft", "raw"),
+        ("RelSide", "Release slot side", 0.25, "ft", "handed"),
+        ("SpinRate", "Spin rate", 100.0, "rpm", "raw"),
+    ]
+
+    score_cols = [
+        "StuffPlus", "StuffRV100", "StuffWhiff", "StuffCalledStrike",
+        "StuffBall", "StuffHomeRun", "StuffDamage",
+    ]
+
+    def _score_full_frame(frame, reference=None):
+        frame = _recalculate_pitchlab_vaa(frame, reference=reference)
+        try:
+            scored = compute_pitchsim_stuff_plus(frame, artifact)
+        except Exception:
+            scored = frame.copy()
+        if scored is None or scored.empty:
+            scored = frame.copy()
+        for col in score_cols:
+            if col not in scored.columns:
+                scored[col] = np.nan
+        return scored
+
+    def _score_frame(frame):
+        scored = _score_full_frame(frame)
+        scores = pd.to_numeric(scored["StuffPlus"], errors="coerce")
+        return pd.Series(scores.to_numpy(dtype=float), index=frame.index, dtype=float)
+
+    baseline_scored = _score_full_frame(work, reference=model_reference)
+    baseline_scores = pd.to_numeric(baseline_scored["StuffPlus"], errors="coerce")
+    baseline_scores = pd.Series(baseline_scores.to_numpy(dtype=float), index=work.index, dtype=float)
+    if baseline_scores.notna().sum() == 0:
+        return pd.DataFrame()
+    work["_model_baseline_stuff"] = baseline_scores
+
+    rows = []
+    for pt, pt_data in work.groupby("TaggedPitchType", observed=False):
+        pt_data = pt_data.dropna(subset=["_model_baseline_stuff"])
+        if len(pt_data) < min_pitches:
+            continue
+        pt_mask = work["TaggedPitchType"].eq(pt)
+        baseline = float(work.loc[pt_mask, "_model_baseline_stuff"].mean())
+        if not np.isfinite(baseline):
+            continue
+
+        lever_results = []
+        for col, label, delta, unit, mode in levers:
+            if col not in work.columns:
+                continue
+            orig = pd.to_numeric(work.loc[pt_mask, col], errors="coerce")
+            if orig.notna().sum() < min_pitches:
+                continue
+            if mode == "handed":
+                throws = work.loc[pt_mask, "PitcherThrows"].astype(str).str.lower()
+                hand_sign = np.where(throws.str.startswith("l"), -1.0, 1.0)
+                raw_delta = pd.Series(delta * hand_sign, index=orig.index)
+            else:
+                raw_delta = delta
+
+            row_up = work.drop(columns=["_model_baseline_stuff"]).copy()
+            row_dn = row_up.copy()
+            row_up.loc[pt_mask, col] = orig + raw_delta
+            row_dn.loc[pt_mask, col] = orig - raw_delta
+
+            scored_up = _score_full_frame(row_up, reference=model_reference)
+            scored_dn = _score_full_frame(row_dn, reference=model_reference)
+            scores_up = pd.to_numeric(scored_up["StuffPlus"], errors="coerce")
+            scores_dn = pd.to_numeric(scored_dn["StuffPlus"], errors="coerce")
+            score_up = float(scores_up.loc[pt_mask].mean())
+            score_dn = float(scores_dn.loc[pt_mask].mean())
+            if not np.isfinite(score_up) and not np.isfinite(score_dn):
+                continue
+
+            gain_up = score_up - baseline
+            gain_dn = score_dn - baseline
+            if not np.isfinite(gain_dn) or (np.isfinite(gain_up) and gain_up >= gain_dn):
+                best_gain = gain_up
+                best_direction = 1
+                best_scored = scored_up
+            else:
+                best_gain = gain_dn
+                best_direction = -1
+                best_scored = scored_dn
+            lever_results.append(
+                {
+                    "label": label,
+                    "gain": float(best_gain),
+                    "direction": int(best_direction),
+                    "delta": delta,
+                    "unit": unit,
+                    "why": _why_model_likes_change(baseline_scored, best_scored, pt_mask),
+                }
+            )
+
+        if not lever_results:
+            continue
+        lever_results.sort(key=lambda item: item["gain"], reverse=True)
+        top = lever_results[0]
+        second = lever_results[1] if len(lever_results) > 1 else None
+        if top["gain"] >= 0.15:
+            rec = _format_model_lever(top["label"], top["direction"], top["delta"], top["unit"])
+            gain_text = f"+{top['gain']:.1f}"
+        else:
+            rec = "No strong single-shape lever from tested perturbations"
+            gain_text = f"{top['gain']:+.1f}"
+        second_text = ""
+        if second is not None and second["gain"] >= 0.15:
+            second_text = (
+                f"{_format_model_lever(second['label'], second['direction'], second['delta'], second['unit'])} "
+                f"({second['gain']:+.1f})"
+            )
+
+        rows.append(
+            {
+                "Pitch": str(pt),
+                "Pitches": int(len(pt_data)),
+                "Current Stuff+": baseline,
+                "Development Focus": _development_focus(str(pt), top),
+                "Est. Stuff+ Gain": gain_text,
+                "Why Model Likes It": top.get("why", "Better modeled run value"),
+                "Model Sensitivity": rec,
+                "Use As": _model_lever_caveat(top["label"]),
+                "Next Model Sensitivity": second_text,
+            }
+        )
+
+    if not rows:
+        return pd.DataFrame()
+    out = pd.DataFrame(rows)
+    return out.sort_values(["Current Stuff+", "Pitches"], ascending=[True, False]).reset_index(drop=True)
+
+
+def _render_model_stuff_recommendations(stuff_df, raw_df=None):
+    recs = _build_model_stuff_recommendations(stuff_df, raw_df=raw_df)
+    if recs.empty:
+        return
+    section_header("Model-Driven Stuff+ Sensitivities")
+    st.caption(
+        "Development Focus translates the model result into a coach-facing priority. Model Sensitivity shows the exact v9 counterfactual: one tracked trait is shifted and the full pitch distribution is re-scored. "
+        "The gain is a model sensitivity, not a causal guarantee."
+    )
+    display = recs.copy()
+    display["Current Stuff+"] = display["Current Stuff+"].map(lambda x: f"{x:.0f}")
+    st.dataframe(display, hide_index=True, use_container_width=True)
 
 
 def _score_linear(val, lo, hi, invert=False):
@@ -1223,41 +1626,49 @@ def _pitcher_card_content(
     section_header("Stuff+ & Command+ Grades")
     with st.expander("How does Stuff+ work?"):
         st.markdown("""
-**Stuff+** is a shape grade. It answers one question: if we ignore location and sequencing, how hard should this pitch be to hit based on its physical traits alone?
+**Stuff+** is a pitch-shape grade. It answers one question: if we strip out location, count leverage, sequencing, and hitter identity, how much run prevention should this pitch's physical traits create?
 
-**What goes into it:** velocity, IVB, horizontal break, extension, release traits, spin, and approach angle. The training set is roughly **3.5 million D1 pitches**.
+**What goes into it:** velocity, induced vertical break, handedness-adjusted horizontal break, extension, release slot, spin rate, spin axis, pitch type, fastball separation, and the model's eight pitch-shape archetypes.
 
-**How the model scores a pitch:** the full PitchSim pipeline estimates the probability chain for swing, whiff, contact quality, and damage, converts that into an expected run value, then averages that pitch shape across a standardized grid of counts and locations. That grid-average step is the key: it removes command, so the grade reflects the pitch's shape rather than where it was thrown.
+**How the model scores a pitch:** the PitchSim-style pipeline estimates swing, whiff, called strike, ball, batted-ball shape, home-run risk, and contact damage. Those event probabilities are converted into expected run value, then averaged over a standardized count/location grid. That grid-average step removes command, so the grade reflects shape rather than location.
 
 The production app then uses a distilled runtime model so scoring is fast enough to run live. The final scale is simple:
-- **95 = D1 average**
-- **105 = about one standard deviation better than average**
-- **85 = about one standard deviation worse than average**
+- **100 = D1 average**
+- **110 = about one standard deviation better than average**
+- **90 = about one standard deviation worse than average**
 
 **What drives high Stuff+ scores:**
-- **Fastballs** — Ride (induced vertical break), velocity, and vertical approach angle.
-- **Breaking balls** — Sweep or cut, depth, spin, and how distinct the shape is from the fastball.
-- **Offspeed** — Velocity separation, sink/fade, and extension.
+- **Fastballs** - Velocity, ride/sink profile, arm-side or cut shape, release slot, extension, and spin axis. The model separates high-slot and low-slot fastball shapes.
+- **Sinkers** - Velocity, lower IVB/sink, arm-side run, release slot, extension, and shape consistency.
+- **Sliders** - Velocity, depth, glove-side movement, spin/axis, and separation from the fastball.
+- **Sweepers** - Horizontal sweep, controlled depth, spin/axis, and separation from the fastball. Sweepers are their own bucket, not merged into sliders.
+- **Curveballs** - Depth, shape/axis, velocity band, release slot, and movement consistency.
+- **Cutters** - Velocity, short glove-side cut, ride/depth balance, spin/axis, and fastball separation.
+- **Offspeed** - Velocity separation, sink/fade, extension, release slot, and movement separation from the fastball.
 
 **What doesn't affect Stuff+:** Location, pitch sequencing, game situation, or batter identity.
 """)
 
         st.markdown("**Does Stuff+ predict future performance?**")
         st.markdown(
-            "Backtest summary: on D1 season-over-season validation, Stuff+ finished near the top of the board against a pool of 29-31 candidate stats. "
-            "That pool included traditional results, bat-missing rates, contact-quality stats, and raw pitch traits."
+            "Backtest summary: using 2024 D1 pitch shapes to predict 2025 outcomes, v9 Stuff+ connected best to the future metrics most tied to pitch quality: "
+            "xFIP, strikeout rate, and swinging-strike rate. It also beat current ERA, FIP, WHIP, fastball velocity, spin, IVB, and horizontal break as a predictor of future ERA."
         )
         corr_data = {
-            "Target": ["Future ERA", "Future FIP", "Future K-BB%"],
-            "Sample": ["40+ IP (n=499)", "60+ IP (n=177)", "20+ IP (n=1,104)"],
-            "Stuff+ r": ["-0.278", "-0.279", "+0.321"],
-            "Rank": ["#3 of 31", "#3 of 29", "#4 of 29"],
-            "Beats": ["28 of 31 stats", "26 of 29 stats", "25 of 29 stats"],
+            "Target": ["Future xFIP", "Future ERA", "Future K%", "Future SwStr%"],
+            "Sample": ["40+ IP (n=487)", "40+ IP (n=487)", "40+ IP (n=487)", "40+ IP (n=487)"],
+            "Stuff+ r": ["-0.280", "-0.210", "+0.418", "+0.338"],
+            "Context": [
+                "Strongest run-estimator validation result",
+                "#5 of 33 by Pearson; #3 of 33 by rank correlation",
+                "Direct strikeout-quality signal",
+                "Direct bat-missing signal",
+            ],
         }
         st.dataframe(pd.DataFrame(corr_data).set_index("Target"), use_container_width=True)
         st.caption(
-            "Read the rank literally: for future ERA, only two tested stats beat Stuff+. "
-            "For future FIP, only two beat it. For future K-BB%, only three beat it."
+            "For future ERA, the stats ahead of Stuff+ by Pearson were current-season SwStr%, Contact%, xFIP, and K%. "
+            "Those are outcome-based stats; Stuff+ is stricter because it only grades physical pitch shape."
         )
         st.markdown("**What was in the comparison pool?**")
         pool_df = pd.DataFrame(
@@ -1278,8 +1689,8 @@ The production app then uses a distilled runtime model so scoring is fast enough
         )
         st.dataframe(pool_df, hide_index=True, use_container_width=True)
         st.caption(
-            "The exact pool size changes by target, which is why the table above shows 29-31 comparison stats. "
-            "The point of the backtest is that Stuff+ was not just beating one or two weak baselines; it was beating most of the common pitching and pitch-trait stats coaches actually use."
+            "Among raw physical pitch-trait metrics, v9 Stuff+ ranked #1. The only ERA predictors ahead of it were outcome-based stats, "
+            "which naturally include more information about current command, deception, and usage."
         )
 
         st.markdown("""
@@ -1333,6 +1744,8 @@ The production app then uses a distilled runtime model so scoring is fast enough
                 stuff_metrics,
                 title=_fixed_stuff_percentile_title("Stuff+ Percentile Rankings"),
             )
+        st.markdown("")
+        _render_model_stuff_recommendations(stuff_df, raw_df=pdf)
 
 
     # ── Section B: Best Pitch Locations (whiffs, called strikes, weak contact) ──
@@ -1507,7 +1920,7 @@ The production app then uses a distilled runtime model so scoring is fast enough
                     "Tunnel score measures: (1) **Commit separation** at 280ms before plate — how far apart "
                     "pitches are when hitter must decide to swing (55% weight); (2) **Plate separation** — "
                     "how much pitches diverge at the plate (19%); (3) **Release point consistency** (10%); "
-                    "(4) **Release angle similarity** (8%); (5) **Movement divergence** (8%). "
+                    "(4) **Release-slot trajectory similarity** (8%); (5) **Movement divergence** (8%). "
                     "Percentile vs all D1 pitchers throwing the same pitch pair."
                 )
                 tunnel_rows = []
@@ -2756,8 +3169,8 @@ def _render_improvement_lab(stuff_df, pitcher, data):
         fb_ref_row["RelSpeed"] = fb_data["RelSpeed"].astype(float).mean()
 
     # Perturbation levers: (column, display_name, delta, unit)
-    # NOTE: VAA excluded — it's physics-derived (determined by velocity, release
-    # height, and extension), not an independently controllable lever.
+    # NOTE: VAA is recalculated from the underlying flight model, so it is not
+    # treated as an independent lever here.
     levers = [
         ("RelSpeed",         "Velocity",       1.0,   "mph"),
         ("InducedVertBreak", "Induced VBreak",  1.0,   "in"),
@@ -2773,8 +3186,9 @@ def _render_improvement_lab(stuff_df, pitcher, data):
         compute VeloDiff even for non-FB pitch types. Returns prepared
         feature matrix (single row) or None.
         """
+        row_df = _recalculate_pitchlab_vaa(row_df, reference=base_row)
         if fb_ref_row is not None and sel_pt not in _FB_TYPES:
-            combo = pd.concat([row_df, fb_ref_row], ignore_index=True)
+            combo = pd.concat([row_df, _recalculate_pitchlab_vaa(fb_ref_row)], ignore_index=True)
         else:
             combo = row_df
         prepared = _prepare_pitchsim_frame(combo, vaa_models=vaa_models)
@@ -3118,6 +3532,8 @@ def page_pitching(data):
     # Compute Stuff+ and Command+ once for both tabs
     stuff_df = _compute_stuff_plus(pdf)
     cmd_df = _compute_command_plus(pdf, data)
+    pitch_lab_pdf = _recalculate_pitchlab_vaa(pdf)
+    pitch_lab_stuff_df = _compute_stuff_plus(pitch_lab_pdf)
 
     tab_card, tab_lab = st.tabs(["Pitcher Card", "Pitch Lab"])
     # tab_card, tab_lab, tab_stuff_lab = st.tabs(["Pitcher Card", "Pitch Lab", "Stuff+ Lab"])
@@ -3135,7 +3551,16 @@ def page_pitching(data):
             cmd_df=cmd_df,
         )
     with tab_lab:
-        _pitch_lab_page(data, pitcher, season_filter, pdf, stuff_df, pr, all_pitcher_stats, cmd_df=cmd_df)
+        _pitch_lab_page(
+            data,
+            pitcher,
+            season_filter,
+            pitch_lab_pdf,
+            pitch_lab_stuff_df,
+            pr,
+            all_pitcher_stats,
+            cmd_df=cmd_df,
+        )
     # with tab_stuff_lab:
     #     _stuff_lab_page(data, pitcher, season_filter, pdf, stuff_df)
 
@@ -3260,7 +3685,7 @@ def _pitching_lab_content(
     with tab_tunnel:
         section_header("Pitch Tunnel Analysis")
         st.caption("Tunnel Score = absolute 0-100 geometry grade from commit separation, plate separation, "
-                   "release consistency, release-angle similarity, and movement divergence. Higher is better. "
+                   "release consistency, release-slot trajectory similarity, and movement divergence. Higher is better. "
                    "Pair Whiff% is shown separately and does not change the score. "
                    "Pairs are unordered — Changeup/Fastball and Fastball/Changeup get the same tunnel grade "
                    "(tunneling measures visual deception, which is symmetric; sequence *order* effects are captured in the Sequencing tab).")

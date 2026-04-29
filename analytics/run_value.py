@@ -11,6 +11,7 @@ Sign convention: negative PitchRV = good for pitcher.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Dict
 
 import numpy as np
@@ -34,6 +35,11 @@ _FALLBACK_LINEAR_WEIGHTS: Dict[str, float] = {
     "Walk": 0.33, "HBP": 0.35,
     "Error": 0.47,
 }
+
+_RUNVALUE_CSV_CANDIDATES = [
+    Path(os.environ.get("PITCHSIM_RUNVALUE_CSV", "")).expanduser(),
+    Path("/Users/ahanjain/Downloads/PitchSim-main/runvalue.csv"),
+]
 
 
 def _load_count_rv() -> Dict[str, float]:
@@ -77,6 +83,39 @@ def _load_linear_weights() -> Dict[str, float]:
     return _FALLBACK_LINEAR_WEIGHTS
 
 
+def _load_runvalue_event_table() -> pd.DataFrame | None:
+    """Load direct per-count event run values from PitchSim if available."""
+    for path in _RUNVALUE_CSV_CANDIDATES:
+        if not str(path):
+            continue
+        try:
+            if path.exists():
+                table = pd.read_csv(path)
+            else:
+                continue
+        except Exception:
+            continue
+        required = {
+            "balls",
+            "strikes",
+            "rv_ball",
+            "rv_strike",
+            "rv_foul",
+            "rv_hbp",
+            "rv_single",
+            "rv_double",
+            "rv_triple",
+            "rv_home_run",
+            "rv_out",
+        }
+        if required.issubset(table.columns):
+            out = table.copy()
+            out["balls"] = pd.to_numeric(out["balls"], errors="coerce").astype("Int64")
+            out["strikes"] = pd.to_numeric(out["strikes"], errors="coerce").astype("Int64")
+            return out
+    return None
+
+
 def compute_pitch_run_values(df: pd.DataFrame) -> pd.DataFrame:
     """Add PitchRV column to a pitch-level DataFrame.
 
@@ -89,6 +128,68 @@ def compute_pitch_run_values(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty or "PitchCall" not in df.columns:
         df["PitchRV"] = np.nan
         return df
+
+    runvalue_table = _load_runvalue_event_table()
+    if runvalue_table is not None:
+        return _compute_pitch_run_values_from_table(df, runvalue_table)
+
+    return _compute_pitch_run_values_fallback(df)
+
+
+def _compute_pitch_run_values_from_table(df: pd.DataFrame, runvalue_table: pd.DataFrame) -> pd.DataFrame:
+    """Compute PitchRV using direct per-count event values from PitchSim."""
+    balls = pd.to_numeric(df["Balls"], errors="coerce").fillna(0).astype(int)
+    strikes = pd.to_numeric(df["Strikes"], errors="coerce").fillna(0).astype(int)
+    pitch_call = df["PitchCall"].fillna("")
+    play_result = df["PlayResult"].fillna("") if "PlayResult" in df.columns else pd.Series("", index=df.index)
+    kor_bb = df["KorBB"].fillna("") if "KorBB" in df.columns else pd.Series("", index=df.index)
+
+    table = runvalue_table.rename(columns={"balls": "Balls", "strikes": "Strikes"})
+    table = table.set_index(["Balls", "Strikes"])
+    base = pd.DataFrame({"Balls": balls, "Strikes": strikes}, index=df.index)
+    base = base.join(table, on=["Balls", "Strikes"])
+    rv = pd.Series(np.nan, index=df.index, dtype=float)
+
+    ball_calls = {"BallCalled", "BallinDirt", "BallIntentional"}
+    foul_calls = {"FoulBall", "FoulBallNotFieldable", "FoulBallFieldable"}
+    strike_calls = {"StrikeCalled", "StrikeSwinging"}
+
+    is_ball = pitch_call.isin(ball_calls) | kor_bb.isin({"Walk", "BB"})
+    rv[is_ball] = pd.to_numeric(base.loc[is_ball, "rv_ball"], errors="coerce")
+
+    is_strike = pitch_call.isin(strike_calls) | kor_bb.isin({"Strikeout", "K"})
+    rv[is_strike & rv.isna()] = pd.to_numeric(base.loc[is_strike & rv.isna(), "rv_strike"], errors="coerce")
+
+    is_foul = pitch_call.isin(foul_calls)
+    rv[is_foul & rv.isna()] = pd.to_numeric(base.loc[is_foul & rv.isna(), "rv_foul"], errors="coerce")
+
+    is_hbp = pitch_call == "HitByPitch"
+    rv[is_hbp] = pd.to_numeric(base.loc[is_hbp, "rv_hbp"], errors="coerce")
+
+    is_ip = pitch_call == "InPlay"
+    if is_ip.any():
+        pr = play_result.astype(str).fillna("")
+        out_like = pr.isin({"Out", "FieldersChoice", "Sacrifice", "SacrificeFly", "SacBunt", "Bunt", "DoublePlay", "TriplePlay"})
+        single_like = pr.isin({"Single", "Error"})
+        double_like = pr == "Double"
+        triple_like = pr == "Triple"
+        hr_like = pr.isin({"HomeRun", "Home Run", "Homerun"})
+
+        rv[is_ip & out_like & rv.isna()] = pd.to_numeric(base.loc[is_ip & out_like & rv.isna(), "rv_out"], errors="coerce")
+        rv[is_ip & single_like & rv.isna()] = pd.to_numeric(base.loc[is_ip & single_like & rv.isna(), "rv_single"], errors="coerce")
+        rv[is_ip & double_like & rv.isna()] = pd.to_numeric(base.loc[is_ip & double_like & rv.isna(), "rv_double"], errors="coerce")
+        rv[is_ip & triple_like & rv.isna()] = pd.to_numeric(base.loc[is_ip & triple_like & rv.isna(), "rv_triple"], errors="coerce")
+        rv[is_ip & hr_like & rv.isna()] = pd.to_numeric(base.loc[is_ip & hr_like & rv.isna(), "rv_home_run"], errors="coerce")
+        rv[is_ip & rv.isna()] = pd.to_numeric(base.loc[is_ip & rv.isna(), "rv_out"], errors="coerce")
+
+    rv = rv.fillna(0.0)
+    out = df.copy()
+    out["PitchRV"] = rv.astype(float)
+    return out
+
+
+def _compute_pitch_run_values_fallback(df: pd.DataFrame) -> pd.DataFrame:
+    """Fallback delta-count / linear-weight implementation."""
 
     count_rv = _load_count_rv()
     lw = _load_linear_weights()

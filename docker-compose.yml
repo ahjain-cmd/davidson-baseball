@@ -4,8 +4,9 @@ services:
     ports:
       - "8501:8501"
     volumes:
-      # Mount only the precomputed DuckDB — parquet not needed for core pages
+      # Mount precomputed data used by core pages and scouting fallbacks
       - ${DATA_DIR:-.}/davidson.duckdb:/app/davidson.duckdb:ro
+      - ${DATA_DIR:-.}/all_trackman_fixed.parquet:/app/all_trackman_fixed.parquet:ro
       # Mount cache directory for fast league percentile loading
       - ${DATA_DIR:-.}/.cache:/app/.cache
       # Optional: mount TrueMedia data
