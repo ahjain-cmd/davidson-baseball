@@ -18,7 +18,7 @@ RUN CSSFILE=$(find /usr/local/lib -path '*/streamlit/static/static/css/*.css' -n
     fi
 
 # Copy application code only (data files mounted at runtime)
-COPY config.py precompute.py app.py generate_postgame_report_pdf.py generate_ab_review_pdf.py generate_series_report_pdf.py entrypoint.sh ./
+COPY config.py trackman_path.py precompute.py app.py generate_postgame_report_pdf.py generate_ab_review_pdf.py generate_series_report_pdf.py entrypoint.sh ./
 COPY data/ data/
 COPY analytics/ analytics/
 COPY viz/ viz/
