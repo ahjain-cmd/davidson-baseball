@@ -872,7 +872,7 @@ def _pg_pitcher_detail(pdf, data, pitcher):
         sort_cols = [c for c in ["Inning", "PAofInning", "PitchNo"] if c in pdf.columns]
         key_abs = pdf[pdf["KorBB"].isin(["Strikeout", "Walk"])]
         if not key_abs.empty and len(pa_cols) >= 2:
-            for _, pa_key in key_abs.drop_duplicates(subset=pa_cols).iterrows():
+            for pa_idx, (_, pa_key) in enumerate(key_abs.drop_duplicates(subset=pa_cols).iterrows()):
                 mask = pd.Series(True, index=pdf.index)
                 for c in pa_cols:
                     mask = mask & (pdf[c] == pa_key[c])
@@ -887,7 +887,8 @@ def _pg_pitcher_detail(pdf, data, pitcher):
                 with ab_c1:
                     fig_ab = _pg_mini_location_plot(ab)
                     if fig_ab:
-                        ab_key = f"pg_pit_kab_{slug}_{inn}_{_pg_slug(str(batter))}"
+                        pa_num = pa_key.get("PAofInning", pa_idx)
+                        ab_key = f"pg_pit_kab_{slug}_{inn}_{pa_num}_{_pg_slug(str(batter))}_{pa_idx}"
                         st.plotly_chart(fig_ab, use_container_width=True, key=ab_key)
                 with ab_c2:
                     st.caption(_pg_pitch_sequence_text(ab))
