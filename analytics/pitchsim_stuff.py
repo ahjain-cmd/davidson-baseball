@@ -2171,6 +2171,17 @@ def _blend_display_stuff_rv(rv_r: np.ndarray, rv_l: np.ndarray) -> np.ndarray:
     return _blend_platoon_sides(rv_r, rv_l)
 
 
+def _pitchsim_plus_from_rv100(rv100: np.ndarray | pd.Series) -> np.ndarray:
+    """Convert PitchSim xRV/100 directly to a plus scale.
+
+    PitchSim's native output is xRV/100, centered around zero with lower
+    run value better. Avoid a second pitch-type z-score layer here; that
+    can turn rare, outlier pitch groups into absurd display grades.
+    """
+    arr = np.asarray(rv100, dtype=float)
+    return _DISPLAY_STUFF_CENTER - (_DISPLAY_STUFF_SCALE * arr)
+
+
 def _display_group_columns(df: pd.DataFrame) -> List[str]:
     cols: List[str] = []
     if "Pitcher" in df.columns:
@@ -2211,9 +2222,8 @@ def _apply_display_stuff_plus(
     display_rv100: np.ndarray,
     display_pt_stats: Optional[Dict[str, Tuple[float, float]]],
 ) -> pd.Series:
+    del display_pt_stats
     scores = pd.Series(np.nan, index=df.index, dtype=float)
-    if not display_pt_stats:
-        return scores
 
     group_cols = _display_group_columns(df)
     sub = df.loc[valid_mask, group_cols].copy()
@@ -2227,19 +2237,7 @@ def _apply_display_stuff_plus(
         .agg(StuffRV100=("StuffRV100", "mean"))
         .reset_index()
     )
-    grouped["StuffPlus"] = np.nan
-
-    global_mu, global_sigma = display_pt_stats.get("__global__", (0.0, 1.0))
-    if not np.isfinite(global_sigma) or global_sigma <= 0:
-        global_sigma = 1.0
-
-    for pt in grouped["TaggedPitchType"].dropna().unique():
-        mask = grouped["TaggedPitchType"] == pt
-        mu, sigma = display_pt_stats.get(str(pt), (global_mu, global_sigma))
-        if not np.isfinite(sigma) or sigma <= 0:
-            sigma = global_sigma
-        z = (grouped.loc[mask, "StuffRV100"].astype(float) - mu) / sigma
-        grouped.loc[mask, "StuffPlus"] = _DISPLAY_STUFF_CENTER + (-z) * _DISPLAY_STUFF_SCALE
+    grouped["StuffPlus"] = _pitchsim_plus_from_rv100(grouped["StuffRV100"])
 
     sub = sub.merge(grouped[group_cols + ["StuffPlus"]], on=group_cols, how="left")
     scores.loc[sub["_row_idx"].to_numpy()] = sub["StuffPlus"].to_numpy(dtype=float)
@@ -2252,22 +2250,13 @@ def _score_raw_stuff_plus(
     value_col: str,
     pt_stats: Optional[Dict[str, Tuple[float, float]]],
 ) -> pd.Series:
+    del pt_stats
     scores = pd.Series(np.nan, index=df.index, dtype=float)
-    if not pt_stats or value_col not in df.columns:
+    if value_col not in df.columns:
         return scores
 
-    global_mu, global_sigma = pt_stats.get("__global__", (0.0, 1.0))
-    if not np.isfinite(global_sigma) or global_sigma <= 0:
-        global_sigma = 1.0
-
-    for pt in df.loc[valid_mask, "TaggedPitchType"].dropna().unique():
-        mask = valid_mask & df["TaggedPitchType"].eq(pt)
-        mu, sigma = pt_stats.get(str(pt), (global_mu, global_sigma))
-        if not np.isfinite(sigma) or sigma <= 0:
-            sigma = global_sigma
-        vals = pd.to_numeric(df.loc[mask, value_col], errors="coerce")
-        z = (vals.astype(float) - mu) / sigma
-        scores.loc[mask] = _DISPLAY_STUFF_CENTER + (-z) * _DISPLAY_STUFF_SCALE
+    vals = pd.to_numeric(df.loc[valid_mask, value_col], errors="coerce").astype(float)
+    scores.loc[valid_mask] = _pitchsim_plus_from_rv100(vals * 100.0)
     return scores
 
 
@@ -2318,20 +2307,10 @@ def _add_population_display_score(
     value_col: str,
     score_col: str,
 ) -> pd.DataFrame:
-    pt_stats = _display_stats_from_population(pop, value_col=value_col)
     pop[score_col] = np.nan
-    if not pt_stats:
+    if value_col not in pop.columns:
         return pop
-    global_mu, global_sigma = pt_stats.get("__global__", (0.0, 1.0))
-    if not np.isfinite(global_sigma) or global_sigma <= 0:
-        global_sigma = 1.0
-    for pt in pop["TaggedPitchType"].dropna().unique():
-        mask = pop["TaggedPitchType"] == pt
-        mu, sigma = pt_stats.get(str(pt), (global_mu, global_sigma))
-        if not np.isfinite(sigma) or sigma <= 0:
-            sigma = global_sigma
-        z = (pop.loc[mask, value_col].astype(float) - mu) / sigma
-        pop.loc[mask, score_col] = _DISPLAY_STUFF_CENTER + (-z) * _DISPLAY_STUFF_SCALE
+    pop[score_col] = _pitchsim_plus_from_rv100(pd.to_numeric(pop[value_col], errors="coerce"))
     return pop
 
 
