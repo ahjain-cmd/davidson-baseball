@@ -557,7 +557,10 @@ def _compute_command_plus_spread(pdf, data=None):
 #  PitchSim-aligned Command+ helpers
 # =============================================================================
 
-_PITCHSIM_MODEL_PATH = os.path.join(_MODEL_DIR, "stuff_plus_xgb.joblib")
+_PITCHSIM_MODEL_PATH = os.environ.get(
+    "PITCHSIM_STUFF_MODEL_PATH",
+    os.path.join(_MODEL_DIR, "stuff_plus_xgb.joblib"),
+)
 
 
 def _load_pitchsim_artifact():

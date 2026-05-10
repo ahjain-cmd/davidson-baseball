@@ -738,7 +738,11 @@ def _attach_stuff_plus(con, baselines_dict):
 
     _stuff_cols = [
         c for c in [
-            "PitchUID", "Pitcher", "Season", "Date", "TaggedPitchType", "StuffPlus", "StuffRV100",
+            "PitchUID", "Pitcher", "Season", "Date", "TaggedPitchType",
+            "StuffPlus", "StuffPlus_vsR", "StuffPlus_vsL",
+            "PitchStuffPlus", "PitchStuffPlus_vsR", "PitchStuffPlus_vsL",
+            "DisplayStuffPlus", "DisplayStuffPlus_vsR", "DisplayStuffPlus_vsL",
+            "StuffRV100", "StuffRV100_vsR", "StuffRV100_vsL",
         ] if c in df.columns
     ]
     stuff_df = df[_stuff_cols].copy()
@@ -898,6 +902,14 @@ def main():
                         help="Train spatial hole score model (3 XGBoost sub-models) from Trackman data")
     parser.add_argument("--train-stuff-model", action="store_true",
                         help="Train Stuff+ XGBoost model on pitch run values")
+    parser.add_argument("--stuff-model-path", default=None,
+                        help="Optional output/load path for the PitchSim Stuff+ artifact")
+    parser.add_argument("--stuff-display-pop-path", default=None,
+                        help="Optional output/load path for the PitchSim display population parquet")
+    parser.add_argument("--stuff-train-max-season", type=int, default=None,
+                        help="Optional max season included when training Stuff+ (for walk-forward tests)")
+    parser.add_argument("--stuff-display-season", type=int, default=2025,
+                        help="Season used to build display normalization population")
     parser.add_argument("--train-xwhiff-model", action="store_true",
                         help="Train xWhiff Stuff+ per-pitch-type XGBClassifier models")
     parser.add_argument("--train-location-model", action="store_true",
@@ -963,7 +975,13 @@ def main():
     if args.train_stuff_model:
         print("Training Stuff+ XGBoost model...")
         from analytics.stuff_plus import train_stuff_plus_model
-        train_stuff_plus_model(parquet_path=args.parquet)
+        train_stuff_plus_model(
+            parquet_path=args.parquet,
+            model_path=args.stuff_model_path,
+            display_pop_path=args.stuff_display_pop_path,
+            train_max_season=args.stuff_train_max_season,
+            display_season=args.stuff_display_season,
+        )
         return
 
     if args.train_xwhiff_model:
@@ -981,7 +999,13 @@ def main():
     if args.train_all_models:
         print("Training Stuff+ XGBoost model...")
         from analytics.stuff_plus import train_stuff_plus_model
-        train_stuff_plus_model(parquet_path=args.parquet)
+        train_stuff_plus_model(
+            parquet_path=args.parquet,
+            model_path=args.stuff_model_path,
+            display_pop_path=args.stuff_display_pop_path,
+            train_max_season=args.stuff_train_max_season,
+            display_season=args.stuff_display_season,
+        )
         print("\nTraining xWhiff Stuff+ models...")
         from analytics.stuff_plus import train_xwhiff_model
         train_xwhiff_model(parquet_path=args.parquet)

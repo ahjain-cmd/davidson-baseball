@@ -1,8 +1,8 @@
-"""Stuff+ computation — PitchSim-aligned run-value model with z-score fallback.
+"""Stuff+ computation — PitchSim-aligned run-value model.
 
-The primary path uses the local PitchSim-style artifact trained on per-pitch
-run value and distilled for fast runtime scoring. Falls back to the original
-hand-tuned z-score composite when the model file is absent.
+The public module path is kept for app compatibility, but Stuff+ scoring is
+fully delegated to the local PitchSim-style artifact. Legacy shape/velo
+composite scoring is intentionally not used as a fallback.
 
 Scale: 100 = average, each 10 = 1 stdev better (higher = better stuff).
 """
@@ -15,16 +15,21 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
-from data.population import compute_stuff_baselines
-from config import PITCH_TYPE_MAP, PITCH_TYPES_TO_DROP, normalize_pitch_types
+from config import PITCH_TYPE_MAP, PITCH_TYPES_TO_DROP
 
 _APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _MODEL_DIR = os.path.join(_APP_DIR, "models")
-_MODEL_PATH = os.path.join(_MODEL_DIR, "stuff_plus_xgb.joblib")
-_DISPLAY_POP_PATH = os.path.join(_MODEL_DIR, "stuff_plus_population_2025.parquet")
+_MODEL_PATH = os.environ.get(
+    "PITCHSIM_STUFF_MODEL_PATH",
+    os.path.join(_MODEL_DIR, "stuff_plus_xgb.joblib"),
+)
+_DISPLAY_POP_PATH = os.environ.get(
+    "PITCHSIM_DISPLAY_POP_PATH",
+    os.path.join(_MODEL_DIR, "stuff_plus_population_2025.parquet"),
+)
 _XWHIFF_MODEL_PATH = os.path.join(_MODEL_DIR, "xwhiff_models.joblib")
 _DISPLAY_POP_CACHE: Optional[pd.DataFrame] = None
-_DISPLAY_STATS_CACHE: Optional[Dict[str, Tuple[float, float]]] = None
+_DISPLAY_STATS_CACHE: Dict[str, Dict[str, Tuple[float, float]]] = {}
 
 # The app-wide normalizer merges Sweepers into Sliders and Knuckle Curves into
 # Curveballs. The trained XGBoost artifacts keep those pitch types separate, so
@@ -82,48 +87,87 @@ def _normalize_model_pitch_types(data: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _load_pitchsim_display_population() -> pd.DataFrame:
+def _load_pitchsim_display_population(display_pop_path: Optional[str] = None) -> pd.DataFrame:
     global _DISPLAY_POP_CACHE
+    path = display_pop_path or _DISPLAY_POP_PATH
+    if display_pop_path:
+        if not os.path.exists(path):
+            return pd.DataFrame()
+        try:
+            return pd.read_parquet(path)
+        except Exception:
+            return pd.DataFrame()
     if _DISPLAY_POP_CACHE is not None:
         return _DISPLAY_POP_CACHE.copy()
-    if not os.path.exists(_DISPLAY_POP_PATH):
+    if not os.path.exists(path):
         _DISPLAY_POP_CACHE = pd.DataFrame()
         return _DISPLAY_POP_CACHE.copy()
     try:
-        _DISPLAY_POP_CACHE = pd.read_parquet(_DISPLAY_POP_PATH)
+        _DISPLAY_POP_CACHE = pd.read_parquet(path)
     except Exception:
         _DISPLAY_POP_CACHE = pd.DataFrame()
     return _DISPLAY_POP_CACHE.copy()
 
 
-def _load_pitchsim_display_stats() -> Dict[str, Tuple[float, float]]:
+def _display_stats_from_population(pop: pd.DataFrame, value_col: str) -> Dict[str, Tuple[float, float]]:
+    stats: Dict[str, Tuple[float, float]] = {}
+    if pop.empty or not {"TaggedPitchType", value_col}.issubset(pop.columns):
+        return stats
+    work = pop.dropna(subset=["TaggedPitchType", value_col]).copy()
+    for pt, sub in work.groupby("TaggedPitchType", observed=False):
+        vals = pd.to_numeric(sub[value_col], errors="coerce").dropna().to_numpy(dtype=float)
+        if vals.size < 25:
+            continue
+        sigma = float(np.std(vals))
+        if not np.isfinite(sigma) or sigma <= 0:
+            continue
+        stats[str(pt)] = (float(np.mean(vals)), sigma)
+    vals = pd.to_numeric(work[value_col], errors="coerce").dropna().to_numpy(dtype=float)
+    if vals.size:
+        stats["__global__"] = (float(np.mean(vals)), float(np.std(vals)))
+    return stats
+
+
+def _load_pitchsim_display_stats(
+    value_col: str = "StuffRV100",
+    display_pop_path: Optional[str] = None,
+) -> Dict[str, Tuple[float, float]]:
     global _DISPLAY_STATS_CACHE
-    if _DISPLAY_STATS_CACHE is not None:
-        return dict(_DISPLAY_STATS_CACHE)
+    if display_pop_path:
+        pop = _load_pitchsim_display_population(display_pop_path)
+        return _display_stats_from_population(pop, value_col)
+    if value_col in _DISPLAY_STATS_CACHE:
+        return dict(_DISPLAY_STATS_CACHE[value_col])
     pop = _load_pitchsim_display_population()
     stats: Dict[str, Tuple[float, float]] = {}
-    if not pop.empty and {"TaggedPitchType", "StuffRV100"}.issubset(pop.columns):
-        work = pop.dropna(subset=["TaggedPitchType", "StuffRV100"]).copy()
+    if not pop.empty and {"TaggedPitchType", value_col}.issubset(pop.columns):
+        work = pop.dropna(subset=["TaggedPitchType", value_col]).copy()
         for pt, sub in work.groupby("TaggedPitchType", observed=False):
-            vals = pd.to_numeric(sub["StuffRV100"], errors="coerce").dropna().to_numpy(dtype=float)
+            vals = pd.to_numeric(sub[value_col], errors="coerce").dropna().to_numpy(dtype=float)
             if vals.size < 25:
                 continue
             sigma = float(np.std(vals))
             if not np.isfinite(sigma) or sigma <= 0:
                 continue
             stats[str(pt)] = (float(np.mean(vals)), sigma)
-        vals = pd.to_numeric(work["StuffRV100"], errors="coerce").dropna().to_numpy(dtype=float)
+        vals = pd.to_numeric(work[value_col], errors="coerce").dropna().to_numpy(dtype=float)
         if vals.size:
             stats["__global__"] = (float(np.mean(vals)), float(np.std(vals)))
-    _DISPLAY_STATS_CACHE = stats
-    return dict(_DISPLAY_STATS_CACHE)
+    _DISPLAY_STATS_CACHE[value_col] = stats
+    return dict(_DISPLAY_STATS_CACHE[value_col])
 
 
 # =============================================================================
-#  XGBoost Stuff+ training
+#  PitchSim Stuff+ training
 # =============================================================================
 
-def train_stuff_plus_model(parquet_path: str) -> None:
+def train_stuff_plus_model(
+    parquet_path: str,
+    model_path: Optional[str] = None,
+    display_pop_path: Optional[str] = None,
+    train_max_season: Optional[int] = None,
+    display_season: int = 2025,
+) -> None:
     """Train the D1 PitchSim-style Stuff+ artifact."""
     global _DISPLAY_POP_CACHE, _DISPLAY_STATS_CACHE
 
@@ -132,269 +176,188 @@ def train_stuff_plus_model(parquet_path: str) -> None:
     import joblib
 
     pq = parquet_path or PARQUET_PATH
-    train_pitchsim_stuff_model(parquet_path=pq, model_path=_MODEL_PATH)
-    artifact = joblib.load(_MODEL_PATH)
+    out_model_path = model_path or _MODEL_PATH
+    out_display_pop_path = display_pop_path or _DISPLAY_POP_PATH
+    train_pitchsim_stuff_model(
+        parquet_path=pq,
+        model_path=out_model_path,
+        train_max_season=train_max_season,
+    )
+    artifact = joblib.load(out_model_path)
     if artifact.get("artifact_type") == "pitchsim_lite":
-        pop = build_pitchsim_display_population(parquet_path=pq, artifact=artifact)
+        pop = build_pitchsim_display_population(
+            parquet_path=pq,
+            artifact=artifact,
+            season=display_season,
+        )
         if pop.empty:
             raise RuntimeError("PitchSim display population build returned no rows.")
-        os.makedirs(os.path.dirname(_DISPLAY_POP_PATH), exist_ok=True)
-        pop.to_parquet(_DISPLAY_POP_PATH, index=False)
+        display_dir = os.path.dirname(out_display_pop_path)
+        if display_dir:
+            os.makedirs(display_dir, exist_ok=True)
+        pop.to_parquet(out_display_pop_path, index=False)
         _DISPLAY_POP_CACHE = None
-        _DISPLAY_STATS_CACHE = None
+        _DISPLAY_STATS_CACHE = {}
 
 
 # =============================================================================
-#  XGBoost Stuff+ prediction
+#  PitchSim Stuff+ prediction
 # =============================================================================
 
-def _load_stuff_model():
-    """Load cached Stuff+ model artifact. Returns None if missing."""
-    if not os.path.exists(_MODEL_PATH):
+def _load_stuff_model(
+    model_path: Optional[str] = None,
+    display_pop_path: Optional[str] = None,
+):
+    """Load the cached PitchSim Stuff+ artifact. Returns None if unavailable."""
+    path = model_path or _MODEL_PATH
+    if not os.path.exists(path):
         return None
     import joblib
     import warnings
     try:
-        artifact = joblib.load(_MODEL_PATH)
-        if artifact.get("artifact_type") == "pitchsim_lite":
-            from analytics.pitchsim_stuff import (
-                pitchsim_artifact_missing_keys,
-                pitchsim_current_artifact_version,
+        artifact = joblib.load(path)
+        if artifact.get("artifact_type") != "pitchsim_lite":
+            warnings.warn(
+                "Stored Stuff+ artifact is not a PitchSim artifact; Stuff+ scoring is disabled until retrained.",
+                RuntimeWarning,
             )
+            return None
 
-            artifact = dict(artifact)
-            expected_version = pitchsim_current_artifact_version()
-            artifact_version = str(artifact.get("artifact_version") or "")
-            if artifact_version != expected_version:
-                warnings.warn(
-                    "PitchSim Stuff+ artifact version mismatch "
-                    f"(found {artifact_version or 'unknown'}, expected {expected_version}). "
-                    "Falling back to the legacy z-score model until the artifact is retrained.",
-                    RuntimeWarning,
-                )
-                return None
-            missing = pitchsim_artifact_missing_keys(artifact, require_full_cascade=True)
-            if missing:
-                warnings.warn(
-                    "PitchSim Stuff+ artifact is missing full-cascade keys "
-                    f"({', '.join(missing)}). The artifact is no longer treated as production-ready. "
-                    "Falling back to the legacy z-score model until retrained.",
-                    RuntimeWarning,
-                )
-                return None
-            display_stats = _load_pitchsim_display_stats()
-            if display_stats:
-                artifact["display_pt_stats"] = display_stats
+        from analytics.pitchsim_stuff import (
+            pitchsim_artifact_missing_keys,
+            pitchsim_current_artifact_version,
+        )
+
+        artifact = dict(artifact)
+        expected_version = pitchsim_current_artifact_version()
+        artifact_version = str(artifact.get("artifact_version") or "")
+        if artifact_version != expected_version:
+            warnings.warn(
+                "PitchSim Stuff+ artifact version mismatch "
+                f"(found {artifact_version or 'unknown'}, expected {expected_version}); "
+                "Stuff+ scoring is disabled until retrained.",
+                RuntimeWarning,
+            )
+            return None
+        missing = pitchsim_artifact_missing_keys(artifact, require_full_cascade=True)
+        if missing:
+            warnings.warn(
+                "PitchSim Stuff+ artifact is missing full-cascade keys "
+                f"({', '.join(missing)}); Stuff+ scoring is disabled until retrained.",
+                RuntimeWarning,
+            )
+            return None
+
+        display_stats = _load_pitchsim_display_stats("StuffRV100", display_pop_path=display_pop_path)
+        if display_stats:
+            artifact["display_pt_stats"] = display_stats
+        display_stats_vs_r = _load_pitchsim_display_stats("StuffRV100_vsR", display_pop_path=display_pop_path)
+        if display_stats_vs_r:
+            artifact["display_pt_stats_vsR"] = display_stats_vs_r
+        display_stats_vs_l = _load_pitchsim_display_stats("StuffRV100_vsL", display_pop_path=display_pop_path)
+        if display_stats_vs_l:
+            artifact["display_pt_stats_vsL"] = display_stats_vs_l
         return artifact
     except Exception as e:
-        warnings.warn(f"Failed to load Stuff+ model from {_MODEL_PATH}: {e}")
+        warnings.warn(f"Failed to load Stuff+ model from {path}: {e}")
         return None
 
 
 def _compute_stuff_plus_xgb(data: pd.DataFrame, artifact: dict) -> pd.DataFrame:
-    """Compute Stuff+ using the XGBoost model."""
-    if artifact.get("artifact_type") == "pitchsim_lite":
-        from analytics.pitchsim_stuff import compute_pitchsim_stuff_plus
+    """Compute Stuff+ through the PitchSim runtime scorer."""
+    if artifact.get("artifact_type") != "pitchsim_lite":
+        return _empty_pitchsim_stuff(data)
 
-        return compute_pitchsim_stuff_plus(data, artifact)
+    from analytics.pitchsim_stuff import compute_pitchsim_stuff_plus
 
-    model = artifact["model"]
-    pt_stats = artifact["pt_stats"]
-
-    df = _normalize_model_pitch_types(data)
-    scored = df.dropna(subset=["RelSpeed", "TaggedPitchType"]).copy()
-    if scored.empty:
-        df["StuffPlus"] = np.nan
-        return df
-
-    # HorzBreakAdj (handedness-normalized)
-    if "HorzBreak" in scored.columns:
-        throws = scored.get("PitcherThrows")
-        if throws is not None:
-            is_l = throws.astype(str).str.lower().str.startswith("l")
-            scored["HorzBreakAdj"] = np.where(
-                is_l, -scored["HorzBreak"].astype(float), scored["HorzBreak"].astype(float)
-            )
-        else:
-            scored["HorzBreakAdj"] = scored["HorzBreak"].astype(float)
-    else:
-        scored["HorzBreakAdj"] = np.nan
-
-    # VeloDiff
-    fb_types = {"Fastball", "Sinker", "Cutter"}
-    fb_velo = (
-        scored[scored["TaggedPitchType"].isin(fb_types)]
-        .groupby("Pitcher")["RelSpeed"]
-        .mean()
-    )
-    scored["VeloDiff"] = (
-        scored["Pitcher"].map(fb_velo).astype(float) - scored["RelSpeed"].astype(float)
-    )
-
-    # Encode
-    scored["PitcherThrows_enc"] = (
-        scored["PitcherThrows"].astype(str).str.lower().str.startswith("l").astype(int)
-    )
-    scored["BatterSide_enc"] = (
-        scored["BatterSide"].astype(str).str.lower().str.startswith("l").astype(int)
-    )
-    scored["pitch_type_enc"] = (
-        scored["TaggedPitchType"].map(_PITCH_TYPE_LABELS).fillna(-1).astype(int)
-    )
-    scored["speed_x_ivb"] = (
-        scored["RelSpeed"].astype(float) * scored["InducedVertBreak"].astype(float)
-    )
-
-    # Build feature matrix
-    for col in _STUFF_FEATURES:
-        if col not in scored.columns:
-            scored[col] = np.nan
-    X = scored[_STUFF_FEATURES].astype(float)
-
-    # Predict raw RV
-    raw_rv = model.predict(X)
-
-    # Z-score within pitch type, then negate (more negative RV = better stuff = higher score)
-    stuff_scores = pd.Series(np.nan, index=scored.index)
-    for pt in scored["TaggedPitchType"].unique():
-        if pt not in pt_stats:
-            continue
-        mean, std = pt_stats[pt]
-        if std == 0 or np.isnan(std):
-            continue
-        mask = scored["TaggedPitchType"] == pt
-        z = (raw_rv[mask.values] - mean) / std
-        stuff_scores[mask] = 100 + (-z) * 10  # negate: lower RV = higher Stuff+
-
-    df["StuffPlus"] = stuff_scores.reindex(df.index)
-    return df
+    return compute_pitchsim_stuff_plus(data, artifact)
 
 
 # =============================================================================
-#  Original z-score Stuff+ (fallback)
+#  PitchSim-only compatibility helpers
 # =============================================================================
 
-def _compute_stuff_plus_zscore(data, baseline=None, baselines_dict=None):
-    """Original z-score composite Stuff+ — used as fallback when model is absent."""
+_PITCHSIM_OUTPUT_COLUMNS = (
+    "StuffRV_vsR",
+    "StuffRV_vsL",
+    "StuffRV",
+    "StuffWhiff_vsR",
+    "StuffWhiff_vsL",
+    "StuffWhiff",
+    "StuffCalledStrike_vsR",
+    "StuffCalledStrike_vsL",
+    "StuffCalledStrike",
+    "StuffBall_vsR",
+    "StuffBall_vsL",
+    "StuffBall",
+    "StuffHomeRun_vsR",
+    "StuffHomeRun_vsL",
+    "StuffHomeRun",
+    "StuffDamage_vsR",
+    "StuffDamage_vsL",
+    "StuffDamage",
+    "StuffFIPRV",
+    "StuffRV100",
+    "StuffRV100_vsR",
+    "StuffRV100_vsL",
+    "StuffFIPRV100",
+    "PitchStuffPlus",
+    "PitchStuffPlus_vsR",
+    "PitchStuffPlus_vsL",
+    "PitchStuffFIPPlus",
+    "DisplayStuffPlus",
+    "DisplayStuffPlus_vsR",
+    "DisplayStuffPlus_vsL",
+    "StuffPlus",
+    "StuffPlus_vsR",
+    "StuffPlus_vsL",
+    "StuffFIPPlus",
+)
+
+
+def _empty_pitchsim_stuff(data: pd.DataFrame) -> pd.DataFrame:
     if data is None or len(data) == 0:
         return data
-    if "StuffPlus" in data.columns:
-        return data
+    out = data.copy()
+    for col in _PITCHSIM_OUTPUT_COLUMNS:
+        out[col] = np.nan
+    return out
 
-    base_df = normalize_pitch_types(data.copy())
-    df = base_df.dropna(subset=["RelSpeed", "TaggedPitchType"]).copy()
-    if df.empty:
-        base_df["StuffPlus"] = np.nan
-        return base_df
 
-    if baselines_dict is None:
-        baselines_dict = compute_stuff_baselines()
-
-    baseline_stats = baselines_dict["baseline_stats"]
-    fb_velo_map = baselines_dict["fb_velo_by_pitcher"]
-    velo_diff_stats = baselines_dict["velo_diff_stats"]
-    fb_velo = pd.Series(fb_velo_map)
-
-    weights = {
-        "Fastball":       {"RelSpeed": 2.0, "InducedVertBreak": 2.5, "HorzBreak": 0.3, "Extension": 0.5, "VertApprAngle": 2.5, "SpinRate": 1.0},
-        "Sinker":         {"RelSpeed": 2.5, "InducedVertBreak": -0.5, "HorzBreak": 1.5, "Extension": 0.5, "VertApprAngle": -1.5, "SpinRate": 0.8},
-        "Cutter":         {"RelSpeed": 0.8, "InducedVertBreak": 0.3, "HorzBreak": -1.5, "Extension": -1.0, "VertApprAngle": -0.5, "SpinRate": 2.0},
-        "Slider":         {"RelSpeed": 1.0, "InducedVertBreak": -0.5, "HorzBreak": 1.0, "Extension": 0.3, "VertApprAngle": -2.5, "SpinRate": 1.5},
-        "Curveball":      {"RelSpeed": 1.5, "InducedVertBreak": -1.5, "HorzBreak": -1.5, "Extension": -1.5, "VertApprAngle": -2.0, "SpinRate": 0.5},
-        "Changeup":       {"RelSpeed": 0.5, "InducedVertBreak": 1.5, "HorzBreak": 1.0, "Extension": 0.5, "VertApprAngle": -2.5, "SpinRate": 1.0, "VeloDiff": 2.0},
-        "Splitter":       {"RelSpeed": 1.0, "InducedVertBreak": -2.0, "HorzBreak": 0.5, "Extension": 1.0, "VertApprAngle": -2.0, "SpinRate": -0.3, "VeloDiff": 1.5},
-        "Knuckle Curve":  {"RelSpeed": 1.5, "InducedVertBreak": -1.5, "HorzBreak": -1.5, "Extension": -1.5, "VertApprAngle": -2.0, "SpinRate": 0.5},
-    }
-    default_w = {"RelSpeed": 1.0, "InducedVertBreak": 1.0, "HorzBreak": 1.0, "Extension": 1.0, "VertApprAngle": 1.0, "SpinRate": 1.0}
-
-    stuff_scores = []
-    if "HorzBreak" in df.columns:
-        throws = df.get("PitcherThrows")
-        if throws is not None:
-            is_l = throws.astype(str).str.lower().str.startswith("l")
-            df["_HB_ADJ"] = np.where(is_l, -df["HorzBreak"].astype(float), df["HorzBreak"].astype(float))
-        else:
-            df["_HB_ADJ"] = df["HorzBreak"].astype(float)
-
-    for pt, grp in df.groupby("TaggedPitchType"):
-        w = weights.get(pt, default_w)
-        bstats = baseline_stats.get(pt, {})
-        z_total = pd.Series(0.0, index=grp.index)
-        w_total = pd.Series(0.0, index=grp.index)
-        for col, weight in w.items():
-            if col == "VeloDiff":
-                if pt not in velo_diff_stats or "Pitcher" not in grp.columns:
-                    continue
-                grp_fb = grp["Pitcher"].map(fb_velo)
-                vd = grp_fb - grp["RelSpeed"].astype(float)
-                mu, sigma = velo_diff_stats[pt]
-                if sigma == 0 or pd.isna(sigma):
-                    continue
-                z = (vd - mu) / sigma
-                valid = z.notna()
-                z_total += z.fillna(0) * weight
-                w_total += valid.astype(float) * abs(weight)
-                continue
-            if col == "HorzBreak":
-                bkey = "HorzBreakAdj" if "HorzBreakAdj" in bstats else "HorzBreak"
-                if bkey not in bstats or "_HB_ADJ" not in grp.columns:
-                    continue
-                mu, sigma = bstats[bkey]
-                vals = grp["_HB_ADJ"].astype(float)
-            else:
-                if col not in grp.columns or col not in bstats:
-                    continue
-                mu, sigma = bstats[col]
-                vals = grp[col].astype(float)
-            if sigma == 0 or pd.isna(sigma) or pd.isna(mu):
-                continue
-            z = (vals - mu) / sigma
-            valid = z.notna()
-            z_total += z.fillna(0) * weight
-            w_total += valid.astype(float) * abs(weight)
-        z_total = z_total / w_total.replace(0, np.nan)
-        grp = grp.copy()
-        grp["StuffPlus"] = 100 + z_total * 10
-        stuff_scores.append(grp)
-
-    if not stuff_scores:
-        base_df["StuffPlus"] = np.nan
-        return base_df
-
-    scored = pd.concat(stuff_scores, ignore_index=False)
-    base_df["StuffPlus"] = scored["StuffPlus"].reindex(base_df.index)
-    return base_df
+def _compute_stuff_plus_zscore(data, baseline=None, baselines_dict=None):
+    """Deprecated compatibility shim. Legacy shape/velo Stuff+ is disabled."""
+    return _empty_pitchsim_stuff(data)
 
 
 # =============================================================================
 #  Main entry point (same interface as before)
 # =============================================================================
 
-def _compute_stuff_plus(data, baseline=None, baselines_dict=None):
+def _compute_stuff_plus(
+    data,
+    baseline=None,
+    baselines_dict=None,
+    model_path: Optional[str] = None,
+    display_pop_path: Optional[str] = None,
+):
     """Compute Stuff+ for every pitch in data.
 
-    Uses XGBoost model if available, otherwise falls back to z-score composite.
-
-    Args:
-        data: DataFrame of pitches to score
-        baseline: DEPRECATED — ignored when baselines_dict is provided.
-        baselines_dict: Pre-computed dict from compute_stuff_baselines().
-                        Only needed for z-score fallback.
+    ``baseline`` and ``baselines_dict`` are accepted for compatibility but are
+    ignored. Stuff+ now scores only through the PitchSim artifact.
     """
     if data is None or len(data) == 0:
         return data
 
-    artifact = _load_stuff_model()
-    if artifact is not None:
-        # Always recompute with XGBoost (drop stale precomputed column)
-        if "StuffPlus" in data.columns:
-            data = data.drop(columns=["StuffPlus"])
-        return _compute_stuff_plus_xgb(data, artifact)
-    else:
-        # Z-score fallback — skip if already computed
-        if "StuffPlus" in data.columns:
-            return data
-        return _compute_stuff_plus_zscore(data, baseline=baseline, baselines_dict=baselines_dict)
+    if isinstance(baselines_dict, dict):
+        model_path = model_path or baselines_dict.get("pitchsim_model_path")
+        display_pop_path = display_pop_path or baselines_dict.get("pitchsim_display_pop_path")
+    artifact = _load_stuff_model(model_path=model_path, display_pop_path=display_pop_path)
+    if artifact is None:
+        return _empty_pitchsim_stuff(data)
+
+    drop_cols = [col for col in _PITCHSIM_OUTPUT_COLUMNS if col in data.columns]
+    scoring_data = data.drop(columns=drop_cols) if drop_cols else data
+    return _compute_stuff_plus_xgb(scoring_data, artifact)
 
 
 @st.cache_data(show_spinner="Computing Stuff+ grades...")

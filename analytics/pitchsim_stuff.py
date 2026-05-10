@@ -23,7 +23,7 @@ import pandas as pd
 from config import PITCH_TYPE_MAP, PITCH_TYPES_TO_DROP
 
 
-_ARTIFACT_VERSION = "d1_pitchsim_lite_v9"
+_ARTIFACT_VERSION = "d1_pitchsim_lite_v10"
 _D1_LEVEL = "D1"
 _DISPLAY_REFERENCE_SEASON = 2025
 _DISPLAY_STUFF_CENTER = 100.0
@@ -181,6 +181,8 @@ _CLUSTER_FEATURES = [
     "release_pos_y",
     "RelHeight",
     "VertRelAngle",
+    "VertApprAngleCalc",
+    "VertApprAngleAdj",
     "HorzRelAngleAdj",
     "InducedVertBreak",
     "HorzBreakAdj",
@@ -209,6 +211,8 @@ _EVENT_BASE_FEATURES = [
     "total_break",
     "break_balance",
     "VertRelAngle",
+    "VertApprAngleCalc",
+    "VertApprAngleAdj",
     "HorzRelAngleAdj",
     "PitcherThrows_enc",
 ]
@@ -236,6 +240,8 @@ _DISTILL_FEATURES = [
     "break_balance",
     "speed_x_ivb",
     "VertRelAngle",
+    "VertApprAngleCalc",
+    "VertApprAngleAdj",
     "HorzRelAngleAdj",
     "PitcherThrows_enc",
     "pitch_type_enc",
@@ -601,10 +607,32 @@ def _normalized_pitch_type_sql(raw_col: str = "TaggedPitchType") -> str:
     """
 
 
-def _base_pitch_query(parquet_path: str) -> str:
+def _season_sql(date_col: str = "Date") -> str:
+    return f"""
+        CASE
+            WHEN {date_col} IS NOT NULL THEN
+                CASE WHEN EXTRACT(MONTH FROM CAST({date_col} AS DATE)) >= 8
+                     THEN EXTRACT(YEAR FROM CAST({date_col} AS DATE))::INT + 1
+                     ELSE EXTRACT(YEAR FROM CAST({date_col} AS DATE))::INT
+                END
+            ELSE NULL
+        END
+    """
+
+
+def _base_pitch_query(parquet_path: str, train_max_season: Optional[int] = None) -> str:
     pt_sql = _normalized_pitch_type_sql("TaggedPitchType")
+    season_sql = _season_sql("Date")
+    season_filter = ""
+    if train_max_season is not None:
+        season_filter = f"""
+          AND {season_sql} IS NOT NULL
+          AND {season_sql} <= {int(train_max_season)}
+        """
     return f"""
         SELECT
+            Date,
+            {season_sql} AS Season,
             GameID,
             Inning,
             PAofInning,
@@ -630,6 +658,8 @@ def _base_pitch_query(parquet_path: str) -> str:
             RelSide,
             VertRelAngle,
             HorzRelAngle,
+            VertApprAngle,
+            HorzApprAngle,
             PlateLocHeight,
             PlateLocSide,
             SpinRate,
@@ -662,6 +692,7 @@ def _base_pitch_query(parquet_path: str) -> str:
           AND HorzRelAngle IS NOT NULL
           AND PlateLocHeight IS NOT NULL
           AND PlateLocSide IS NOT NULL
+          {season_filter}
     """
 
 
@@ -678,11 +709,15 @@ def _sample_caps(counts: pd.DataFrame, target_total: int) -> Dict[str, int]:
     }
 
 
-def _fetch_training_frame(parquet_path: str, target_total: Optional[int] = _TRAIN_TARGET_ROWS) -> pd.DataFrame:
+def _fetch_training_frame(
+    parquet_path: str,
+    target_total: Optional[int] = _TRAIN_TARGET_ROWS,
+    train_max_season: Optional[int] = None,
+) -> pd.DataFrame:
     import duckdb
 
     con = duckdb.connect(":memory:")
-    base_query = _base_pitch_query(parquet_path)
+    base_query = _base_pitch_query(parquet_path, train_max_season=train_max_season)
     counts = con.execute(
         f"""
         WITH base AS ({base_query})
@@ -735,6 +770,47 @@ def _fetch_training_frame(parquet_path: str, target_total: Optional[int] = _TRAI
     return _normalize_model_pitch_types(df)
 
 
+def _compute_vaa_from_physics(df: pd.DataFrame) -> pd.Series:
+    """Compute vertical approach angle using the Statcast/Pavlidis y=50 formula."""
+    needed = {"vy0", "ay0", "vz0", "az0"}
+    if not needed.issubset(df.columns):
+        return pd.Series(np.nan, index=df.index, dtype=float)
+
+    y0_ft = 50.0
+    yf_ft = 17.0 / 12.0
+    delta_y = y0_ft - yf_ft
+    vy0 = pd.to_numeric(df["vy0"], errors="coerce").to_numpy(dtype=float)
+    ay = pd.to_numeric(df["ay0"], errors="coerce").to_numpy(dtype=float)
+    vz0 = pd.to_numeric(df["vz0"], errors="coerce").to_numpy(dtype=float)
+    az = pd.to_numeric(df["az0"], errors="coerce").to_numpy(dtype=float)
+
+    vy_f = np.full(len(df), np.nan, dtype=float)
+    t = np.full(len(df), np.nan, dtype=float)
+    finite = np.isfinite(vy0) & np.isfinite(ay) & np.isfinite(vz0) & np.isfinite(az)
+
+    curved = finite & (np.abs(ay) > 1e-9)
+    if curved.any():
+        disc = np.square(vy0[curved]) - (2.0 * ay[curved] * delta_y)
+        ok = disc >= 0.0
+        curved_idx = np.flatnonzero(curved)
+        ok_idx = curved_idx[ok]
+        vy_f[ok_idx] = -np.sqrt(disc[ok])
+        t[ok_idx] = (vy_f[ok_idx] - vy0[ok_idx]) / ay[ok_idx]
+
+    linear = finite & (np.abs(ay) <= 1e-9) & (np.abs(vy0) > 1e-9)
+    if linear.any():
+        t_linear = -delta_y / vy0[linear]
+        lin_idx = np.flatnonzero(linear)
+        t[lin_idx] = np.where(t_linear > 0.0, t_linear, np.nan)
+        vy_f[lin_idx] = vy0[lin_idx]
+
+    vz_f = vz0 + (az * t)
+    valid = np.isfinite(vz_f) & np.isfinite(vy_f) & (np.abs(vy_f) > 1e-9) & np.isfinite(t) & (t > 0.0)
+    vaa = np.full(len(df), np.nan, dtype=float)
+    vaa[valid] = -np.degrees(np.arctan(vz_f[valid] / vy_f[valid]))
+    return pd.Series(vaa, index=df.index, dtype=float)
+
+
 def _prepare_pitchsim_frame(data: pd.DataFrame, vaa_models: Optional[Dict[str, object]] = None) -> pd.DataFrame:
     del vaa_models
     df = _normalize_model_pitch_types(data)
@@ -767,6 +843,15 @@ def _prepare_pitchsim_frame(data: pd.DataFrame, vaa_models: Optional[Dict[str, o
         horz_rel_angle = pd.Series(np.nan, index=df.index, dtype=float)
     df["HorzRelAngleAdj"] = np.where(is_left, -horz_rel_angle, horz_rel_angle)
     df["release_pos_y"] = 60.5 - df["Extension"].astype(float)
+    vaa_physics = _compute_vaa_from_physics(df)
+    if "VertApprAngle" in df.columns:
+        vaa_tm = pd.to_numeric(df["VertApprAngle"], errors="coerce").astype(float)
+    else:
+        vaa_tm = pd.Series(np.nan, index=df.index, dtype=float)
+    df["VertApprAngleCalc"] = vaa_physics.where(vaa_physics.notna(), vaa_tm)
+    plate_height = pd.to_numeric(df["PlateLocHeight"], errors="coerce").astype(float)
+    release_y = df["release_pos_y"].astype(float).replace(0.0, np.nan)
+    df["VertApprAngleAdj"] = df["VertApprAngleCalc"].astype(float) + np.degrees(plate_height / release_y)
 
     fb_velo = df[df["TaggedPitchType"].isin(_FB_TYPES)].groupby("Pitcher", observed=False)["RelSpeed"].mean()
     df["VeloDiff"] = df["Pitcher"].map(fb_velo).astype(float) - df["RelSpeed"].astype(float)
@@ -1191,17 +1276,151 @@ def _fit_cluster_model(
     scaler = StandardScaler()
     scaler.fit(X)
     X_scaled = scaler.transform(X)
-    del feature_weights
-    weight_vec = np.ones(len(_CLUSTER_FEATURES), dtype=float)
+    weight_vec = np.array(
+        [float(feature_weights.get(col, 1.0)) for col in _CLUSTER_FEATURES],
+        dtype=float,
+    )
+    weight_vec = np.where(np.isfinite(weight_vec), weight_vec, 1.0)
+    weight_vec = np.clip(weight_vec, 0.05, 5.0)
     X_weighted = X_scaled * weight_vec
     pca = PCA(n_components=6, random_state=42)
     pca.fit(X_weighted)
     X_pca = pca.transform(X_weighted).astype(np.float32)
-    centers = np.vstack(
-        [X_pca[train["rule_bucket"].to_numpy() == cluster_name].mean(axis=0) for cluster_name in cluster_cols]
-    ).astype(np.float32)
-    probs = _fuzzy_cmeans_predict(X_pca, centers)
-    summaries, mean_prob_by_source = _summarize_fuzzy_clusters(train, probs)
+
+    from scipy.optimize import linear_sum_assignment
+
+    bucket_dummies = pd.get_dummies(train["rule_bucket"]).reindex(columns=cluster_cols, fill_value=0)
+
+    def _reorder_to_taxonomy(probs_in: np.ndarray, centers_in: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        score = np.zeros((probs_in.shape[1], len(cluster_cols)), dtype=float)
+        for raw_idx in range(probs_in.shape[1]):
+            w = probs_in[:, raw_idx].astype(float)
+            w_sum = float(w.sum()) or 1.0
+            score[raw_idx, :] = (bucket_dummies.mul(w, axis=0).sum(axis=0) / w_sum).to_numpy(dtype=float)
+        raw_ind, target_ind = linear_sum_assignment(-score)
+        probs_out = np.zeros((probs_in.shape[0], len(cluster_cols)), dtype=np.float32)
+        centers_out = np.zeros((len(cluster_cols), centers_in.shape[1]), dtype=np.float32)
+        for raw_idx, target_idx in zip(raw_ind, target_ind):
+            probs_out[:, target_idx] = probs_in[:, raw_idx]
+            centers_out[target_idx] = centers_in[raw_idx]
+        return probs_out, centers_out
+
+    rng = np.random.default_rng(42)
+    sample_n = min(len(X_pca), _CLUSTER_ATTEMPT_ROWS)
+    best_failure = ""
+    centers = None
+    probs = None
+    cluster_mode = "weighted_fuzzy_cmeans"
+    summaries: List[Dict[str, object]] = []
+    mean_prob_by_source = pd.DataFrame()
+    selected_attempt = 0
+    best_rank = (-1, -np.inf, -np.inf)
+    best_centers_raw: Optional[np.ndarray] = None
+    best_failure = ""
+    best_selected_attempt = 0
+    for attempt in range(1, _CLUSTER_MAX_ATTEMPTS + 1):
+        sample_idx = rng.choice(len(X_pca), size=sample_n, replace=False)
+        centers_raw, probs_sample_raw = _fuzzy_cmeans_fit(
+            X_pca[sample_idx],
+            n_clusters=_N_CLUSTERS,
+            random_state=41 + attempt,
+        )
+        sample_train = train.iloc[sample_idx].copy()
+        sample_bucket_dummies = pd.get_dummies(sample_train["rule_bucket"]).reindex(columns=cluster_cols, fill_value=0)
+        score = np.zeros((_N_CLUSTERS, len(cluster_cols)), dtype=float)
+        for raw_idx in range(_N_CLUSTERS):
+            w = probs_sample_raw[:, raw_idx].astype(float)
+            w_sum = float(w.sum()) or 1.0
+            score[raw_idx, :] = (sample_bucket_dummies.mul(w, axis=0).sum(axis=0) / w_sum).to_numpy(dtype=float)
+        raw_ind, target_ind = linear_sum_assignment(-score)
+        probs_sample = np.zeros((len(sample_train), len(cluster_cols)), dtype=np.float32)
+        centers_candidate = np.zeros((len(cluster_cols), centers_raw.shape[1]), dtype=np.float32)
+        for raw_idx, target_idx in zip(raw_ind, target_ind):
+            probs_sample[:, target_idx] = probs_sample_raw[:, raw_idx]
+            centers_candidate[target_idx] = centers_raw[raw_idx]
+        sample_summaries, sample_mean_prob = _summarize_fuzzy_clusters(sample_train, probs_sample)
+        sample_argmax = sample_mean_prob.idxmax(axis=1).to_dict()
+        sample_diag = {
+            cluster_name: float(sample_mean_prob.loc[cluster_name, cluster_name])
+            for cluster_name in cluster_cols
+        }
+        sample_matches = sum(1 for cluster_name in cluster_cols if sample_argmax.get(cluster_name) == cluster_name)
+        sample_rank = (
+            sample_matches,
+            float(sum(sample_diag.values())),
+            float(min(sample_diag.values())),
+        )
+        failed_sources = [
+            cluster_name
+            for cluster_name in cluster_cols
+            if sample_argmax.get(cluster_name) != cluster_name
+            or float(sample_mean_prob.loc[cluster_name, cluster_name]) < _CLUSTER_SOURCE_MIN_MEAN_PROB
+        ]
+        if sample_rank > best_rank:
+            best_rank = sample_rank
+            best_centers_raw = centers_raw
+            best_selected_attempt = attempt
+            best_failure = ", ".join(
+                f"{name}->{sample_argmax.get(name, 'missing')} "
+                f"({float(sample_mean_prob.loc[name, name]):.3f})"
+                for name in failed_sources
+            )
+        if not failed_sources:
+            probs_raw = _fuzzy_cmeans_predict(X_pca, centers_raw)
+            probs, centers = _reorder_to_taxonomy(probs_raw, centers_raw)
+            summaries, mean_prob_by_source = _summarize_fuzzy_clusters(train, probs)
+            mean_prob_argmax = mean_prob_by_source.idxmax(axis=1).to_dict()
+            full_diag = {
+                cluster_name: float(mean_prob_by_source.loc[cluster_name, cluster_name])
+                for cluster_name in cluster_cols
+            }
+            full_matches = sum(1 for cluster_name in cluster_cols if mean_prob_argmax.get(cluster_name) == cluster_name)
+            full_rank = (
+                full_matches,
+                float(sum(full_diag.values())),
+                float(min(full_diag.values())),
+            )
+            failed_sources = [
+                cluster_name
+                for cluster_name in cluster_cols
+                if mean_prob_argmax.get(cluster_name) != cluster_name
+                or float(mean_prob_by_source.loc[cluster_name, cluster_name]) < _CLUSTER_SOURCE_MIN_MEAN_PROB
+            ]
+            if full_rank > best_rank:
+                best_rank = full_rank
+                best_centers_raw = centers_raw
+                best_selected_attempt = attempt
+                best_failure = ", ".join(
+                    f"{name}->{mean_prob_argmax.get(name, 'missing')} "
+                    f"({float(mean_prob_by_source.loc[name, name]):.3f})"
+                    for name in failed_sources
+                )
+            if not failed_sources:
+                selected_attempt = attempt
+                break
+    else:
+        if best_centers_raw is not None:
+            probs_raw = _fuzzy_cmeans_predict(X_pca, best_centers_raw)
+            probs, centers = _reorder_to_taxonomy(probs_raw, best_centers_raw)
+            summaries, mean_prob_by_source = _summarize_fuzzy_clusters(train, probs)
+            cluster_mode = "weighted_fuzzy_cmeans_best_effort"
+            selected_attempt = best_selected_attempt
+        elif os.environ.get("PITCHSIM_ALLOW_ANCHORED_CLUSTER_FALLBACK") == "1":
+            centers = np.vstack(
+                [X_pca[train["rule_bucket"].to_numpy() == cluster_name].mean(axis=0) for cluster_name in cluster_cols]
+            ).astype(np.float32)
+            probs = _fuzzy_cmeans_predict(X_pca, centers)
+            summaries, mean_prob_by_source = _summarize_fuzzy_clusters(train, probs)
+            cluster_mode = "anchored_fuzzy_prototypes_fallback"
+            selected_attempt = 0
+        else:
+            raise RuntimeError(
+                "Weighted fuzzy c-means could not recover all D1 PitchSim archetypes; "
+                f"last validation failure: {best_failure}"
+            )
+
+    if probs is None or centers is None:
+        raise RuntimeError("Weighted fuzzy c-means did not produce cluster memberships")
     mean_prob_argmax = mean_prob_by_source.idxmax(axis=1).to_dict()
     failed_sources = [
         cluster_name
@@ -1209,16 +1428,18 @@ def _fit_cluster_model(
         if mean_prob_argmax.get(cluster_name) != cluster_name
         or float(mean_prob_by_source.loc[cluster_name, cluster_name]) < _CLUSTER_SOURCE_MIN_MEAN_PROB
     ]
+    validation_diag = ""
     if failed_sources:
-        diag = ", ".join(
+        validation_diag = ", ".join(
             f"{name}->{mean_prob_argmax.get(name, 'missing')} "
             f"({float(mean_prob_by_source.loc[name, name]):.3f})"
             for name in failed_sources
         )
-        raise RuntimeError(
-            "Anchored fuzzy archetypes failed source-bucket validation: "
-            + diag
-        )
+        if cluster_mode != "weighted_fuzzy_cmeans_best_effort":
+            raise RuntimeError(
+                "Weighted fuzzy archetypes failed source-bucket validation: "
+                + validation_diag
+            )
     for col in ("speed_diff", "lift_diff", "transverse_pit_diff"):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
@@ -1231,8 +1452,16 @@ def _fit_cluster_model(
         "m": _FCM_M,
         "taxonomy": cluster_cols,
         "unique_heuristics": _N_CLUSTERS,
-        "fit_attempts": 1,
-        "cluster_mode": "anchored_fuzzy_prototypes",
+        "fit_attempts": attempt if "attempt" in locals() else 1,
+        "selected_attempt": int(selected_attempt),
+        "cluster_mode": cluster_mode,
+        "source_bucket_validation_passed": not failed_sources,
+        "source_bucket_validation_failure": validation_diag,
+        "source_bucket_best_rank": {
+            "argmax_matches": int(best_rank[0]),
+            "diag_sum": float(best_rank[1]) if np.isfinite(best_rank[1]) else None,
+            "diag_min": float(best_rank[2]) if np.isfinite(best_rank[2]) else None,
+        },
         "source_bucket_argmax": mean_prob_argmax,
         "source_bucket_mean_prob": {
             cluster_name: float(mean_prob_by_source.loc[cluster_name, cluster_name])
@@ -1354,7 +1583,7 @@ def _build_context_priors(
     return context_distributions
 
 
-def _build_d1_run_value_table(parquet_path: str) -> pd.DataFrame:
+def _build_d1_run_value_table(parquet_path: str, train_max_season: Optional[int] = None) -> pd.DataFrame:
     import duckdb
 
     from analytics.historical_calibration import fallback_linear_weights
@@ -1363,6 +1592,13 @@ def _build_d1_run_value_table(parquet_path: str) -> pd.DataFrame:
     lw = fallback_linear_weights()
     fallback_count_rv = _load_count_rv()
     pq = parquet_path.replace("'", "''")
+    season_sql = _season_sql("Date")
+    season_filter = ""
+    if train_max_season is not None:
+        season_filter = f"""
+              AND {season_sql} IS NOT NULL
+              AND {season_sql} <= {int(train_max_season)}
+        """
     con = duckdb.connect(":memory:")
     rows = con.execute(
         f"""
@@ -1383,6 +1619,7 @@ def _build_d1_run_value_table(parquet_path: str) -> pd.DataFrame:
               AND GameID IS NOT NULL
               AND Inning IS NOT NULL
               AND PAofInning IS NOT NULL
+              {season_filter}
         ),
         pa_terminal AS (
             SELECT
@@ -1944,22 +2181,25 @@ def _display_group_columns(df: pd.DataFrame) -> List[str]:
     return cols
 
 
-def _display_stats_from_population(pop_df: pd.DataFrame) -> Dict[str, Tuple[float, float]]:
+def _display_stats_from_population(
+    pop_df: pd.DataFrame,
+    value_col: str = "StuffRV100",
+) -> Dict[str, Tuple[float, float]]:
     stats: Dict[str, Tuple[float, float]] = {}
-    if pop_df is None or pop_df.empty or "StuffRV100" not in pop_df.columns:
+    if pop_df is None or pop_df.empty or value_col not in pop_df.columns:
         return stats
-    work = pop_df.dropna(subset=["TaggedPitchType", "StuffRV100"]).copy()
+    work = pop_df.dropna(subset=["TaggedPitchType", value_col]).copy()
     if work.empty:
         return stats
     for pt, sub in work.groupby("TaggedPitchType", observed=False):
-        vals = pd.to_numeric(sub["StuffRV100"], errors="coerce").dropna().to_numpy(dtype=float)
+        vals = pd.to_numeric(sub[value_col], errors="coerce").dropna().to_numpy(dtype=float)
         if vals.size < 25:
             continue
         sigma = float(np.std(vals))
         if not np.isfinite(sigma) or sigma <= 0:
             continue
         stats[str(pt)] = (float(np.mean(vals)), sigma)
-    vals = pd.to_numeric(work["StuffRV100"], errors="coerce").dropna().to_numpy(dtype=float)
+    vals = pd.to_numeric(work[value_col], errors="coerce").dropna().to_numpy(dtype=float)
     if vals.size:
         stats["__global__"] = (float(np.mean(vals)), float(np.std(vals)))
     return stats
@@ -2006,10 +2246,40 @@ def _apply_display_stuff_plus(
     return scores
 
 
+def _score_raw_stuff_plus(
+    df: pd.DataFrame,
+    valid_mask: pd.Series,
+    value_col: str,
+    pt_stats: Optional[Dict[str, Tuple[float, float]]],
+) -> pd.Series:
+    scores = pd.Series(np.nan, index=df.index, dtype=float)
+    if not pt_stats or value_col not in df.columns:
+        return scores
+
+    global_mu, global_sigma = pt_stats.get("__global__", (0.0, 1.0))
+    if not np.isfinite(global_sigma) or global_sigma <= 0:
+        global_sigma = 1.0
+
+    for pt in df.loc[valid_mask, "TaggedPitchType"].dropna().unique():
+        mask = valid_mask & df["TaggedPitchType"].eq(pt)
+        mu, sigma = pt_stats.get(str(pt), (global_mu, global_sigma))
+        if not np.isfinite(sigma) or sigma <= 0:
+            sigma = global_sigma
+        vals = pd.to_numeric(df.loc[mask, value_col], errors="coerce")
+        z = (vals.astype(float) - mu) / sigma
+        scores.loc[mask] = _DISPLAY_STUFF_CENTER + (-z) * _DISPLAY_STUFF_SCALE
+    return scores
+
+
 def _compute_population_stats(
     df: pd.DataFrame,
     distilled_models: Dict[str, object],
-) -> Tuple[Dict[str, Tuple[float, float]], Dict[str, Tuple[float, float]]]:
+) -> Tuple[
+    Dict[str, Tuple[float, float]],
+    Dict[str, Tuple[float, float]],
+    Dict[str, Tuple[float, float]],
+    Dict[str, Tuple[float, float]],
+]:
     valid = df[_DISTILL_FEATURES].notna().all(axis=1) & df["TaggedPitchType"].notna()
     pred_frame = df.loc[valid, _DISTILL_FEATURES].astype(np.float32)
     pitch_types = df.loc[valid, "TaggedPitchType"]
@@ -2035,7 +2305,34 @@ def _compute_population_stats(
         home_run=_blend_platoon_sides(hr_r, hr_l),
         damage=_blend_platoon_sides(damage_r, damage_l),
     )
-    return _population_stats_from_values(pitch_types, overall), _population_stats_from_values(pitch_types, fip_raw)
+    return (
+        _population_stats_from_values(pitch_types, overall),
+        _population_stats_from_values(pitch_types, fip_raw),
+        _population_stats_from_values(pitch_types, rv_r),
+        _population_stats_from_values(pitch_types, rv_l),
+    )
+
+
+def _add_population_display_score(
+    pop: pd.DataFrame,
+    value_col: str,
+    score_col: str,
+) -> pd.DataFrame:
+    pt_stats = _display_stats_from_population(pop, value_col=value_col)
+    pop[score_col] = np.nan
+    if not pt_stats:
+        return pop
+    global_mu, global_sigma = pt_stats.get("__global__", (0.0, 1.0))
+    if not np.isfinite(global_sigma) or global_sigma <= 0:
+        global_sigma = 1.0
+    for pt in pop["TaggedPitchType"].dropna().unique():
+        mask = pop["TaggedPitchType"] == pt
+        mu, sigma = pt_stats.get(str(pt), (global_mu, global_sigma))
+        if not np.isfinite(sigma) or sigma <= 0:
+            sigma = global_sigma
+        z = (pop.loc[mask, value_col].astype(float) - mu) / sigma
+        pop.loc[mask, score_col] = _DISPLAY_STUFF_CENTER + (-z) * _DISPLAY_STUFF_SCALE
+    return pop
 
 
 def build_pitchsim_display_population(
@@ -2086,6 +2383,8 @@ def build_pitchsim_display_population(
             RelSide,
             VertRelAngle,
             HorzRelAngle,
+            VertApprAngle,
+            HorzApprAngle,
             PlateLocHeight,
             PlateLocSide,
             SpinRate,
@@ -2147,12 +2446,24 @@ def build_pitchsim_display_population(
         rv_r = models["StuffRV_vsR"].predict(X)
         rv_l = models["StuffRV_vsL"].predict(X)
         display_rv100 = _blend_display_stuff_rv(rv_r, rv_l) * 100.0
+        display_rv100_vs_r = np.asarray(rv_r, dtype=float) * 100.0
+        display_rv100_vs_l = np.asarray(rv_l, dtype=float) * 100.0
         group_cols = _display_group_columns(df)
         part = (
             df.loc[valid, group_cols]
-            .assign(PitchCount=1, StuffRV100=np.asarray(display_rv100, dtype=float))
+            .assign(
+                PitchCount=1,
+                StuffRV100=np.asarray(display_rv100, dtype=float),
+                StuffRV100_vsR=display_rv100_vs_r,
+                StuffRV100_vsL=display_rv100_vs_l,
+            )
             .groupby(group_cols, observed=False)
-            .agg(PitchCount=("PitchCount", "sum"), StuffRV100Sum=("StuffRV100", "sum"))
+            .agg(
+                PitchCount=("PitchCount", "sum"),
+                StuffRV100Sum=("StuffRV100", "sum"),
+                StuffRV100_vsRSum=("StuffRV100_vsR", "sum"),
+                StuffRV100_vsLSum=("StuffRV100_vsL", "sum"),
+            )
             .reset_index()
         )
         parts.append(part)
@@ -2162,23 +2473,20 @@ def build_pitchsim_display_population(
         return pd.DataFrame()
 
     pop = pd.concat(parts, ignore_index=True)
-    group_cols = [c for c in pop.columns if c not in {"PitchCount", "StuffRV100Sum"}]
+    sum_cols = {"StuffRV100Sum", "StuffRV100_vsRSum", "StuffRV100_vsLSum"}
+    group_cols = [c for c in pop.columns if c not in {"PitchCount", *sum_cols}]
     pop = pop.groupby(group_cols, observed=False).sum().reset_index()
     pop["StuffRV100"] = pop["StuffRV100Sum"] / pop["PitchCount"]
-    pop = pop.drop(columns=["StuffRV100Sum"])
+    pop["StuffRV100_vsR"] = pop["StuffRV100_vsRSum"] / pop["PitchCount"]
+    pop["StuffRV100_vsL"] = pop["StuffRV100_vsLSum"] / pop["PitchCount"]
+    pop = pop.drop(columns=list(sum_cols))
 
-    pt_stats = _display_stats_from_population(pop)
-    pop["StuffPlus"] = np.nan
-    global_mu, global_sigma = pt_stats.get("__global__", (0.0, 1.0))
-    if not np.isfinite(global_sigma) or global_sigma <= 0:
-        global_sigma = 1.0
-    for pt in pop["TaggedPitchType"].dropna().unique():
-        mask = pop["TaggedPitchType"] == pt
-        mu, sigma = pt_stats.get(str(pt), (global_mu, global_sigma))
-        if not np.isfinite(sigma) or sigma <= 0:
-            sigma = global_sigma
-        z = (pop.loc[mask, "StuffRV100"].astype(float) - mu) / sigma
-        pop.loc[mask, "StuffPlus"] = _DISPLAY_STUFF_CENTER + (-z) * _DISPLAY_STUFF_SCALE
+    pop = _add_population_display_score(pop, "StuffRV100", "StuffPlus")
+    pop = _add_population_display_score(pop, "StuffRV100_vsR", "StuffPlus_vsR")
+    pop = _add_population_display_score(pop, "StuffRV100_vsL", "StuffPlus_vsL")
+    pop["DisplayStuffPlus"] = pop["StuffPlus"]
+    pop["DisplayStuffPlus_vsR"] = pop["StuffPlus_vsR"]
+    pop["DisplayStuffPlus_vsL"] = pop["StuffPlus_vsL"]
     return pop
 
 
@@ -2273,11 +2581,21 @@ def _compute_location_rv_stats(
     return loc_pt_stats
 
 
-def train_pitchsim_stuff_model(parquet_path: str, model_path: str) -> None:
+def train_pitchsim_stuff_model(
+    parquet_path: str,
+    model_path: str,
+    train_max_season: Optional[int] = None,
+) -> None:
     import joblib
 
     print(f"  Loading D1 pitches from {parquet_path} ...")
-    df = _fetch_training_frame(parquet_path, target_total=_TRAIN_TARGET_ROWS)
+    if train_max_season is not None:
+        print(f"  Training cutoff: seasons <= {int(train_max_season)}")
+    df = _fetch_training_frame(
+        parquet_path,
+        target_total=_TRAIN_TARGET_ROWS,
+        train_max_season=train_max_season,
+    )
     print(f"  Loaded {len(df):,} D1 pitches")
     df = df.dropna(subset=["TaggedPitchType"]).copy()
     print(f"  After D1 pitch filters: {len(df):,} pitches")
@@ -2297,7 +2615,7 @@ def train_pitchsim_stuff_model(parquet_path: str, model_path: str) -> None:
     n_unique = cluster_model.get("unique_heuristics", _N_CLUSTERS)
     print(f"  Fitted {_N_CLUSTERS} fuzzy archetypes ({n_unique} unique heuristics)")
 
-    run_value_table = _build_d1_run_value_table(parquet_path)
+    run_value_table = _build_d1_run_value_table(parquet_path, train_max_season=train_max_season)
     print(f"  Built D1 run-value table with {len(run_value_table):,} count rows")
 
     context_distributions = _build_context_priors(df, cluster_cols)
@@ -2341,10 +2659,14 @@ def train_pitchsim_stuff_model(parquet_path: str, model_path: str) -> None:
 
     # Reload training data for population stats
     print("  Reloading training data for population stats ...")
-    df = _fetch_training_frame(parquet_path, target_total=_TRAIN_TARGET_ROWS)
+    df = _fetch_training_frame(
+        parquet_path,
+        target_total=_TRAIN_TARGET_ROWS,
+        train_max_season=train_max_season,
+    )
     df = df.dropna(subset=["TaggedPitchType"]).copy()
     df = _prepare_pitchsim_frame(df, vaa_models=vaa_models)
-    pt_stats, fip_pt_stats = _compute_population_stats(df, distilled_models)
+    pt_stats, fip_pt_stats, pt_stats_vs_r, pt_stats_vs_l = _compute_population_stats(df, distilled_models)
     global_mu, global_sigma = pt_stats.get("__global__", (np.nan, np.nan))
     if not np.isfinite(global_mu) or not np.isfinite(global_sigma) or float(global_sigma) <= 1e-8:
         raise RuntimeError(f"Stuff+ population normalization collapsed: global_sigma={global_sigma}")
@@ -2366,10 +2688,13 @@ def train_pitchsim_stuff_model(parquet_path: str, model_path: str) -> None:
         "artifact_type": "pitchsim_lite",
         "artifact_version": _ARTIFACT_VERSION,
         "d1_only": True,
+        "train_max_season": int(train_max_season) if train_max_season is not None else None,
         "features": list(_DISTILL_FEATURES),
         "distilled_models": distilled_models,
         "pt_stats": pt_stats,
         "fip_pt_stats": fip_pt_stats,
+        "pt_stats_vsR": pt_stats_vs_r,
+        "pt_stats_vsL": pt_stats_vs_l,
         "cluster_features": list(_CLUSTER_FEATURES),
         "cluster_feature_weights": weights,
         "cluster_scaler": cluster_scaler,
@@ -2391,7 +2716,9 @@ def train_pitchsim_stuff_model(parquet_path: str, model_path: str) -> None:
         "pitch_type_labels": _PITCH_TYPE_LABELS,
         "full_cascade_ready": True,
     }
-    os.makedirs(os.path.dirname(model_path), exist_ok=True)
+    model_dir = os.path.dirname(model_path)
+    if model_dir:
+        os.makedirs(model_dir, exist_ok=True)
     tmp_model_path = f"{model_path}.tmp"
     joblib.dump(artifact, tmp_model_path, compress=3)
     saved_artifact = joblib.load(tmp_model_path)
@@ -2520,7 +2847,11 @@ def compute_pitchsim_stuff_plus(data: pd.DataFrame, artifact: dict) -> pd.DataFr
     vaa_models = artifact.get("vaa_models")
     pt_stats = artifact.get("pt_stats", {})
     fip_pt_stats = artifact.get("fip_pt_stats", {})
+    pt_stats_vs_r = artifact.get("pt_stats_vsR") or pt_stats
+    pt_stats_vs_l = artifact.get("pt_stats_vsL") or pt_stats
     display_pt_stats = artifact.get("display_pt_stats", {})
+    display_pt_stats_vs_r = artifact.get("display_pt_stats_vsR") or display_pt_stats
+    display_pt_stats_vs_l = artifact.get("display_pt_stats_vsL") or display_pt_stats
 
     df = _prepare_pitchsim_frame(data, vaa_models=vaa_models)
     if df is None or len(df) == 0:
@@ -2531,9 +2862,41 @@ def compute_pitchsim_stuff_plus(data: pd.DataFrame, artifact: dict) -> pd.DataFr
 
     valid = df[feature_cols].notna().all(axis=1) & df["TaggedPitchType"].notna()
     if not valid.any():
-        df["StuffPlus"] = np.nan
+        for col in (
+            "StuffRV100",
+            "StuffRV100_vsR",
+            "StuffRV100_vsL",
+            "PitchStuffPlus",
+            "PitchStuffPlus_vsR",
+            "PitchStuffPlus_vsL",
+            "DisplayStuffPlus",
+            "DisplayStuffPlus_vsR",
+            "DisplayStuffPlus_vsL",
+            "StuffPlus",
+            "StuffPlus_vsR",
+            "StuffPlus_vsL",
+        ):
+            df[col] = np.nan
         df["StuffFIPPlus"] = np.nan
-        return _overlay_pitchsim_columns(base, df, overwrite=("StuffPlus", "StuffFIPPlus"))
+        return _overlay_pitchsim_columns(
+            base,
+            df,
+            overwrite=(
+                "StuffRV100",
+                "StuffRV100_vsR",
+                "StuffRV100_vsL",
+                "PitchStuffPlus",
+                "PitchStuffPlus_vsR",
+                "PitchStuffPlus_vsL",
+                "DisplayStuffPlus",
+                "DisplayStuffPlus_vsR",
+                "DisplayStuffPlus_vsL",
+                "StuffPlus",
+                "StuffPlus_vsR",
+                "StuffPlus_vsL",
+                "StuffFIPPlus",
+            ),
+        )
 
     X = df.loc[valid, feature_cols].astype(np.float32)
     rv_r = models["StuffRV_vsR"].predict(X)
@@ -2594,28 +2957,70 @@ def compute_pitchsim_stuff_plus(data: pd.DataFrame, artifact: dict) -> pd.DataFr
         damage=df.loc[valid, "StuffDamage"].to_numpy(dtype=float),
     )
     display_rv100 = _blend_display_stuff_rv(rv_r, rv_l) * 100.0
+    display_rv100_vs_r = np.asarray(rv_r, dtype=float) * 100.0
+    display_rv100_vs_l = np.asarray(rv_l, dtype=float) * 100.0
     df["StuffRV100"] = np.nan
+    df["StuffRV100_vsR"] = np.nan
+    df["StuffRV100_vsL"] = np.nan
     df.loc[valid, "StuffRV100"] = display_rv100
+    df.loc[valid, "StuffRV100_vsR"] = display_rv100_vs_r
+    df.loc[valid, "StuffRV100_vsL"] = display_rv100_vs_l
     df["StuffFIPRV100"] = df["StuffFIPRV"] * 100.0
 
-    stuff_scores = _apply_display_stuff_plus(
+    display_scores = _apply_display_stuff_plus(
         df,
         valid_mask=valid,
         display_rv100=display_rv100,
         display_pt_stats=display_pt_stats,
     )
-    if stuff_scores.notna().sum() == 0:
-        global_mu, global_sigma = pt_stats.get("__global__", (0.0, 1.0))
-        if not np.isfinite(global_sigma) or global_sigma <= 0:
-            global_sigma = 1.0
-        for pt in df.loc[valid, "TaggedPitchType"].unique():
-            mask = df["TaggedPitchType"] == pt
-            mu, sigma = pt_stats.get(str(pt), (global_mu, global_sigma))
-            if not np.isfinite(sigma) or sigma <= 0:
-                sigma = global_sigma
-            z = (df.loc[mask, "StuffRV"].astype(float) - mu) / sigma
-            stuff_scores.loc[mask] = 100.0 + (-z) * 10.0
-    df["StuffPlus"] = stuff_scores
+    pitch_scores = _score_raw_stuff_plus(
+        df,
+        valid_mask=valid,
+        value_col="StuffRV",
+        pt_stats=pt_stats,
+    )
+    if display_scores.notna().sum() == 0:
+        display_scores = pitch_scores.copy()
+    df["PitchStuffPlus"] = pitch_scores
+    df["DisplayStuffPlus"] = display_scores
+    # Backward-compatible public column: now pitch-level, not group-stamped.
+    df["StuffPlus"] = pitch_scores
+
+    display_scores_vs_r = _apply_display_stuff_plus(
+        df,
+        valid_mask=valid,
+        display_rv100=display_rv100_vs_r,
+        display_pt_stats=display_pt_stats_vs_r,
+    )
+    pitch_scores_vs_r = _score_raw_stuff_plus(
+        df,
+        valid_mask=valid,
+        value_col="StuffRV_vsR",
+        pt_stats=pt_stats_vs_r,
+    )
+    if display_scores_vs_r.notna().sum() == 0:
+        display_scores_vs_r = pitch_scores_vs_r.copy()
+    df["PitchStuffPlus_vsR"] = pitch_scores_vs_r
+    df["DisplayStuffPlus_vsR"] = display_scores_vs_r
+    df["StuffPlus_vsR"] = pitch_scores_vs_r
+
+    display_scores_vs_l = _apply_display_stuff_plus(
+        df,
+        valid_mask=valid,
+        display_rv100=display_rv100_vs_l,
+        display_pt_stats=display_pt_stats_vs_l,
+    )
+    pitch_scores_vs_l = _score_raw_stuff_plus(
+        df,
+        valid_mask=valid,
+        value_col="StuffRV_vsL",
+        pt_stats=pt_stats_vs_l,
+    )
+    if display_scores_vs_l.notna().sum() == 0:
+        display_scores_vs_l = pitch_scores_vs_l.copy()
+    df["PitchStuffPlus_vsL"] = pitch_scores_vs_l
+    df["DisplayStuffPlus_vsL"] = display_scores_vs_l
+    df["StuffPlus_vsL"] = pitch_scores_vs_l
 
     fip_scores = pd.Series(np.nan, index=df.index, dtype=float)
     fip_global_mu, fip_global_sigma = fip_pt_stats.get("__global__", (0.0, 1.0))
@@ -2628,6 +3033,7 @@ def compute_pitchsim_stuff_plus(data: pd.DataFrame, artifact: dict) -> pd.DataFr
             sigma = fip_global_sigma
         z = (df.loc[mask, "StuffFIPRV"].astype(float) - mu) / sigma
         fip_scores.loc[mask] = 100.0 + (-z) * 10.0
+    df["PitchStuffFIPPlus"] = fip_scores
     df["StuffFIPPlus"] = fip_scores
     return _overlay_pitchsim_columns(
         base,
@@ -2653,8 +3059,19 @@ def compute_pitchsim_stuff_plus(data: pd.DataFrame, artifact: dict) -> pd.DataFr
             "StuffDamage",
             "StuffFIPRV",
             "StuffRV100",
+            "StuffRV100_vsR",
+            "StuffRV100_vsL",
             "StuffFIPRV100",
+            "PitchStuffPlus",
+            "PitchStuffPlus_vsR",
+            "PitchStuffPlus_vsL",
+            "PitchStuffFIPPlus",
+            "DisplayStuffPlus",
+            "DisplayStuffPlus_vsR",
+            "DisplayStuffPlus_vsL",
             "StuffPlus",
+            "StuffPlus_vsR",
+            "StuffPlus_vsL",
             "StuffFIPPlus",
         ),
     )
