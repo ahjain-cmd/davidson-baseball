@@ -2421,6 +2421,8 @@ def _format_shap_feature_value(feature: str, value: float) -> str:
 
 
 def _shap_feature_label(feature: str, pitch_type: object = None) -> str:
+    if feature == "lift" and str(pitch_type) == "Cutter":
+        return "ride/carry"
     if feature == "lift" and str(pitch_type) not in _SHAP_FASTBALL_TYPES:
         return "vertical break"
     return _SHAP_FEATURE_LABELS.get(feature, feature)
@@ -2530,11 +2532,11 @@ def _directional_shap_feature_label(
             return "good velo gap off fastball" if not abs_light else "smaller velo gap plays"
         return "not enough velo gap off fastball" if abs_light else "too much velo gap off fastball"
     if feature == "lift":
-        if str(pitch_type) in _SHAP_FASTBALL_TYPES:
+        if str(pitch_type) in _SHAP_FASTBALL_TYPES or str(pitch_type) == "Cutter":
             if lower is None:
                 return "ride/carry helps" if positive else "ride/carry hurts"
             if positive:
-                return "good ride/carry" if not lower else "lower ride plays"
+                return "ride/carry window helps"
             return "not enough ride/carry" if lower else "too much ride/carry"
         if lower is None:
             return "vertical break helps" if positive else "vertical break hurts"
