@@ -686,29 +686,17 @@ def _feedback_block(ax, feedback):
                 va="top", ha="left", transform=ax.transAxes)
         return
     fb_str, fb_area = _split_feedback(feedback, {})
-    y = 0.97
-    if fb_str:
-        ax.text(0.02, y, "Strengths", fontsize=6.5, fontweight="bold",
-                color="#2e7d32", va="top", ha="left", transform=ax.transAxes)
-        y -= 0.12
-        for fb in fb_str[:3]:
-            ax.text(0.04, y, f"+ {fb}", fontsize=5, va="top", ha="left",
-                    color=_DARK, transform=ax.transAxes)
-            y -= 0.12
-    if fb_area:
-        ax.text(0.02, y, "Areas to Improve", fontsize=6.5, fontweight="bold",
-                color="#c62828", va="top", ha="left", transform=ax.transAxes)
-        y -= 0.12
-        for fb in fb_area[:2]:
-            ax.text(0.04, y, f"- {fb}", fontsize=5, va="top", ha="left",
-                    color=_DARK, transform=ax.transAxes)
-            y -= 0.12
-    if not fb_str and not fb_area:
-        text = "\n".join(f"~ {fb}" for fb in feedback[:4])
-        ax.text(0.02, 0.95, "Feedback", fontsize=6.5, fontweight="bold",
-                color=_DARK, va="top", ha="left", transform=ax.transAxes)
-        ax.text(0.02, 0.80, text, fontsize=5, va="top", ha="left",
-                color=_DARK, transform=ax.transAxes, linespacing=1.5)
+    notes = list(fb_str[:3]) + list(fb_area[:3])
+    if not notes:
+        notes = list(feedback[:5])
+
+    ax.text(0.02, 0.97, "Notes", fontsize=6.8, fontweight="bold",
+            color=_DARK, va="top", ha="left", transform=ax.transAxes)
+    y = 0.82
+    for note in notes[:5]:
+        ax.text(0.04, y, f"- {note}", fontsize=5.3, va="top", ha="left",
+                color=_DARK, transform=ax.transAxes)
+        y -= 0.13
 
 
 # ── Season Delta Text ────────────────────────────────────────────────────────
@@ -1153,7 +1141,7 @@ def _render_hitter_page(bdf, data, batter, series_label, game_ids=None):
     ax_disc.text(0.05, 0.95, "\n".join(disc_lines), fontsize=6.5, va="top", ha="left",
                  color=_DARK, transform=ax_disc.transAxes, family="monospace", linespacing=1.4)
 
-    # Feedback (Strengths / Areas) below discipline stats
+    # Notes below discipline stats
     ax_fb = fig.add_subplot(r1_left[1])
     _feedback_block(ax_fb, feedback)
 
@@ -1421,9 +1409,17 @@ def _mpl_pa_zone_plot(ax, ab_df):
     ab_numbered = ab_df.copy()
     ab_numbered["_OrigPitchNum"] = range(1, len(ab_numbered) + 1)
     loc = ab_numbered.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
-    ax.set_xlim(-2.3, 2.3)
-    ax.set_ylim(0.0, 5.2)
-    ax.set_aspect("equal")
+    if loc.empty:
+        ax.set_xlim(-1.65, 1.65)
+        ax.set_ylim(0.55, 4.45)
+    else:
+        x_min = min(-1.65, float(loc["PlateLocSide"].min()) - 0.35)
+        x_max = max(1.65, float(loc["PlateLocSide"].max()) + 0.35)
+        y_min = min(0.55, float(loc["PlateLocHeight"].min()) - 0.35)
+        y_max = max(4.45, float(loc["PlateLocHeight"].max()) + 0.35)
+        ax.set_xlim(x_min, x_max)
+        ax.set_ylim(y_min, y_max)
+    ax.set_aspect("equal", adjustable="box")
     ax.set_xticks([])
     ax.set_yticks([])
     for sp in ax.spines.values():
@@ -1450,15 +1446,15 @@ def _mpl_pa_zone_plot(ax, ab_df):
         pt = row.get("TaggedPitchType", "Other")
         color = PITCH_COLORS.get(pt, "#aaa")
         ax.scatter(row["PlateLocSide"], row["PlateLocHeight"],
-                   c=color, s=120, alpha=0.85, edgecolors="white",
-                   linewidths=0.5, zorder=10, clip_on=True)
+                   c=color, s=165, alpha=0.9, edgecolors="white",
+                   linewidths=0.7, zorder=10, clip_on=True)
         ax.text(row["PlateLocSide"], row["PlateLocHeight"], str(pnum),
-                fontsize=6, fontweight="bold", color="white",
+                fontsize=7, fontweight="bold", color="white",
                 ha="center", va="center", zorder=11, clip_on=True)
 
 
 def _render_hitter_ab_pages(bdf, data, batter, series_label, game_ids):
-    """Per-AB review pages for a hitter across a series. ~3 ABs per page.
+    """Per-AB review pages for a hitter across a series. ~2 ABs per page.
     Returns list of Figure objects."""
     pa_cols = _pa_group_cols(bdf)
     sort_cols = [c for c in ["Date", "GameID", "Top/Bottom", "Inning", "PAofInning", "PitchNo"] if c in bdf.columns]
@@ -1485,7 +1481,7 @@ def _render_hitter_ab_pages(bdf, data, batter, series_label, game_ids):
 
     dname = display_name(batter, escape_html=False)
     figures = []
-    PAS_PER_PAGE = 3
+    PAS_PER_PAGE = 2
 
     for page_start in range(0, len(pa_list), PAS_PER_PAGE):
         page_pas = pa_list[page_start:page_start + PAS_PER_PAGE]
@@ -1497,24 +1493,25 @@ def _render_hitter_ab_pages(bdf, data, batter, series_label, game_ids):
         pa_heights = []
         for _inn, ab_sorted, _game_date_str in page_pas:
             n_table_rows = len(_pg_build_pa_pitch_rows(ab_sorted)) + 1
-            pa_heights.append(max(0.24, min(0.56, 0.08 + 0.024 * n_table_rows)))
-        h_ratios = [0.08] + pa_heights
+            pa_heights.append(max(0.38, min(0.46, 0.27 + 0.018 * n_table_rows)))
+        h_ratios = [0.075] + pa_heights
         remaining = 1.0 - sum(h_ratios)
         if remaining > 0.01:
             h_ratios.append(remaining)
         n_rows = len(h_ratios)
 
         page_outer = gridspec.GridSpec(n_rows, 1, figure=fig,
-            height_ratios=h_ratios, hspace=0.18,
-            top=0.97, bottom=0.035, left=0.04, right=0.96)
+            height_ratios=h_ratios, hspace=0.12,
+            top=0.97, bottom=0.04, left=0.035, right=0.965)
 
         _header_bar(fig, page_outer[0],
                     f"SERIES AB REVIEW  |  {dname}  |  {series_label}")
 
         for pa_i, (inn, ab_sorted, game_date_str) in enumerate(page_pas):
-            row_gs = gridspec.GridSpecFromSubplotSpec(1, 2,
+            row_gs = gridspec.GridSpecFromSubplotSpec(2, 2,
                 subplot_spec=page_outer[1 + pa_i],
-                wspace=0.08, width_ratios=[0.6, 0.4])
+                height_ratios=[0.18, 0.82], hspace=0.04,
+                wspace=0.06, width_ratios=[0.66, 0.34])
 
             vs_pitcher = display_name(ab_sorted.iloc[0]["Pitcher"], escape_html=False) if "Pitcher" in ab_sorted.columns else "?"
             last = ab_sorted.iloc[-1]
@@ -1550,14 +1547,28 @@ def _render_hitter_ab_pages(bdf, data, batter, series_label, game_ids):
                 ev = ip["ExitSpeed"].dropna()
                 if not ev.empty:
                     notes.append(f"EV {ev.iloc[0]:.0f}")
-            note_suffix = f"  ({', '.join(notes)})" if notes else ""
-            pa_header = f"{date_prefix}Inn {inn} vs {vs_pitcher} — {result} ({len(ab_sorted)}p) [{letter}]{note_suffix}"
+            notes_text = " | ".join(notes)
+
+            ax_pa_head = fig.add_subplot(row_gs[0, :])
+            ax_pa_head.set_xlim(0, 1); ax_pa_head.set_ylim(0, 1)
+            ax_pa_head.axis("off")
+            ax_pa_head.add_patch(Rectangle((0.0, 0.12), 1.0, 0.76,
+                                           facecolor="#f4f6f8", edgecolor="#d8dde4",
+                                           linewidth=0.8, transform=ax_pa_head.transAxes))
+            ax_pa_head.text(0.018, 0.58, f"{date_prefix}Inn {inn} vs {vs_pitcher}",
+                            fontsize=9.4, fontweight="bold", color=_DARK,
+                            va="center", ha="left", transform=ax_pa_head.transAxes)
+            ax_pa_head.text(0.982, 0.58, f"{result}  |  {len(ab_sorted)} pitches  |  {letter}",
+                            fontsize=8.5, fontweight="bold", color=_DARK,
+                            va="center", ha="right", transform=ax_pa_head.transAxes)
+            if notes_text:
+                ax_pa_head.text(0.018, 0.22, notes_text,
+                                fontsize=6.8, color="#56606b",
+                                va="center", ha="left", transform=ax_pa_head.transAxes)
 
             # Left: pitch table
-            ax_table = fig.add_subplot(row_gs[0, 0])
+            ax_table = fig.add_subplot(row_gs[1, 0])
             ax_table.axis("off")
-            ax_table.set_title(pa_header, fontsize=7.5, fontweight="bold",
-                              color=_DARK, loc="left", pad=2)
 
             pitch_rows = _pg_build_pa_pitch_rows(ab_sorted)
             if pitch_rows:
@@ -1567,15 +1578,15 @@ def _render_hitter_ab_pages(bdf, data, batter, series_label, game_ids):
                 ]
                 # Shrink row height for long ABs to prevent table overflow
                 n_rows = len(table_data) + 1  # +1 for header
-                rh = 1.25 if n_rows <= 5 else max(0.50, min(0.85, 6.0 / n_rows))
-                table_fontsize = 6.5 if n_rows <= 9 else 5.8 if n_rows <= 14 else 5.0
+                rh = 1.45 if n_rows <= 6 else max(0.76, min(1.12, 8.0 / n_rows))
+                table_fontsize = 7.8 if n_rows <= 9 else 6.8 if n_rows <= 14 else 5.8
                 _styled_table(ax_table, table_data,
-                             ["#", "Count", "Type", "Velo", "Call", "EV", "LA"],
-                             [0.06, 0.10, 0.18, 0.12, 0.12, 0.12, 0.10],
+                             ["#", "Cnt", "Pitch", "Velo", "Call", "EV", "LA"],
+                             [0.06, 0.09, 0.22, 0.11, 0.12, 0.11, 0.09],
                              fontsize=table_fontsize, row_height=rh)
 
             # Right: zone plot
-            ax_zone = fig.add_subplot(row_gs[0, 1])
+            ax_zone = fig.add_subplot(row_gs[1, 1])
             _mpl_pa_zone_plot(ax_zone, ab_sorted)
 
         _add_page_number(fig)
