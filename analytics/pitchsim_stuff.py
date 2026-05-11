@@ -250,6 +250,14 @@ _SHAP_FEATURE_LABELS = {
 }
 _SHAP_FASTBALL_TYPES = {"Fastball", "Sinker"}
 _SHAP_FASTBALL_HIDDEN_FEATURES = {"speed_diff", "lift_diff", "transverse_pit_diff"}
+_SHAP_HIDDEN_FEATURES_BY_TYPE = {
+    "Fastball": _SHAP_FASTBALL_HIDDEN_FEATURES,
+    "Sinker": _SHAP_FASTBALL_HIDDEN_FEATURES,
+    # Keep the fitted PitchSim model unchanged, but make exported/displayed
+    # cutter explanations about the cutter's own shape rather than FB-relative
+    # arsenal/tunneling features.
+    "Cutter": {"speed_diff", "lift_diff", "transverse_pit_diff"},
+}
 
 _BASIC_ARTIFACT_KEYS = (
     "features",
@@ -2544,11 +2552,9 @@ def _add_shap_summary_columns(pop: pd.DataFrame, feature_cols: Sequence[str]) ->
     for _, row in out.iterrows():
         pitch_type = row.get("TaggedPitchType", "")
         pairs = []
+        hidden_features = _SHAP_HIDDEN_FEATURES_BY_TYPE.get(str(pitch_type), set())
         for feature in feature_cols:
-            if (
-                str(pitch_type) in _SHAP_FASTBALL_TYPES
-                and feature in _SHAP_FASTBALL_HIDDEN_FEATURES
-            ):
+            if feature in hidden_features:
                 continue
             shap_name = _shap_col(feature)
             if shap_name not in out.columns:

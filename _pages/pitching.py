@@ -806,6 +806,13 @@ _PITCHSIM_SHAP_FEATURE_LABELS = {
 }
 _PITCHSIM_FASTBALL_TYPES = {"Fastball", "Sinker"}
 _PITCHSIM_FASTBALL_HIDDEN_SHAP_FEATURES = {"speed_diff", "lift_diff", "transverse_pit_diff"}
+_PITCHSIM_HIDDEN_SHAP_FEATURES_BY_TYPE = {
+    "Fastball": _PITCHSIM_FASTBALL_HIDDEN_SHAP_FEATURES,
+    "Sinker": _PITCHSIM_FASTBALL_HIDDEN_SHAP_FEATURES,
+    # PitchSim uses these FB-relative features for cutters, but the coach-facing
+    # breakdown should explain the cutter's own velocity/shape, not tunneling.
+    "Cutter": {"speed_diff", "lift_diff", "transverse_pit_diff"},
+}
 
 
 def _pitchsim_shap_col(feature):
@@ -1079,12 +1086,10 @@ def _build_pitchsim_shap_rows(stuff_df, min_pitches=5, include_pitcher=False):
         stuff_plus_vs_l = _weighted_mean_safe(group[vsl_col], weights) if vsl_col else np.nan
 
         pitch_type = str(keys[-1])
+        hidden_features = _PITCHSIM_HIDDEN_SHAP_FEATURES_BY_TYPE.get(pitch_type, set())
         visible_features = [
             feature for feature in features
-            if not (
-                pitch_type in _PITCHSIM_FASTBALL_TYPES
-                and feature in _PITCHSIM_FASTBALL_HIDDEN_SHAP_FEATURES
-            )
+            if feature not in hidden_features
         ]
 
         driver_pairs = []
