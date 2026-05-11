@@ -977,7 +977,9 @@ def _pitchsim_directional_driver(feature, pitch_type, pts, value):
         return "not enough velo gap off fastball" if abs_light else "too much velo gap off fastball"
 
     if feature == "lift":
-        if pt in _PITCHSIM_FASTBALL_TYPES or pt == "Cutter":
+        if pt == "Cutter":
+            return "ride/carry helps" if positive else "ride/carry shape hurts"
+        if pt in _PITCHSIM_FASTBALL_TYPES:
             if lower is None:
                 return "ride/carry helps" if positive else "ride/carry hurts"
             if positive:

@@ -2532,7 +2532,9 @@ def _directional_shap_feature_label(
             return "good velo gap off fastball" if not abs_light else "smaller velo gap plays"
         return "not enough velo gap off fastball" if abs_light else "too much velo gap off fastball"
     if feature == "lift":
-        if str(pitch_type) in _SHAP_FASTBALL_TYPES or str(pitch_type) == "Cutter":
+        if str(pitch_type) == "Cutter":
+            return "ride/carry helps" if positive else "ride/carry shape hurts"
+        if str(pitch_type) in _SHAP_FASTBALL_TYPES:
             if lower is None:
                 return "ride/carry helps" if positive else "ride/carry hurts"
             if positive:
