@@ -23,7 +23,7 @@ import pandas as pd
 from config import PITCH_TYPE_MAP, PITCH_TYPES_TO_DROP
 
 
-_ARTIFACT_VERSION = "d1_pitchsim_lite_v11"
+_ARTIFACT_VERSION = "d1_pitchsim_lite_v12"
 _D1_LEVEL = "D1"
 _DISPLAY_REFERENCE_SEASON = 2025
 _DISPLAY_STUFF_CENTER = 100.0
@@ -73,6 +73,15 @@ _PLAY_RESULT_DAMAGE = {
     "triple": 3.0,
     "homerun": 4.0,
 }
+
+def _pitchsim_fastball_reference_mask(df: pd.DataFrame) -> pd.Series:
+    """Match PitchSim's fastball baseline sample when a Statcast game_type exists."""
+    mask = df["TaggedPitchType"].isin(_FB_TYPES)
+    if "game_type" in df.columns:
+        mask &= df["game_type"].astype(str).eq("R")
+    elif "GameType" in df.columns:
+        mask &= df["GameType"].astype(str).eq("R")
+    return mask
 
 def _env_int(name: str, default: int, min_value: int = 1) -> int:
     raw = os.environ.get(name)
@@ -944,8 +953,19 @@ def _prepare_pitchsim_frame(data: pd.DataFrame, vaa_models: Optional[Dict[str, o
         df["plate_z"].astype(float) / release_y
     )
 
-    fb_velo = df[df["TaggedPitchType"].isin(_FB_TYPES)].groupby("Pitcher", observed=False)["RelSpeed"].mean()
-    df["VeloDiff"] = df["Pitcher"].map(fb_velo).astype(float) - df["RelSpeed"].astype(float)
+    fb_ref_mask = _pitchsim_fastball_reference_mask(df)
+    fb_velo = (
+        df.loc[fb_ref_mask]
+        .groupby(["Pitcher", "game_year"], observed=False)["RelSpeed"]
+        .mean()
+        .rename("fb_rel_speed")
+    )
+    fb_velo_ref = (
+        df[["Pitcher", "game_year"]]
+        .merge(fb_velo.reset_index(), on=["Pitcher", "game_year"], how="left")["fb_rel_speed"]
+        .to_numpy(dtype=float)
+    )
+    df["VeloDiff"] = fb_velo_ref - df["RelSpeed"].to_numpy(dtype=float)
     df["speed_x_ivb"] = df["RelSpeed"].astype(float) * df["InducedVertBreak"].astype(float)
     df["total_break"] = np.sqrt(
         df["InducedVertBreak"].astype(float) ** 2 + df["HorzBreakAdj"].astype(float) ** 2
@@ -995,21 +1015,40 @@ def _prepare_pitchsim_frame(data: pd.DataFrame, vaa_models: Optional[Dict[str, o
     df["transverse_pit"] = df["transverse"].astype(float) * throw_sign
     df["transverse_bat"] = df["transverse"].astype(float) * stand_sign
 
-    fb_lift = df[df["TaggedPitchType"].isin(_FB_TYPES)].groupby("Pitcher", observed=False)["lift"].mean()
-    fb_transverse = (
-        df[df["TaggedPitchType"].isin(_FB_TYPES)]
-        .groupby("Pitcher", observed=False)["transverse_pit"]
+    fb_ref = (
+        df.loc[fb_ref_mask]
+        .groupby(["Pitcher", "game_year"], observed=False)[["speed", "lift", "transverse_pit"]]
         .mean()
+        .rename(
+            columns={
+                "speed": "fb_speed",
+                "lift": "fb_lift",
+                "transverse_pit": "fb_transverse_pit",
+            }
+        )
     )
-    fb_speed = df[df["TaggedPitchType"].isin(_FB_TYPES)].groupby("Pitcher", observed=False)["speed"].mean()
-    df["speed_diff"] = df["speed"].astype(float) - df["Pitcher"].map(fb_speed).astype(float)
-    df.loc[df["TaggedPitchType"].isin(_FB_TYPES), "speed_diff"] = 0.0
-    df["lift_diff"] = df["lift"].astype(float) - df["Pitcher"].map(fb_lift).astype(float)
-    df.loc[df["TaggedPitchType"].isin(_FB_TYPES), "lift_diff"] = 0.0
-    df["transverse_pit_diff"] = (
-        df["transverse_pit"].astype(float) - df["Pitcher"].map(fb_transverse).astype(float)
+    fb_ref = df[["Pitcher", "game_year"]].merge(
+        fb_ref.reset_index(), on=["Pitcher", "game_year"], how="left"
     )
-    df.loc[df["TaggedPitchType"].isin(_FB_TYPES), "transverse_pit_diff"] = 0.0
+    is_fb_type = df["TaggedPitchType"].isin(_FB_TYPES)
+    df["speed_diff"] = pd.Series(
+        df["speed"].to_numpy(dtype=float) - fb_ref["fb_speed"].to_numpy(dtype=float),
+        index=df.index,
+        dtype=float,
+    ).clip(lower=-50.0, upper=0.0)
+    df.loc[is_fb_type, "speed_diff"] = 0.0
+    df["lift_diff"] = pd.Series(
+        df["lift"].to_numpy(dtype=float) - fb_ref["fb_lift"].to_numpy(dtype=float),
+        index=df.index,
+        dtype=float,
+    ).clip(lower=-50.0, upper=0.0)
+    df.loc[is_fb_type, "lift_diff"] = 0.0
+    df["transverse_pit_diff"] = pd.Series(
+        df["transverse_pit"].to_numpy(dtype=float) - fb_ref["fb_transverse_pit"].to_numpy(dtype=float),
+        index=df.index,
+        dtype=float,
+    )
+    df.loc[is_fb_type, "transverse_pit_diff"] = 0.0
 
     df["is_swing"] = df["PitchCall"].isin(_SWING_CALLS).astype(int)
     df["is_take"] = 1 - df["is_swing"]

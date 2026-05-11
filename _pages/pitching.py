@@ -2297,7 +2297,7 @@ def _pitcher_card_content(
         st.markdown("""
 **Stuff+** is a pitch-shape grade. It answers one question: if we strip out location, count leverage, sequencing, and hitter identity, how much run prevention should this pitch's physical traits create?
 
-**What goes into it:** velocity, induced vertical break, handedness-adjusted horizontal break, extension, release slot, spin rate, spin axis, pitch type, fastball separation, and the model's eight pitch-shape archetypes.
+**What goes into it:** physics velocity, vertical lift/break, horizontal movement, release side, extension, release height, adjusted vertical approach angle, and for non-fastballs the pitch's velocity/lift/horizontal movement compared with that pitcher's fastball.
 
 **How the model scores a pitch:** the PitchSim-style pipeline estimates swing, whiff, called strike, ball, batted-ball shape, home-run risk, and contact damage. Those event probabilities are converted into expected run value, then averaged over a standardized count/location grid. That grid-average step removes command, so the grade reflects shape rather than location.
 
@@ -2307,13 +2307,13 @@ The production app then uses a distilled runtime model so scoring is fast enough
 - **90 = about one standard deviation worse than average**
 
 **What drives high Stuff+ scores:**
-- **Fastballs** - Velocity, ride/sink profile, arm-side or cut shape, release slot, extension, and spin axis. The model separates high-slot and low-slot fastball shapes.
-- **Sinkers** - Velocity, lower IVB/sink, arm-side run, release slot, extension, and shape consistency.
-- **Sliders** - Velocity, depth, glove-side movement, spin/axis, and separation from the fastball.
-- **Sweepers** - Horizontal sweep, controlled depth, spin/axis, and separation from the fastball. Sweepers are their own bucket, not merged into sliders.
-- **Curveballs** - Depth, shape/axis, velocity band, release slot, and movement consistency.
-- **Cutters** - Velocity, short glove-side cut, ride/depth balance, spin/axis, and fastball separation.
-- **Offspeed** - Velocity separation, sink/fade, extension, release slot, and movement separation from the fastball.
+- **Fastballs** - Velocity, carry/sink, run or cut, release slot, extension, and approach angle.
+- **Sinkers** - Velocity, sink, arm-side run, release slot, extension, and approach angle.
+- **Sliders** - Velocity band, depth, sweep/cut shape, release slot, approach angle, and how far the shape sits from the fastball.
+- **Sweepers** - Big horizontal sweep, controlled depth, release slot, approach angle, and how far the shape sits from the fastball. Sweepers are their own bucket, not merged into sliders.
+- **Curveballs** - Depth, horizontal shape, velocity band, release slot, extension, and approach angle.
+- **Cutters** - Velocity, short glove-side cut, ride/depth balance, release slot, extension, and approach angle.
+- **Offspeed** - Velocity separation, sink/fade, extension, release slot, approach angle, and movement separation from the fastball.
 
 **What doesn't affect Stuff+:** Location, pitch sequencing, game situation, or batter identity.
 """)
