@@ -76,6 +76,14 @@ _FIG_SIZE = (11, 8.5)
 _SAVANT_CMAP = LinearSegmentedColormap.from_list(
     "savant", ["#14365d", "#3d7dab", "#9e9e9e", "#ee7e1e", "#be0000"])
 
+
+def _pa_group_cols(df):
+    """Columns that identify one plate appearance across a multi-game series."""
+    game_col = "GameID" if "GameID" in df.columns else "Date"
+    preferred = [game_col, "Batter", "Top/Bottom", "Inning", "PAofInning"]
+    return [c for c in preferred if c in df.columns]
+
+
 # ── Page numbering ───────────────────────────────────────────────────────────
 _page_num = 0
 _total_pages = 0
@@ -579,13 +587,13 @@ def _mpl_best_zone_heatmap(ax_heat, ax_key, bdf, bats):
         ax_key.axis("off")
         return
 
-    # Gather raw values for percentile ranking
-    ev_vals, barrel_vals, whiff_vals = [], [], []
+    # Gather raw values for percentile ranking. Hotter zones mean higher EV
+    # and lower whiff rate.
+    ev_vals, whiff_vals = [], []
     for yb in range(3):
         for xb in range(3):
             m = zone_metrics.get((xb, yb), {})
             ev_vals.append(m.get("ev_mean", np.nan))
-            barrel_vals.append(m.get("barrel_pct", np.nan))
             zdf = loc_df[(np.clip(np.digitize(loc_df["PlateLocSide"], _ZONE_X_EDGES) - 1, 0, 2) == xb) &
                          (np.clip(np.digitize(loc_df["PlateLocHeight"], _ZONE_Y_EDGES) - 1, 0, 2) == yb)]
             swings = zdf[zdf["PitchCall"].isin(SWING_CALLS)] if "PitchCall" in zdf.columns else pd.DataFrame()
@@ -593,7 +601,7 @@ def _mpl_best_zone_heatmap(ax_heat, ax_key, bdf, bats):
             whiff_pct = len(whiffs) / max(len(swings), 1) * 100 if len(swings) >= 3 else np.nan
             whiff_vals.append(whiff_pct)
 
-    ev_arr, barrel_arr, whiff_arr = np.array(ev_vals), np.array(barrel_vals), np.array(whiff_vals)
+    ev_arr, whiff_arr = np.array(ev_vals), np.array(whiff_vals)
 
     def _prank(arr):
         valid = arr[~np.isnan(arr)]
@@ -601,7 +609,7 @@ def _mpl_best_zone_heatmap(ax_heat, ax_key, bdf, bats):
             return np.full_like(arr, 50.0)
         return np.array([_pctile(valid, v, kind="rank") if not np.isnan(v) else np.nan for v in arr])
 
-    ev_p, barrel_p, whiff_p = _prank(ev_arr), _prank(barrel_arr), _prank(whiff_arr)
+    ev_p, whiff_p = _prank(ev_arr), _prank(whiff_arr)
 
     grid = np.full((3, 3), np.nan)
     idx = 0
@@ -609,11 +617,9 @@ def _mpl_best_zone_heatmap(ax_heat, ax_key, bdf, bats):
         for xb in range(3):
             parts, total_w = [], 0.0
             if not np.isnan(ev_p[idx]):
-                parts.append(0.45 * ev_p[idx]); total_w += 0.45
-            if not np.isnan(barrel_p[idx]):
-                parts.append(0.30 * barrel_p[idx]); total_w += 0.30
+                parts.append(0.50 * ev_p[idx]); total_w += 0.50
             if not np.isnan(whiff_p[idx]):
-                parts.append(0.25 * (100 - whiff_p[idx])); total_w += 0.25
+                parts.append(0.50 * (100 - whiff_p[idx])); total_w += 0.50
             grid[2 - yb, xb] = sum(parts) / total_w if total_w > 0 and parts else np.nan
             idx += 1
 
@@ -661,10 +667,12 @@ def _mpl_best_zone_heatmap(ax_heat, ax_key, bdf, bats):
 
     # Description lines
     n_bbe = sum(m.get("n_contact", 0) for m in zone_metrics.values())
-    ax_key.text(0.50, 0.48, f"Historical data  |  {len(loc_df)} pitches  |  {n_bbe} batted balls",
+    n_swings = int(loc_df["PitchCall"].isin(SWING_CALLS).sum()) if "PitchCall" in loc_df.columns else 0
+    ax_key.text(0.50, 0.48,
+                f"Historical data  |  {len(loc_df)} pitches  |  {n_swings} swings  |  {n_bbe} batted balls",
                 fontsize=4.5, color="#666", va="top", ha="center", transform=ax_key.transAxes)
     ax_key.text(0.50, 0.24,
-                "Score = 45% Exit Velo + 30% Barrel% + 25% Contact%",
+                "Score = 50% Avg EV + 50% Low Whiff%",
                 fontsize=4.5, color="#888", va="top", ha="center", transform=ax_key.transAxes)
 
 
@@ -1063,7 +1071,7 @@ def _render_pitcher_page(pdf, data, pitcher, series_label, stuff_pop=None):
 def _render_hitter_page(bdf, data, batter, series_label, game_ids=None):
     """Individual hitter page with pitch locations seen, pitch-type table, and best swing zones."""
     n_pitches = len(bdf)
-    pa_cols = [c for c in ["GameID", "Batter", "Inning", "PAofInning"] if c in bdf.columns]
+    pa_cols = _pa_group_cols(bdf)
     n_pas = bdf.drop_duplicates(subset=pa_cols).shape[0] if len(pa_cols) >= 2 else 0
     if n_pas < 3:
         return None
@@ -1071,10 +1079,10 @@ def _render_hitter_page(bdf, data, batter, series_label, game_ids=None):
     _grades, feedback = _compute_hitter_grades(bdf, data, batter)
 
     # Build AB rows across all games
-    sort_cols = [c for c in ["Inning", "PAofInning", "PitchNo"] if c in bdf.columns]
+    sort_cols = [c for c in ["Date", "GameID", "Top/Bottom", "Inning", "PAofInning", "PitchNo"] if c in bdf.columns]
     ab_rows = []
     if len(pa_cols) >= 2:
-        for pa_key, ab in bdf.groupby(pa_cols[1:]):
+        for pa_key, ab in bdf.groupby(pa_cols):
             ab_sorted = ab.sort_values(sort_cols) if sort_cols else ab
             score, letter, result = _grade_at_bat(ab_sorted, season_bdf)
             inn = ab_sorted.iloc[0].get("Inning", "?")
@@ -1314,7 +1322,7 @@ def _render_hitting_summary(combined_gd, series_label):
     rows = []
     for batter in batters:
         bdf = dav_hitting[dav_hitting["Batter"] == batter]
-        pa_cols = [c for c in ["GameID", "Batter", "Inning", "PAofInning"] if c in bdf.columns]
+        pa_cols = _pa_group_cols(bdf)
         pa = bdf.drop_duplicates(subset=pa_cols).shape[0] if len(pa_cols) >= 2 else 0
         pr = bdf["PlayResult"] if "PlayResult" in bdf.columns else pd.Series(dtype=str)
         hits = pr.isin(["Single", "Double", "Triple", "HomeRun"]).sum()
@@ -1343,7 +1351,7 @@ def _render_hitting_summary(combined_gd, series_label):
                      color=_DARK, loc="left", pad=4)
 
     # Compute team-level stats
-    pa_cols = [c for c in ["GameID", "Batter", "Inning", "PAofInning"] if c in dav_hitting.columns]
+    pa_cols = _pa_group_cols(dav_hitting)
     total_pa = dav_hitting.drop_duplicates(subset=pa_cols).shape[0] if len(pa_cols) >= 2 else 0
     pr_all = dav_hitting["PlayResult"] if "PlayResult" in dav_hitting.columns else pd.Series(dtype=str)
     total_hits = pr_all.isin(["Single", "Double", "Triple", "HomeRun"]).sum()
@@ -1452,15 +1460,15 @@ def _mpl_pa_zone_plot(ax, ab_df):
 def _render_hitter_ab_pages(bdf, data, batter, series_label, game_ids):
     """Per-AB review pages for a hitter across a series. ~3 ABs per page.
     Returns list of Figure objects."""
-    pa_cols = [c for c in ["GameID", "Batter", "Inning", "PAofInning"] if c in bdf.columns]
-    sort_cols = [c for c in ["Inning", "PAofInning", "PitchNo"] if c in bdf.columns]
+    pa_cols = _pa_group_cols(bdf)
+    sort_cols = [c for c in ["Date", "GameID", "Top/Bottom", "Inning", "PAofInning", "PitchNo"] if c in bdf.columns]
     if len(pa_cols) < 2:
         return []
 
     season_bdf = data[data["Batter"] == batter] if data is not None and not data.empty else pd.DataFrame()
 
     pa_list = []
-    for pa_key, ab in bdf.groupby(pa_cols[1:]):
+    for pa_key, ab in bdf.groupby(pa_cols):
         ab_sorted = ab.sort_values(sort_cols) if sort_cols else ab
         inn = ab_sorted.iloc[0].get("Inning", "?")
         game_id = ab_sorted.iloc[0].get("GameID", "")
@@ -1659,7 +1667,7 @@ def generate_series_pdf_bytes(game_ids, data, series_label) -> bytes:
             for batter in batters:
                 try:
                     batter_df = dav_hitting[dav_hitting["Batter"] == batter].copy()
-                    pa_cols = [c for c in ["GameID", "Batter", "Inning", "PAofInning"] if c in batter_df.columns]
+                    pa_cols = _pa_group_cols(batter_df)
                     n_pas = batter_df.drop_duplicates(subset=pa_cols).shape[0] if len(pa_cols) >= 2 else 0
                     # Summary page (3+ PAs)
                     fig = _render_hitter_page(batter_df, data, batter, series_label, game_ids)
