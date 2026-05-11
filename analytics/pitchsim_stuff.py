@@ -2515,13 +2515,13 @@ def _directional_shap_feature_label(
 
     if feature == "vert_approach_angle_adj":
         if positive:
-            return "flatter approach angle helps" if lower is not False else "approach angle is in a good window"
-        return "approach angle is too steep"
+            return "approach angle window helps"
+        return "approach angle is too flat" if lower else "approach angle is too steep"
     if feature == "speed":
         if lower is None:
             return "velocity helps" if positive else "velocity hurts"
         if positive:
-            return "velocity is firm" if not lower else "softer velocity plays"
+            return "velocity band helps"
         return "velocity is too soft" if lower else "velocity is too firm"
     if feature == "speed_diff":
         if abs_light is None:
@@ -2592,8 +2592,11 @@ def _add_shap_summary_columns(pop: pd.DataFrame, feature_cols: Sequence[str]) ->
         pitch_type = row.get("TaggedPitchType", "")
         pairs = []
         hidden_features = _SHAP_HIDDEN_FEATURES_BY_TYPE.get(str(pitch_type), set())
+        combined_members = {"transverse", "transverse_pit", "release_pos_x", "release_pos_x_pit"}
         for feature in feature_cols:
             if feature in hidden_features:
+                continue
+            if feature in combined_members:
                 continue
             shap_name = _shap_col(feature)
             if shap_name not in out.columns:
@@ -2603,6 +2606,33 @@ def _add_shap_summary_columns(pop: pd.DataFrame, feature_cols: Sequence[str]) ->
                 continue
             val = pd.to_numeric(pd.Series([row.get(_mean_feature_col(feature))]), errors="coerce").iloc[0]
             pairs.append((feature, float(pts), float(val) if np.isfinite(val) else np.nan))
+        for display_feature, members in (
+            ("transverse_pit", ("transverse", "transverse_pit")),
+            ("release_pos_x_pit", ("release_pos_x", "release_pos_x_pit")),
+        ):
+            pts_sum = 0.0
+            seen = False
+            for feature in members:
+                if feature not in feature_cols or feature in hidden_features:
+                    continue
+                shap_name = _shap_col(feature)
+                if shap_name not in out.columns:
+                    continue
+                pts = pd.to_numeric(pd.Series([row.get(shap_name)]), errors="coerce").iloc[0]
+                if np.isfinite(pts):
+                    pts_sum += float(pts)
+                    seen = True
+            if not seen or not np.isfinite(pts_sum) or abs(pts_sum) <= 1e-12:
+                continue
+            value = np.nan
+            for feature in (display_feature, *members):
+                col = _mean_feature_col(feature)
+                if col in out.columns:
+                    raw_value = pd.to_numeric(pd.Series([row.get(col)]), errors="coerce").iloc[0]
+                    if np.isfinite(raw_value):
+                        value = float(raw_value)
+                        break
+            pairs.append((display_feature, pts_sum, value))
         pos = sorted([item for item in pairs if item[1] > 0], key=lambda item: item[1], reverse=True)
         neg = sorted([item for item in pairs if item[1] < 0], key=lambda item: item[1])
         rec = {}

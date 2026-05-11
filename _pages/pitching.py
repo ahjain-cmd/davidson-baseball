@@ -957,14 +957,14 @@ def _pitchsim_directional_driver(feature, pitch_type, pts, value):
 
     if feature == "vert_approach_angle_adj":
         if positive:
-            return "flatter approach angle helps" if lower is not False else "approach angle is in a good window"
-        return "approach angle is too steep"
+            return "approach angle window helps"
+        return "approach angle is too flat" if lower else "approach angle is too steep"
 
     if feature == "speed":
         if lower is None:
             return "velocity helps" if positive else "velocity hurts"
         if positive:
-            return "velocity is firm" if not lower else "softer velocity plays"
+            return "velocity band helps"
         return "velocity is too soft" if lower else "velocity is too firm"
 
     if feature == "speed_diff":
@@ -1093,7 +1093,10 @@ def _build_pitchsim_shap_rows(stuff_df, min_pitches=5, include_pitcher=False):
         ]
 
         driver_pairs = []
+        combined_members = {"transverse", "transverse_pit", "release_pos_x", "release_pos_x_pit"}
         for feature in visible_features:
+            if feature in combined_members:
+                continue
             shap_name = _pitchsim_shap_col(feature)
             value_col = (
                 _pitchsim_mean_feature_col(feature)
@@ -1106,6 +1109,36 @@ def _build_pitchsim_shap_rows(stuff_df, min_pitches=5, include_pitcher=False):
                 continue
             label = _pitchsim_directional_driver(feature, pitch_type, float(pts), value)
             driver_pairs.append((feature, label, float(pts), _format_pitchsim_shap_value(feature, value)))
+        for display_feature, members in (
+            ("transverse_pit", ("transverse", "transverse_pit")),
+            ("release_pos_x_pit", ("release_pos_x", "release_pos_x_pit")),
+        ):
+            present = [
+                feature for feature in members
+                if feature in visible_features and _pitchsim_shap_col(feature) in group.columns
+            ]
+            if not present:
+                continue
+            pts = 0.0
+            seen = False
+            for feature in present:
+                feature_pts = _weighted_mean_safe(group[_pitchsim_shap_col(feature)], weights)
+                if np.isfinite(feature_pts):
+                    pts += float(feature_pts)
+                    seen = True
+            if not seen or not np.isfinite(pts) or abs(pts) <= 1e-12:
+                continue
+            value = np.nan
+            for feature in (display_feature, *members):
+                value_col = _pitchsim_mean_feature_col(feature)
+                if value_col in group.columns:
+                    value = _weighted_mean_safe(group[value_col], weights)
+                    if np.isfinite(value):
+                        break
+            label = _pitchsim_directional_driver(display_feature, pitch_type, float(pts), value)
+            driver_pairs.append(
+                (display_feature, label, float(pts), _format_pitchsim_shap_value(display_feature, value))
+            )
 
         positives = sorted(
             [(label, pts, value_text) for _, label, pts, value_text in driver_pairs if pts > 0],
