@@ -1413,8 +1413,8 @@ def _mpl_pa_zone_plot(ax, ab_df):
     ab_numbered = ab_df.copy()
     ab_numbered["_OrigPitchNum"] = range(1, len(ab_numbered) + 1)
     loc = ab_numbered.dropna(subset=["PlateLocSide", "PlateLocHeight"]).copy()
-    ax.set_xlim(-2.0, 2.0)
-    ax.set_ylim(0.5, 4.5)
+    ax.set_xlim(-2.3, 2.3)
+    ax.set_ylim(0.0, 5.2)
     ax.set_aspect("equal")
     ax.set_xticks([])
     ax.set_yticks([])
@@ -1477,7 +1477,7 @@ def _render_hitter_ab_pages(bdf, data, batter, series_label, game_ids):
 
     dname = display_name(batter, escape_html=False)
     figures = []
-    PAS_PER_PAGE = 4
+    PAS_PER_PAGE = 3
 
     for page_start in range(0, len(pa_list), PAS_PER_PAGE):
         page_pas = pa_list[page_start:page_start + PAS_PER_PAGE]
@@ -1486,15 +1486,19 @@ def _render_hitter_ab_pages(bdf, data, batter, series_label, game_ids):
         fig = plt.figure(figsize=_FIG_SIZE)
         fig.patch.set_facecolor("white")
 
-        h_ratios = [0.07] + [0.22] * n_pas_page
+        pa_heights = []
+        for _inn, ab_sorted, _game_date_str in page_pas:
+            n_table_rows = len(_pg_build_pa_pitch_rows(ab_sorted)) + 1
+            pa_heights.append(max(0.24, min(0.56, 0.08 + 0.024 * n_table_rows)))
+        h_ratios = [0.08] + pa_heights
         remaining = 1.0 - sum(h_ratios)
         if remaining > 0.01:
             h_ratios.append(remaining)
         n_rows = len(h_ratios)
 
         page_outer = gridspec.GridSpec(n_rows, 1, figure=fig,
-            height_ratios=h_ratios, hspace=0.08,
-            top=0.97, bottom=0.03, left=0.04, right=0.96)
+            height_ratios=h_ratios, hspace=0.18,
+            top=0.97, bottom=0.035, left=0.04, right=0.96)
 
         _header_bar(fig, page_outer[0],
                     f"SERIES AB REVIEW  |  {dname}  |  {series_label}")
@@ -1555,11 +1559,12 @@ def _render_hitter_ab_pages(bdf, data, batter, series_label, game_ids):
                 ]
                 # Shrink row height for long ABs to prevent table overflow
                 n_rows = len(table_data) + 1  # +1 for header
-                rh = 1.3 if n_rows <= 5 else max(0.9, 5.5 / n_rows)
+                rh = 1.25 if n_rows <= 5 else max(0.50, min(0.85, 6.0 / n_rows))
+                table_fontsize = 6.5 if n_rows <= 9 else 5.8 if n_rows <= 14 else 5.0
                 _styled_table(ax_table, table_data,
                              ["#", "Count", "Type", "Velo", "Call", "EV", "LA"],
                              [0.06, 0.10, 0.18, 0.12, 0.12, 0.12, 0.10],
-                             fontsize=6.5, row_height=rh)
+                             fontsize=table_fontsize, row_height=rh)
 
             # Right: zone plot
             ax_zone = fig.add_subplot(row_gs[0, 1])
