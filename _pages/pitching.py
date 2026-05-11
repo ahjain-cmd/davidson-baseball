@@ -905,6 +905,42 @@ def _abs_less_than_ref(value, ref):
     return abs(value) < abs(ref)
 
 
+def _pitchsim_horizontal_term(pitch_type):
+    pt = str(pitch_type)
+    if pt in {"Fastball", "Sinker"}:
+        return "arm-side run"
+    if pt == "Cutter":
+        return "cut"
+    if pt in {"Slider", "Sweeper"}:
+        return "sweep"
+    if pt == "Curveball":
+        return "horizontal bend"
+    if pt in {"Changeup", "Splitter"}:
+        return "fade"
+    return "horizontal movement"
+
+
+def _pitchsim_horizontal_driver(feature, pitch_type, positive, abs_light):
+    term = _pitchsim_horizontal_term(pitch_type)
+    if feature == "transverse_pit_diff":
+        if term in {"cut", "sweep", "horizontal bend"}:
+            label = f"{term} separation off fastball"
+        elif term == "arm-side run":
+            label = "run separation off fastball"
+        elif term == "fade":
+            label = "fade separation off fastball"
+        else:
+            label = "horizontal separation off fastball"
+    else:
+        label = term
+
+    if abs_light is None:
+        return f"{label} helps" if positive else f"{label} hurts"
+    if positive:
+        return f"good {label}" if not abs_light else f"shorter {label} plays"
+    return f"not enough {label}" if abs_light else f"too much {label}"
+
+
 def _pitchsim_directional_driver(feature, pitch_type, pts, value):
     positive = pts > 0
     ref = _pitchsim_ref_value(feature, pitch_type)
@@ -952,18 +988,10 @@ def _pitchsim_directional_driver(feature, pitch_type, pts, value):
         return "not enough vertical separation off fastball" if abs_light else "too much vertical separation off fastball"
 
     if feature in {"transverse", "transverse_pit"}:
-        if abs_light is None:
-            return "horizontal break helps" if positive else "horizontal break hurts"
-        if positive:
-            return "good horizontal break/sweep" if not abs_light else "shorter horizontal break plays"
-        return "not enough horizontal break/sweep" if abs_light else "too much horizontal break/sweep"
+        return _pitchsim_horizontal_driver(feature, pitch_type, positive, abs_light)
 
     if feature == "transverse_pit_diff":
-        if abs_light is None:
-            return "horizontal separation off fastball helps" if positive else "horizontal separation off fastball hurts"
-        if positive:
-            return "good horizontal separation off fastball" if not abs_light else "smaller horizontal gap plays"
-        return "not enough horizontal separation off fastball" if abs_light else "too much horizontal separation off fastball"
+        return _pitchsim_horizontal_driver(feature, pitch_type, positive, abs_light)
 
     if feature == "release_pos_y":
         if lower is None:

@@ -2379,6 +2379,150 @@ def _shap_feature_label(feature: str, pitch_type: object = None) -> str:
     return _SHAP_FEATURE_LABELS.get(feature, feature)
 
 
+def _shap_feature_reference_stats(pop: pd.DataFrame, feature_cols: Sequence[str]) -> Dict[str, Dict[str, float]]:
+    if pop is None or pop.empty or "TaggedPitchType" not in pop.columns:
+        return {}
+    stats: Dict[str, Dict[str, float]] = {}
+    weight_col = "PitchCount" if "PitchCount" in pop.columns else None
+    for pitch_type, sub in pop.dropna(subset=["TaggedPitchType"]).groupby("TaggedPitchType", observed=False):
+        weights = (
+            pd.to_numeric(sub[weight_col], errors="coerce").fillna(0.0).clip(lower=0.0)
+            if weight_col
+            else pd.Series(1.0, index=sub.index)
+        )
+        ref: Dict[str, float] = {}
+        for feature in feature_cols:
+            col = _mean_feature_col(feature)
+            if col not in sub.columns:
+                continue
+            vals = pd.to_numeric(sub[col], errors="coerce").astype(float)
+            mask = vals.notna() & weights.notna() & (weights > 0)
+            if not mask.any():
+                continue
+            if feature in {
+                "speed_diff",
+                "lift_diff",
+                "transverse",
+                "transverse_pit",
+                "transverse_pit_diff",
+                "release_pos_x",
+                "release_pos_x_pit",
+            }:
+                vals = vals.abs()
+            ref[feature] = float(np.average(vals[mask], weights=weights[mask]))
+        if ref:
+            stats[str(pitch_type)] = ref
+    return stats
+
+
+def _horizontal_shape_term(pitch_type: object) -> str:
+    pt = str(pitch_type)
+    if pt in {"Fastball", "Sinker"}:
+        return "arm-side run"
+    if pt == "Cutter":
+        return "cut"
+    if pt in {"Slider", "Sweeper"}:
+        return "sweep"
+    if pt == "Curveball":
+        return "horizontal bend"
+    if pt in {"Changeup", "Splitter"}:
+        return "fade"
+    return "horizontal movement"
+
+
+def _horizontal_driver_label(feature: str, pitch_type: object, positive: bool, abs_light: Optional[bool]) -> str:
+    term = _horizontal_shape_term(pitch_type)
+    if feature == "transverse_pit_diff":
+        if term in {"cut", "sweep", "horizontal bend"}:
+            label = f"{term} separation off fastball"
+        elif term == "arm-side run":
+            label = "run separation off fastball"
+        elif term == "fade":
+            label = "fade separation off fastball"
+        else:
+            label = "horizontal separation off fastball"
+    else:
+        label = term
+
+    if abs_light is None:
+        return f"{label} helps" if positive else f"{label} hurts"
+    if positive:
+        return f"good {label}" if not abs_light else f"shorter {label} plays"
+    return f"not enough {label}" if abs_light else f"too much {label}"
+
+
+def _directional_shap_feature_label(
+    feature: str,
+    pitch_type: object,
+    pts: float,
+    value: float,
+    reference_stats: Dict[str, Dict[str, float]],
+) -> str:
+    positive = pts > 0
+    ref = reference_stats.get(str(pitch_type), {}).get(feature, np.nan)
+    lower = None
+    abs_light = None
+    if np.isfinite(value) and np.isfinite(ref):
+        lower = value < ref
+        abs_light = abs(value) < abs(ref)
+
+    if feature == "vert_approach_angle_adj":
+        if positive:
+            return "flatter approach angle helps" if lower is not False else "approach angle is in a good window"
+        return "approach angle is too steep"
+    if feature == "speed":
+        if lower is None:
+            return "velocity helps" if positive else "velocity hurts"
+        if positive:
+            return "velocity is firm" if not lower else "softer velocity plays"
+        return "velocity is too soft" if lower else "velocity is too firm"
+    if feature == "speed_diff":
+        if abs_light is None:
+            return "velo gap off fastball helps" if positive else "velo gap off fastball hurts"
+        if positive:
+            return "good velo gap off fastball" if not abs_light else "smaller velo gap plays"
+        return "not enough velo gap off fastball" if abs_light else "too much velo gap off fastball"
+    if feature == "lift":
+        if str(pitch_type) in _SHAP_FASTBALL_TYPES:
+            if lower is None:
+                return "ride/carry helps" if positive else "ride/carry hurts"
+            if positive:
+                return "good ride/carry" if not lower else "lower ride plays"
+            return "not enough ride/carry" if lower else "too much ride/carry"
+        if lower is None:
+            return "vertical break helps" if positive else "vertical break hurts"
+        if positive:
+            return "good depth/downward break" if lower else "vertical break shape helps"
+        return "not enough depth/downward break" if not lower else "too much depth/downward break"
+    if feature == "lift_diff":
+        if abs_light is None:
+            return "vertical separation off fastball helps" if positive else "vertical separation off fastball hurts"
+        if positive:
+            return "good vertical separation off fastball" if not abs_light else "smaller vertical gap plays"
+        return "not enough vertical separation off fastball" if abs_light else "too much vertical separation off fastball"
+    if feature in {"transverse", "transverse_pit", "transverse_pit_diff"}:
+        return _horizontal_driver_label(feature, pitch_type, positive, abs_light)
+    if feature == "release_pos_y":
+        if lower is None:
+            return "extension helps" if positive else "extension hurts"
+        if positive:
+            return "more extension helps" if lower else "shorter extension plays"
+        return "not enough extension" if not lower else "too much extension"
+    if feature in {"release_pos_x", "release_pos_x_pit"}:
+        if abs_light is None:
+            return "release side helps" if positive else "release side hurts"
+        if positive:
+            return "wider release side helps" if not abs_light else "more centered release side helps"
+        return "release side is too centered" if abs_light else "release side is too wide"
+    if feature == "release_pos_z":
+        if lower is None:
+            return "release height helps" if positive else "release height hurts"
+        if positive:
+            return "higher release height helps" if not lower else "lower release height helps"
+        return "release height is too low" if lower else "release height is too high"
+    return _shap_feature_label(feature, pitch_type)
+
+
 def _add_shap_summary_columns(pop: pd.DataFrame, feature_cols: Sequence[str]) -> pd.DataFrame:
     if pop is None or pop.empty:
         return pop
@@ -2395,6 +2539,7 @@ def _add_shap_summary_columns(pop: pd.DataFrame, feature_cols: Sequence[str]) ->
     for col in shap_cols:
         out["ShapMeanPitchPlus"] = out["ShapMeanPitchPlus"] + pd.to_numeric(out[col], errors="coerce").fillna(0.0)
 
+    reference_stats = _shap_feature_reference_stats(out, feature_cols)
     records = []
     for _, row in out.iterrows():
         pitch_type = row.get("TaggedPitchType", "")
@@ -2422,7 +2567,9 @@ def _add_shap_summary_columns(pop: pd.DataFrame, feature_cols: Sequence[str]) ->
                 if idx < len(items):
                     feature, pts, val = items[idx]
                     rec[f"{prefix}Feature{num}"] = feature
-                    rec[f"{prefix}Label{num}"] = _shap_feature_label(feature, pitch_type)
+                    rec[f"{prefix}Label{num}"] = _directional_shap_feature_label(
+                        feature, pitch_type, pts, val, reference_stats
+                    )
                     rec[f"{prefix}StuffPts{num}"] = pts
                     rec[f"{prefix}Value{num}"] = val
                     rec[f"{prefix}ValueText{num}"] = _format_shap_feature_value(feature, val)
