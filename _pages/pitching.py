@@ -254,6 +254,10 @@ def _build_stuff_explanation(pt, stuff_df, baselines_dict):
 
 
 def _format_model_lever(label, direction, delta, unit):
+    if label == "Spin rate":
+        if direction > 0:
+            return "Improve spin/shape quality"
+        return "Improve kill-spin shape"
     if label == "Arm-side HB":
         if direction > 0:
             return f"Add {delta:g} {unit} arm-side"
@@ -338,6 +342,135 @@ def _why_model_likes_change(baseline_scored, candidate_scored, pt_mask):
     return "; ".join(parts)
 
 
+_SLOT_LEVER_LABELS = {"Release slot height", "Release slot side"}
+_OFFSPEED_TYPES = {"Changeup", "Splitter"}
+_OFFSPEED_PRIMARY_LABELS = {"Velocity", "IVB", "Arm-side HB", "Spin rate"}
+_SHAP_LEVER_FEATURES = {
+    "Velocity": ("RelSpeed", "VeloDiff", "speed_x_ivb"),
+    "IVB": ("InducedVertBreak", "total_break", "break_balance", "speed_x_ivb"),
+    "Arm-side HB": ("HorzBreakAdj", "total_break", "break_balance"),
+    "Extension": ("Extension",),
+    "Release slot height": ("RelHeight",),
+    "Release slot side": ("RelSideAdj",),
+    "Spin rate": ("SpinRate",),
+}
+
+
+def _score_series(scored, col):
+    if col in scored.columns:
+        vals = pd.to_numeric(scored[col], errors="coerce")
+    else:
+        vals = pd.Series(np.nan, index=scored.index, dtype=float)
+    return pd.Series(vals.to_numpy(dtype=float), index=scored.index, dtype=float)
+
+
+def _priority_stuff_scores(scored):
+    vs_r = _score_series(scored, "StuffPlus_vsR")
+    vs_l = _score_series(scored, "StuffPlus_vsL")
+    sides = pd.concat([vs_r, vs_l], axis=1).mean(axis=1)
+    blended = _score_series(scored, "StuffPlus")
+    return sides.where(sides.notna(), blended)
+
+
+def _format_score_value(value):
+    try:
+        val = float(value)
+    except Exception:
+        return ""
+    return "" if not np.isfinite(val) else f"{val:.0f}"
+
+
+def _format_gain_value(value):
+    try:
+        val = float(value)
+    except Exception:
+        return ""
+    return "" if not np.isfinite(val) else f"{val:+.1f}"
+
+
+def _pitchsim_model_contribs(model, X, feature_cols):
+    try:
+        import xgboost as xgb
+
+        booster = model.get_booster() if hasattr(model, "get_booster") else model
+        dmatrix = xgb.DMatrix(X, feature_names=list(feature_cols))
+        contribs = booster.predict(dmatrix, pred_contribs=True)
+        if contribs is None or len(contribs) != len(X):
+            return pd.DataFrame(index=X.index)
+        return pd.DataFrame(contribs[:, :-1], columns=list(feature_cols), index=X.index)
+    except Exception:
+        return pd.DataFrame(index=X.index)
+
+
+def _build_pitchsim_shap_badness(scored, artifact):
+    """Return per-row RV SHAP contribution by lever.
+
+    Positive values mean the current feature mix is pushing modeled run value
+    higher, which is bad for Stuff+. Direction and gain still come from the
+    counterfactual re-score.
+    """
+    models = artifact.get("distilled_models", {}) if isinstance(artifact, dict) else {}
+    feature_cols = list(artifact.get("features", [])) if isinstance(artifact, dict) else []
+    if not models or not feature_cols:
+        return pd.DataFrame(index=scored.index)
+    if any(col not in scored.columns for col in feature_cols):
+        return pd.DataFrame(index=scored.index)
+
+    X = scored[feature_cols].apply(pd.to_numeric, errors="coerce")
+    valid = X.notna().all(axis=1)
+    out = pd.DataFrame(index=scored.index)
+    if not valid.any():
+        return out
+
+    X_valid = X.loc[valid].astype(float)
+    contrib_parts = []
+    for model_key in ("StuffRV_vsR", "StuffRV_vsL"):
+        model = models.get(model_key)
+        if model is None:
+            continue
+        contrib = _pitchsim_model_contribs(model, X_valid, feature_cols)
+        if not contrib.empty:
+            contrib_parts.append(contrib)
+    if not contrib_parts:
+        return out
+
+    contrib_avg = sum(contrib_parts) / float(len(contrib_parts))
+    for label, features in _SHAP_LEVER_FEATURES.items():
+        present = [feat for feat in features if feat in contrib_avg.columns]
+        if present:
+            out[label] = contrib_avg[present].sum(axis=1).reindex(scored.index)
+    return out
+
+
+def _driver_label_for_lever(pitch_type, lever):
+    label = lever.get("label", "")
+    direction = int(lever.get("direction", 0))
+    pt = str(pitch_type)
+    if label == "Velocity" and pt in _OFFSPEED_TYPES and direction < 0:
+        return "Velocity separation"
+    if label == "IVB" and pt in _OFFSPEED_TYPES and direction < 0:
+        return "Vertical shape / sink"
+    if label == "Arm-side HB":
+        return "Arm-side fade" if direction > 0 else "Glove-side movement"
+    if label == "Release slot height":
+        return "Release height"
+    if label == "Release slot side":
+        return "Release side"
+    if label == "Spin rate":
+        return "Spin / shape quality"
+    return label
+
+
+def _format_model_driver(pitch_type, lever):
+    badness = lever.get("shap_badness", np.nan)
+    if not np.isfinite(badness):
+        return ""
+    driver = _driver_label_for_lever(pitch_type, lever)
+    if badness > 0:
+        return driver
+    return ""
+
+
 def _build_model_stuff_recommendations(stuff_df, raw_df=None, min_pitches=5):
     """Strict model sensitivity table for each pitch type in the selected pitcher view."""
     if (stuff_df is None or stuff_df.empty) and (raw_df is None or raw_df.empty):
@@ -372,11 +505,22 @@ def _build_model_stuff_recommendations(stuff_df, raw_df=None, min_pitches=5):
             stuff_df is not None
             and not stuff_df.empty
             and "PitchUID" in work.columns
-            and {"PitchUID", "StuffPlus"}.issubset(stuff_df.columns)
+            and "PitchUID" in stuff_df.columns
         ):
-            score_cols = ["PitchUID", "StuffPlus"]
-            if "StuffRV100" in stuff_df.columns:
-                score_cols.append("StuffRV100")
+            score_cols = [
+                "PitchUID",
+                *[
+                    col for col in (
+                        "StuffPlus",
+                        "StuffPlus_vsR",
+                        "StuffPlus_vsL",
+                        "StuffRV100",
+                        "StuffRV100_vsR",
+                        "StuffRV100_vsL",
+                    )
+                    if col in stuff_df.columns
+                ],
+            ]
             scores = stuff_df[score_cols].drop_duplicates("PitchUID")
             work = work.drop(columns=[c for c in score_cols if c in work.columns and c != "PitchUID"])
             work = work.merge(scores, on="PitchUID", how="left")
@@ -416,7 +560,9 @@ def _build_model_stuff_recommendations(stuff_df, raw_df=None, min_pitches=5):
     ]
 
     score_cols = [
-        "StuffPlus", "StuffRV100", "StuffWhiff", "StuffCalledStrike",
+        "StuffPlus", "StuffPlus_vsR", "StuffPlus_vsL",
+        "StuffRV100", "StuffRV100_vsR", "StuffRV100_vsL",
+        "StuffWhiff", "StuffCalledStrike",
         "StuffBall", "StuffHomeRun", "StuffDamage",
     ]
 
@@ -435,15 +581,18 @@ def _build_model_stuff_recommendations(stuff_df, raw_df=None, min_pitches=5):
 
     def _score_frame(frame):
         scored = _score_full_frame(frame)
-        scores = pd.to_numeric(scored["StuffPlus"], errors="coerce")
+        scores = _priority_stuff_scores(scored)
         return pd.Series(scores.to_numpy(dtype=float), index=frame.index, dtype=float)
 
     baseline_scored = _score_full_frame(work, reference=model_reference)
-    baseline_scores = pd.to_numeric(baseline_scored["StuffPlus"], errors="coerce")
+    baseline_scores = _priority_stuff_scores(baseline_scored)
     baseline_scores = pd.Series(baseline_scores.to_numpy(dtype=float), index=work.index, dtype=float)
     if baseline_scores.notna().sum() == 0:
         return pd.DataFrame()
     work["_model_baseline_stuff"] = baseline_scores
+    work["_model_baseline_stuff_vsR"] = _score_series(baseline_scored, "StuffPlus_vsR").reindex(work.index)
+    work["_model_baseline_stuff_vsL"] = _score_series(baseline_scored, "StuffPlus_vsL").reindex(work.index)
+    shap_badness = _build_pitchsim_shap_badness(baseline_scored, artifact)
 
     rows = []
     for pt, pt_data in work.groupby("TaggedPitchType", observed=False):
@@ -454,6 +603,12 @@ def _build_model_stuff_recommendations(stuff_df, raw_df=None, min_pitches=5):
         baseline = float(work.loc[pt_mask, "_model_baseline_stuff"].mean())
         if not np.isfinite(baseline):
             continue
+        baseline_vs_r = float(work.loc[pt_mask, "_model_baseline_stuff_vsR"].mean())
+        baseline_vs_l = float(work.loc[pt_mask, "_model_baseline_stuff_vsL"].mean())
+        if not np.isfinite(baseline_vs_r):
+            baseline_vs_r = baseline
+        if not np.isfinite(baseline_vs_l):
+            baseline_vs_l = baseline
 
         lever_results = []
         for col, label, delta, unit, mode in levers:
@@ -476,12 +631,17 @@ def _build_model_stuff_recommendations(stuff_df, raw_df=None, min_pitches=5):
 
             scored_up = _score_full_frame(row_up, reference=model_reference)
             scored_dn = _score_full_frame(row_dn, reference=model_reference)
-            scores_up = pd.to_numeric(scored_up["StuffPlus"], errors="coerce")
-            scores_dn = pd.to_numeric(scored_dn["StuffPlus"], errors="coerce")
+            scores_up = _priority_stuff_scores(scored_up)
+            scores_dn = _priority_stuff_scores(scored_dn)
             score_up = float(scores_up.loc[pt_mask].mean())
             score_dn = float(scores_dn.loc[pt_mask].mean())
             if not np.isfinite(score_up) and not np.isfinite(score_dn):
                 continue
+
+            score_up_vs_r = float(_score_series(scored_up, "StuffPlus_vsR").loc[pt_mask].mean())
+            score_up_vs_l = float(_score_series(scored_up, "StuffPlus_vsL").loc[pt_mask].mean())
+            score_dn_vs_r = float(_score_series(scored_dn, "StuffPlus_vsR").loc[pt_mask].mean())
+            score_dn_vs_l = float(_score_series(scored_dn, "StuffPlus_vsL").loc[pt_mask].mean())
 
             gain_up = score_up - baseline
             gain_dn = score_dn - baseline
@@ -489,14 +649,24 @@ def _build_model_stuff_recommendations(stuff_df, raw_df=None, min_pitches=5):
                 best_gain = gain_up
                 best_direction = 1
                 best_scored = scored_up
+                best_gain_vs_r = score_up_vs_r - baseline_vs_r
+                best_gain_vs_l = score_up_vs_l - baseline_vs_l
             else:
                 best_gain = gain_dn
                 best_direction = -1
                 best_scored = scored_dn
+                best_gain_vs_r = score_dn_vs_r - baseline_vs_r
+                best_gain_vs_l = score_dn_vs_l - baseline_vs_l
+            shap_value = np.nan
+            if label in shap_badness.columns:
+                shap_value = float(pd.to_numeric(shap_badness.loc[pt_mask, label], errors="coerce").mean())
             lever_results.append(
                 {
                     "label": label,
                     "gain": float(best_gain),
+                    "gain_vsR": float(best_gain_vs_r),
+                    "gain_vsL": float(best_gain_vs_l),
+                    "shap_badness": float(shap_value),
                     "direction": int(best_direction),
                     "delta": delta,
                     "unit": unit,
@@ -506,15 +676,54 @@ def _build_model_stuff_recommendations(stuff_df, raw_df=None, min_pitches=5):
 
         if not lever_results:
             continue
-        lever_results.sort(key=lambda item: item["gain"], reverse=True)
-        top = lever_results[0]
-        second = lever_results[1] if len(lever_results) > 1 else None
+        shap_supported = [
+            item for item in lever_results
+            if np.isfinite(item.get("shap_badness", np.nan))
+            and item["shap_badness"] > 0
+            and np.isfinite(item["gain"])
+            and item["gain"] >= 0.15
+        ]
+        def _gain_rank(item):
+            return (
+                float(item.get("gain", np.nan)) if np.isfinite(item.get("gain", np.nan)) else -999.0,
+                float(item.get("shap_badness", np.nan)) if np.isfinite(item.get("shap_badness", np.nan)) else -999.0,
+            )
+
+        def _shap_rank(item):
+            return (
+                float(item.get("shap_badness", np.nan)) if np.isfinite(item.get("shap_badness", np.nan)) else -999.0,
+                float(item.get("gain", np.nan)) if np.isfinite(item.get("gain", np.nan)) else -999.0,
+            )
+
+        all_ranked = sorted(lever_results, key=_gain_rank, reverse=True)
+        ranked_results = sorted(shap_supported, key=_shap_rank, reverse=True) if shap_supported else all_ranked
+        top = ranked_results[0]
+        second = next((item for item in all_ranked if item is not top), None)
+        if str(pt) in _OFFSPEED_TYPES:
+            pitch_trait = [
+                item for item in ranked_results
+                if item["label"] in _OFFSPEED_PRIMARY_LABELS
+                and np.isfinite(item["gain"])
+                and item["gain"] > 0
+                and (
+                    not shap_supported
+                    or (
+                        np.isfinite(item.get("shap_badness", np.nan))
+                        and item["shap_badness"] > 0
+                    )
+                )
+            ]
+            if pitch_trait:
+                previous_top = top
+                top = pitch_trait[0]
+                if previous_top is not top:
+                    second = previous_top
+                else:
+                    second = next((item for item in all_ranked if item is not top), None)
         if top["gain"] >= 0.15:
             rec = _format_model_lever(top["label"], top["direction"], top["delta"], top["unit"])
-            gain_text = f"+{top['gain']:.1f}"
         else:
             rec = "No strong single-shape lever from tested perturbations"
-            gain_text = f"{top['gain']:+.1f}"
         second_text = ""
         if second is not None and second["gain"] >= 0.15:
             second_text = (
@@ -526,20 +735,25 @@ def _build_model_stuff_recommendations(stuff_df, raw_df=None, min_pitches=5):
             {
                 "Pitch": str(pt),
                 "Pitches": int(len(pt_data)),
-                "Current Stuff+": baseline,
+                "Stuff+ vs R": baseline_vs_r,
+                "Stuff+ vs L": baseline_vs_l,
                 "Development Focus": _development_focus(str(pt), top),
-                "Est. Stuff+ Gain": gain_text,
+                "Gain vs R": top["gain_vsR"],
+                "Gain vs L": top["gain_vsL"],
+                "Biggest Drag": _format_model_driver(str(pt), top),
                 "Why Model Likes It": top.get("why", "Better modeled run value"),
                 "Model Sensitivity": rec,
                 "Use As": _model_lever_caveat(top["label"]),
                 "Next Model Sensitivity": second_text,
+                "_Sort Stuff+": baseline,
             }
         )
 
     if not rows:
         return pd.DataFrame()
     out = pd.DataFrame(rows)
-    return out.sort_values(["Current Stuff+", "Pitches"], ascending=[True, False]).reset_index(drop=True)
+    out = out.sort_values(["_Sort Stuff+", "Pitches"], ascending=[True, False]).reset_index(drop=True)
+    return out.drop(columns=["_Sort Stuff+"], errors="ignore")
 
 
 def _render_model_stuff_recommendations(stuff_df, raw_df=None):
@@ -548,12 +762,240 @@ def _render_model_stuff_recommendations(stuff_df, raw_df=None):
         return
     section_header("Model-Driven Stuff+ Sensitivities")
     st.caption(
-        "Development Focus translates the model result into a coach-facing priority. Model Sensitivity shows the exact v9 counterfactual: one tracked trait is shifted and the full pitch distribution is re-scored. "
+        "Development Focus translates the PitchSim result into a coach-facing priority. Model Sensitivity shows the exact counterfactual: one tracked trait is shifted and the full pitch distribution is re-scored. "
         "The gain is a model sensitivity, not a causal guarantee."
     )
     display = recs.copy()
-    display["Current Stuff+"] = display["Current Stuff+"].map(lambda x: f"{x:.0f}")
+    for col in ("Stuff+ vs R", "Stuff+ vs L"):
+        if col in display.columns:
+            display[col] = display[col].map(_format_score_value)
+    for col in ("Gain vs R", "Gain vs L"):
+        if col in display.columns:
+            display[col] = display[col].map(_format_gain_value)
     st.dataframe(display, hide_index=True, use_container_width=True)
+
+
+_PITCHSIM_SHAP_FEATURES = (
+    "speed",
+    "speed_diff",
+    "lift",
+    "lift_diff",
+    "transverse",
+    "transverse_pit",
+    "transverse_pit_diff",
+    "release_pos_x",
+    "release_pos_x_pit",
+    "release_pos_y",
+    "release_pos_z",
+    "vert_approach_angle_adj",
+)
+
+_PITCHSIM_SHAP_FEATURE_LABELS = {
+    "speed": "physics velocity",
+    "speed_diff": "velocity vs own FB",
+    "lift": "vertical lift/carry force",
+    "lift_diff": "lift separation vs FB",
+    "transverse": "horizontal/transverse movement",
+    "transverse_pit": "handed horizontal movement",
+    "transverse_pit_diff": "horizontal separation vs FB",
+    "release_pos_x": "release side",
+    "release_pos_x_pit": "handed release side",
+    "release_pos_y": "release distance from plate",
+    "release_pos_z": "release height",
+    "vert_approach_angle_adj": "adjusted VAA",
+}
+
+
+def _pitchsim_shap_col(feature):
+    return f"Shap_{feature}_StuffPts"
+
+
+def _pitchsim_mean_feature_col(feature):
+    return f"Mean_{feature}"
+
+
+def _format_pitchsim_shap_value(feature, value):
+    value = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if not np.isfinite(value):
+        return ""
+    if feature in {"speed", "speed_diff"}:
+        return f"{value * 0.681818:.1f} mph"
+    if feature in {"release_pos_x", "release_pos_x_pit", "release_pos_y", "release_pos_z"}:
+        return f"{value:.2f} ft"
+    if feature == "vert_approach_angle_adj":
+        return f"{np.degrees(value):.2f} deg"
+    return f"{value:.1f}"
+
+
+def _weighted_mean_safe(values, weights):
+    vals = pd.to_numeric(values, errors="coerce").astype(float)
+    w = pd.to_numeric(weights, errors="coerce").astype(float)
+    mask = vals.notna() & w.notna() & (w > 0)
+    if not mask.any():
+        return np.nan
+    return float(np.average(vals[mask], weights=w[mask]))
+
+
+def _format_shap_driver(items):
+    parts = []
+    for label, pts, value_text in items:
+        if not np.isfinite(pts):
+            continue
+        val = f" ({value_text})" if value_text else ""
+        parts.append(f"{label} {pts:+.1f}{val}")
+    return "; ".join(parts) if parts else "-"
+
+
+def _build_pitchsim_shap_rows(stuff_df, min_pitches=5, include_pitcher=False):
+    if stuff_df is None or stuff_df.empty or "TaggedPitchType" not in stuff_df.columns:
+        return pd.DataFrame()
+    features = [
+        feature
+        for feature in _PITCHSIM_SHAP_FEATURES
+        if _pitchsim_shap_col(feature) in stuff_df.columns
+    ]
+    if not features:
+        return pd.DataFrame()
+
+    work = stuff_df.dropna(subset=["TaggedPitchType"]).copy()
+    if work.empty:
+        return pd.DataFrame()
+    if "PitchCount" in work.columns:
+        work["_ShapWeight"] = pd.to_numeric(work["PitchCount"], errors="coerce").fillna(0.0).clip(lower=0.0)
+        work["_ShapPitchCount"] = work["_ShapWeight"]
+    else:
+        work["_ShapWeight"] = 1.0
+        work["_ShapPitchCount"] = 1.0
+
+    group_cols = ["TaggedPitchType"]
+    if include_pitcher and "Pitcher" in work.columns:
+        group_cols = ["Pitcher", "TaggedPitchType"]
+
+    rows = []
+    for keys, group in work.groupby(group_cols, observed=False):
+        if not isinstance(keys, tuple):
+            keys = (keys,)
+        weights = group["_ShapWeight"]
+        pitches = int(round(float(group["_ShapPitchCount"].sum())))
+        if pitches < int(min_pitches):
+            continue
+
+        score_col = next(
+            (col for col in ("DisplayStuffPlus", "StuffPlus", "PitchStuffPlus") if col in group.columns),
+            None,
+        )
+        vsr_col = next(
+            (col for col in ("DisplayStuffPlus_vsR", "StuffPlus_vsR", "PitchStuffPlus_vsR") if col in group.columns),
+            None,
+        )
+        vsl_col = next(
+            (col for col in ("DisplayStuffPlus_vsL", "StuffPlus_vsL", "PitchStuffPlus_vsL") if col in group.columns),
+            None,
+        )
+        stuff_plus = _weighted_mean_safe(group[score_col], weights) if score_col else np.nan
+        stuff_plus_vs_r = _weighted_mean_safe(group[vsr_col], weights) if vsr_col else np.nan
+        stuff_plus_vs_l = _weighted_mean_safe(group[vsl_col], weights) if vsl_col else np.nan
+
+        driver_pairs = []
+        for feature in features:
+            shap_name = _pitchsim_shap_col(feature)
+            value_col = (
+                _pitchsim_mean_feature_col(feature)
+                if _pitchsim_mean_feature_col(feature) in group.columns
+                else feature
+            )
+            pts = _weighted_mean_safe(group[shap_name], weights)
+            value = _weighted_mean_safe(group[value_col], weights) if value_col in group.columns else np.nan
+            if not np.isfinite(pts):
+                continue
+            label = _PITCHSIM_SHAP_FEATURE_LABELS.get(feature, feature)
+            driver_pairs.append((feature, label, float(pts), _format_pitchsim_shap_value(feature, value)))
+
+        positives = sorted(
+            [(label, pts, value_text) for _, label, pts, value_text in driver_pairs if pts > 0],
+            key=lambda item: item[1],
+            reverse=True,
+        )[:3]
+        negatives = sorted(
+            [(label, pts, value_text) for _, label, pts, value_text in driver_pairs if pts < 0],
+            key=lambda item: item[1],
+        )[:3]
+
+        row = {
+            "Pitch": str(keys[-1]),
+            "Pitches": pitches,
+            "Stuff+": round(stuff_plus, 1) if np.isfinite(stuff_plus) else np.nan,
+            "vs R": round(stuff_plus_vs_r, 1) if np.isfinite(stuff_plus_vs_r) else np.nan,
+            "vs L": round(stuff_plus_vs_l, 1) if np.isfinite(stuff_plus_vs_l) else np.nan,
+            "Good Drivers": _format_shap_driver(positives),
+            "Bad Drivers": _format_shap_driver(negatives),
+            "_SortStuff": stuff_plus,
+        }
+        if include_pitcher and len(keys) >= 2:
+            row = {"Pitcher": str(keys[0]), **row}
+        rows.append(row)
+
+    if not rows:
+        return pd.DataFrame()
+    out = pd.DataFrame(rows)
+    out = out.sort_values(["_SortStuff", "Pitches"], ascending=[False, False]).drop(columns=["_SortStuff"])
+    return out.reset_index(drop=True)
+
+
+def _render_pitchsim_shap_breakdown(stuff_df, title="PitchSim SHAP Breakdown"):
+    rows = _build_pitchsim_shap_rows(stuff_df, min_pitches=5, include_pitcher=False)
+    if rows.empty:
+        return
+    section_header(title)
+    st.caption(
+        "True XGBoost SHAP from the fitted PitchSim Stuff+ model. Positive points add to Stuff+; negative points pull it down."
+    )
+    st.dataframe(rows, hide_index=True, use_container_width=True)
+
+
+def _render_population_pitchsim_shap_search():
+    pop = _fixed_stuff_percentile_population()
+    if pop is None or pop.empty:
+        return
+    if not any(_pitchsim_shap_col(feature) in pop.columns for feature in _PITCHSIM_SHAP_FEATURES):
+        return
+    with st.expander("2025 D1 Pitcher-Pitch SHAP Search", expanded=False):
+        filtered = pop.copy()
+        cols = st.columns([2, 2, 1])
+        with cols[0]:
+            query = st.text_input("Pitcher search", key="pitchsim_shap_pitcher_search").strip()
+        with cols[1]:
+            pitch_types = sorted(filtered["TaggedPitchType"].dropna().astype(str).unique())
+            selected = st.multiselect("Pitch types", pitch_types, default=[], key="pitchsim_shap_pitch_types")
+        with cols[2]:
+            min_pitches = st.number_input(
+                "Min pitches",
+                min_value=1,
+                max_value=1000,
+                value=50,
+                step=5,
+                key="pitchsim_shap_min_pitches",
+            )
+        if query and "Pitcher" in filtered.columns:
+            filtered = filtered[filtered["Pitcher"].astype(str).str.contains(query, case=False, na=False)]
+        if selected:
+            filtered = filtered[filtered["TaggedPitchType"].astype(str).isin(selected)]
+
+        rows = _build_pitchsim_shap_rows(filtered, min_pitches=min_pitches, include_pitcher=True)
+        if rows.empty:
+            st.info("No pitcher-pitch rows match those filters.")
+            return
+
+        sort_mode = st.radio(
+            "Sort",
+            ["Best Stuff+", "Worst Stuff+"],
+            horizontal=True,
+            key="pitchsim_shap_sort_mode",
+        )
+        if sort_mode == "Worst Stuff+":
+            rows = rows.sort_values(["Stuff+", "Pitches"], ascending=[True, False])
+        st.dataframe(rows.head(500), hide_index=True, use_container_width=True)
+        st.caption(f"Showing {min(len(rows), 500):,} of {len(rows):,} matching pitcher-pitch rows.")
 
 
 def _score_linear(val, lo, hi, invert=False):
@@ -709,6 +1151,34 @@ def _build_pitch_percentile_metrics(sample_df, population_df, metric_col, *,
             continue
         pctl = float(percentileofscore(peer_vals, my_val, kind="rank"))
         metrics.append((pt, my_val, pctl, ".0f", True))
+    return metrics
+
+
+def _build_pitch_side_percentile_metrics(sample_df, population_df, pitch_types=None):
+    """Build separate Stuff+ percentile rows for the vs-R and vs-L PitchSim grades."""
+    if sample_df is None or population_df is None or sample_df.empty or population_df.empty:
+        return []
+
+    side_defs = [
+        ("vs R", "StuffPlus_vsR"),
+        ("vs L", "StuffPlus_vsL"),
+    ]
+    pitch_type_order = list(pitch_types or sample_df["TaggedPitchType"].dropna().unique())
+    side_maps = {}
+    for side_label, col in side_defs:
+        if col not in sample_df.columns or col not in population_df.columns:
+            continue
+        side_metrics = _build_pitch_percentile_metrics(sample_df, population_df, col)
+        side_maps[side_label] = {pt: (value, pct, fmt, hib) for pt, value, pct, fmt, hib in side_metrics}
+
+    metrics = []
+    for pt in pitch_type_order:
+        for side_label, _ in side_defs:
+            side_metric = side_maps.get(side_label, {}).get(pt)
+            if side_metric is None:
+                continue
+            value, pct, fmt, hib = side_metric
+            metrics.append((f"{pt} {side_label}", value, pct, fmt, hib))
     return metrics
 
 
@@ -1737,15 +2207,18 @@ The production app then uses a distilled runtime model so scoring is fast enough
     # Stuff+ percentile bars
     if has_stuff:
         all_stuff = _fixed_stuff_percentile_population()
-        stuff_metrics = _build_pitch_percentile_metrics(stuff_df, all_stuff, "StuffPlus")
-        stuff_metrics = [row for row in stuff_metrics if row[0] in pitch_types]
+        stuff_metrics = _build_pitch_side_percentile_metrics(stuff_df, all_stuff, pitch_types=pitch_types)
+        if not stuff_metrics:
+            stuff_metrics = _build_pitch_percentile_metrics(stuff_df, all_stuff, "StuffPlus")
+            stuff_metrics = [row for row in stuff_metrics if row[0] in pitch_types]
         if stuff_metrics:
             render_savant_percentile_section(
                 stuff_metrics,
-                title=_fixed_stuff_percentile_title("Stuff+ Percentile Rankings"),
+                title=_fixed_stuff_percentile_title("Stuff+ Percentile Rankings vs R/L"),
             )
         st.markdown("")
-        _render_model_stuff_recommendations(stuff_df, raw_df=pdf)
+        _render_pitchsim_shap_breakdown(stuff_df)
+        _render_population_pitchsim_shap_search()
 
 
     # ── Section B: Best Pitch Locations (whiffs, called strikes, weak contact) ──
@@ -2843,7 +3316,7 @@ def _stuff_lab_page(data, pitcher, season_filter, pdf, stuff_df):
     st.markdown("---")
     _render_csv_upload(data)
     st.markdown("---")
-    _render_improvement_lab(stuff_df, pitcher, data)
+    _render_pitchsim_shap_breakdown(stuff_df, title="PitchSim SHAP Breakdown")
     st.markdown("---")
     _render_stuff_trend(stuff_df, pitcher)
 

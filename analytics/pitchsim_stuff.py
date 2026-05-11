@@ -23,7 +23,7 @@ import pandas as pd
 from config import PITCH_TYPE_MAP, PITCH_TYPES_TO_DROP
 
 
-_ARTIFACT_VERSION = "d1_pitchsim_lite_v10"
+_ARTIFACT_VERSION = "d1_pitchsim_lite_v11"
 _D1_LEVEL = "D1"
 _DISPLAY_REFERENCE_SEASON = 2025
 _DISPLAY_STUFF_CENTER = 100.0
@@ -49,7 +49,7 @@ _PITCH_TYPE_LABELS = {
     "Sweeper": 8,
 }
 
-_FB_TYPES = {"Fastball", "Sinker", "Cutter"}
+_FB_TYPES = {"Fastball", "Sinker"}
 _SWING_CALLS = {
     "StrikeSwinging",
     "FoulBall",
@@ -119,7 +119,7 @@ _FRAME_DROP_AFTER_PREP = (
 _CLUSTER_NAMES = [
     "sinker",
     "low-slot fastball",
-    "slider",
+    "gyro slider",
     "sweeper",
     "offspeed",
     "curveball",
@@ -157,6 +157,9 @@ _GRID_X = np.linspace(-2.7, 2.7, 28)
 _GRID_Z = np.linspace(-1.0, 5.4, 33)
 _GRID = np.array(np.meshgrid(_GRID_X, _GRID_Z)).T.reshape(-1, 2)
 _GRID_LEN = len(_GRID)
+_SZ_TOP_AVG = 3.50
+_SZ_BOT_AVG = 1.50
+_SZ_MID_AVG = (_SZ_TOP_AVG + _SZ_BOT_AVG) / 2.0
 _CONTEXT_LEN = _GRID_LEN * len(_COUNTS)
 _CONTEXT_BALLS = np.repeat(np.array([count[0] for count in _COUNTS], dtype=float), _GRID_LEN)
 _CONTEXT_STRIKES = np.repeat(np.array([count[1] for count in _COUNTS], dtype=float), _GRID_LEN)
@@ -171,81 +174,80 @@ _FCM_ERROR = 1e-3
 _CLUSTER_SOURCE_MIN_MEAN_PROB = 0.30
 
 _CLUSTER_FEATURES = [
-    "physics_speed",
+    "speed",
     "speed_diff",
     "lift",
     "lift_diff",
     "transverse_pit",
     "transverse_pit_diff",
-    "RelSideAdj",
+    "release_pos_x_pit",
     "release_pos_y",
-    "RelHeight",
-    "VertRelAngle",
-    "VertApprAngleCalc",
-    "VertApprAngleAdj",
-    "HorzRelAngleAdj",
-    "InducedVertBreak",
-    "HorzBreakAdj",
-    "VeloDiff",
-    "SpinRate",
-    "axis_sin",
-    "axis_cos",
+    "release_pos_z",
+    "vert_approach_angle_adj",
 ]
 
 _EVENT_BASE_FEATURES = [
-    "physics_speed",
-    "speed_diff",
-    "lift",
-    "lift_diff",
+    "speed",
+    "vert_approach_angle_adj",
+    "transverse",
     "transverse_pit",
-    "transverse_pit_diff",
-    "RelSideAdj",
+    "transverse_bat",
+    "lift",
+    "release_pos_x",
+    "release_pos_x_pit",
+    "release_pos_x_bat",
     "release_pos_y",
-    "RelHeight",
-    "Extension",
-    "SpinRate",
-    "axis_sin",
-    "axis_cos",
-    "InducedVertBreak",
-    "HorzBreakAdj",
-    "total_break",
-    "break_balance",
-    "VertRelAngle",
-    "VertApprAngleCalc",
-    "VertApprAngleAdj",
-    "HorzRelAngleAdj",
-    "PitcherThrows_enc",
+    "release_pos_z",
+    "speed_diff",
+    "lift_diff",
+    "transverse_pit_diff",
+    "vert_approach_angle",
+    "game_year",
 ]
 
 _EVENT_CONTEXT_FEATURES = [
-    "PlateLocSide",
-    "PlateLocHeight",
-    "BatterSide_enc",
-    "Balls",
-    "Strikes",
+    "plate_x",
+    "plate_x_pit",
+    "plate_x_bat",
+    "plate_x_abs",
+    "plate_z",
+    "plate_z_top",
+    "plate_z_bot",
+    "plate_dist",
+    "balls",
+    "strikes",
 ]
 
 _DISTILL_FEATURES = [
-    "RelSpeed",
-    "InducedVertBreak",
-    "HorzBreakAdj",
-    "Extension",
-    "RelHeight",
-    "RelSideAdj",
-    "SpinRate",
-    "axis_sin",
-    "axis_cos",
-    "VeloDiff",
-    "total_break",
-    "break_balance",
-    "speed_x_ivb",
-    "VertRelAngle",
-    "VertApprAngleCalc",
-    "VertApprAngleAdj",
-    "HorzRelAngleAdj",
-    "PitcherThrows_enc",
-    "pitch_type_enc",
+    "speed",
+    "speed_diff",
+    "lift",
+    "lift_diff",
+    "transverse",
+    "transverse_pit",
+    "transverse_pit_diff",
+    "release_pos_x",
+    "release_pos_x_pit",
+    "release_pos_y",
+    "release_pos_z",
+    "vert_approach_angle_adj",
 ]
+
+_SHAP_STUFF_SCALE = -1000.0
+_SHAP_FEATURE_LABELS = {
+    "speed": "physics velocity",
+    "speed_diff": "velocity vs own FB",
+    "lift": "vertical lift/carry force",
+    "lift_diff": "lift separation vs FB",
+    "transverse": "horizontal/transverse movement",
+    "transverse_pit": "handed horizontal movement",
+    "transverse_pit_diff": "horizontal separation vs FB",
+    "release_pos_x": "release side",
+    "release_pos_x_pit": "handed release side",
+    "release_pos_y": "release distance from plate",
+    "release_pos_z": "release height",
+    "vert_approach_angle_adj": "adjusted VAA",
+}
 
 _BASIC_ARTIFACT_KEYS = (
     "features",
@@ -811,6 +813,48 @@ def _compute_vaa_from_physics(df: pd.DataFrame) -> pd.Series:
     return pd.Series(vaa, index=df.index, dtype=float)
 
 
+def _compute_pitchsim_approach_angles(df: pd.DataFrame, release_pos_y: pd.Series) -> Tuple[pd.Series, pd.Series]:
+    """Compute PitchSim's approach angles in radians from trajectory physics."""
+    needed = {"vx0", "vy0", "vz0", "ax0", "ay0", "az0"}
+    if not needed.issubset(df.columns):
+        nan = pd.Series(np.nan, index=df.index, dtype=float)
+        return nan, nan
+
+    vx0 = pd.to_numeric(df["vx0"], errors="coerce").to_numpy(dtype=float)
+    vy0 = pd.to_numeric(df["vy0"], errors="coerce").to_numpy(dtype=float)
+    vz0 = pd.to_numeric(df["vz0"], errors="coerce").to_numpy(dtype=float)
+    ax = pd.to_numeric(df["ax0"], errors="coerce").to_numpy(dtype=float)
+    ay = pd.to_numeric(df["ay0"], errors="coerce").to_numpy(dtype=float)
+    az = pd.to_numeric(df["az0"], errors="coerce").to_numpy(dtype=float)
+    release_y = pd.to_numeric(release_pos_y, errors="coerce").to_numpy(dtype=float)
+
+    disc = np.square(vy0) - (2.0 * ay * release_y)
+    valid = (
+        np.isfinite(vx0)
+        & np.isfinite(vy0)
+        & np.isfinite(vz0)
+        & np.isfinite(ax)
+        & np.isfinite(ay)
+        & np.isfinite(az)
+        & np.isfinite(release_y)
+        & (np.abs(ay) > 1e-9)
+        & (disc >= 0.0)
+    )
+    t = np.full(len(df), np.nan, dtype=float)
+    t[valid] = np.abs((vy0[valid] + np.sqrt(disc[valid])) / ay[valid])
+
+    vy_plate = vy0 + (ay * t)
+    vx_plate = vx0 + (ax * t)
+    vz_plate = vz0 + (az * t)
+    angle_valid = valid & np.isfinite(t) & (t > 0.0) & np.isfinite(vy_plate) & (np.abs(vy_plate) > 1e-9)
+
+    vert = np.full(len(df), np.nan, dtype=float)
+    horz = np.full(len(df), np.nan, dtype=float)
+    vert[angle_valid] = np.arctan(vz_plate[angle_valid] / vy_plate[angle_valid])
+    horz[angle_valid] = np.arctan(vx_plate[angle_valid] / vy_plate[angle_valid])
+    return pd.Series(vert, index=df.index, dtype=float), pd.Series(horz, index=df.index, dtype=float)
+
+
 def _prepare_pitchsim_frame(data: pd.DataFrame, vaa_models: Optional[Dict[str, object]] = None) -> pd.DataFrame:
     del vaa_models
     df = _normalize_model_pitch_types(data)
@@ -826,6 +870,10 @@ def _prepare_pitchsim_frame(data: pd.DataFrame, vaa_models: Optional[Dict[str, o
     df["BatterSide"] = stands.where(stands.isin(["L", "R"]), "R")
     df["PitcherThrows_enc"] = (df["PitcherThrows"] == "L").astype(int)
     df["BatterSide_enc"] = (df["BatterSide"] == "L").astype(int)
+    throws_r = (df["PitcherThrows"] == "R").astype(float)
+    stands_r = (df["BatterSide"] == "R").astype(float)
+    throw_sign = (2.0 * throws_r) - 1.0
+    stand_sign = (2.0 * stands_r) - 1.0
     df["pitch_type_enc"] = (
         df["TaggedPitchType"].astype("object").map(_PITCH_TYPE_LABELS).fillna(-1).astype(int)
     )
@@ -842,16 +890,49 @@ def _prepare_pitchsim_frame(data: pd.DataFrame, vaa_models: Optional[Dict[str, o
     else:
         horz_rel_angle = pd.Series(np.nan, index=df.index, dtype=float)
     df["HorzRelAngleAdj"] = np.where(is_left, -horz_rel_angle, horz_rel_angle)
-    df["release_pos_y"] = 60.5 - df["Extension"].astype(float)
+    df["release_pos_x"] = pd.to_numeric(df["RelSide"], errors="coerce").astype(float)
+    df["release_pos_x_pit"] = df["release_pos_x"].astype(float) * throw_sign
+    df["release_pos_x_bat"] = df["release_pos_x"].astype(float) * stand_sign
+    df["release_pos_y"] = 60.5 - pd.to_numeric(df["Extension"], errors="coerce").astype(float)
+    df["release_pos_z"] = pd.to_numeric(df["RelHeight"], errors="coerce").astype(float)
+    df["plate_x"] = pd.to_numeric(df["PlateLocSide"], errors="coerce").astype(float)
+    df["plate_z"] = pd.to_numeric(df["PlateLocHeight"], errors="coerce").astype(float)
+    df["plate_x_pit"] = df["plate_x"].astype(float) * throw_sign
+    df["plate_x_bat"] = df["plate_x"].astype(float) * stand_sign
+    df["plate_x_abs"] = df["plate_x"].abs()
+    df["plate_z_top"] = df["plate_z"].astype(float) - _SZ_TOP_AVG
+    df["plate_z_bot"] = df["plate_z"].astype(float) - _SZ_BOT_AVG
+    df["plate_dist"] = np.sqrt(
+        np.square(df["plate_x"].astype(float)) + np.square(df["plate_z"].astype(float) - _SZ_MID_AVG)
+    )
+    if "Season" in df.columns:
+        df["game_year"] = pd.to_numeric(df["Season"], errors="coerce").astype(float)
+    elif "Date" in df.columns:
+        df["game_year"] = pd.to_datetime(df["Date"], errors="coerce").dt.year.astype(float)
+    else:
+        df["game_year"] = np.nan
+    df["balls"] = df["Balls"].astype(float)
+    df["strikes"] = df["Strikes"].astype(float)
+
     vaa_physics = _compute_vaa_from_physics(df)
     if "VertApprAngle" in df.columns:
         vaa_tm = pd.to_numeric(df["VertApprAngle"], errors="coerce").astype(float)
     else:
         vaa_tm = pd.Series(np.nan, index=df.index, dtype=float)
     df["VertApprAngleCalc"] = vaa_physics.where(vaa_physics.notna(), vaa_tm)
-    plate_height = pd.to_numeric(df["PlateLocHeight"], errors="coerce").astype(float)
     release_y = df["release_pos_y"].astype(float).replace(0.0, np.nan)
-    df["VertApprAngleAdj"] = df["VertApprAngleCalc"].astype(float) + np.degrees(plate_height / release_y)
+    df["VertApprAngleAdj"] = df["VertApprAngleCalc"].astype(float) + np.degrees(df["plate_z"] / release_y)
+    vaa_rad, haa_rad = _compute_pitchsim_approach_angles(df, release_pos_y=df["release_pos_y"])
+    if "VertApprAngle" in df.columns:
+        vaa_rad = vaa_rad.where(vaa_rad.notna(), np.deg2rad(vaa_tm))
+    if "HorzApprAngle" in df.columns:
+        haa_tm = pd.to_numeric(df["HorzApprAngle"], errors="coerce").astype(float)
+        haa_rad = haa_rad.where(haa_rad.notna(), np.deg2rad(haa_tm))
+    df["vert_approach_angle"] = vaa_rad
+    df["horz_approach_angle"] = haa_rad
+    df["vert_approach_angle_adj"] = df["vert_approach_angle"].astype(float) + (
+        df["plate_z"].astype(float) / release_y
+    )
 
     fb_velo = df[df["TaggedPitchType"].isin(_FB_TYPES)].groupby("Pitcher", observed=False)["RelSpeed"].mean()
     df["VeloDiff"] = df["Pitcher"].map(fb_velo).astype(float) - df["RelSpeed"].astype(float)
@@ -895,12 +976,14 @@ def _prepare_pitchsim_frame(data: pd.DataFrame, vaa_models: Optional[Dict[str, o
     cross = np.cross(acc, vel)
     safe_speed = np.where(np.isfinite(speed) & (speed > 1e-6), speed, np.nan)
     df["physics_speed"] = speed
+    df["speed"] = speed
     df["lift"] = cross[:, 0] / safe_speed
     transverse_x = cross[:, 2] / safe_speed
     transverse_y = cross[:, 1] / safe_speed
     transverse = np.sqrt(np.square(transverse_x) + np.square(transverse_y)) * np.sign(transverse_x)
-    hand_sign = np.where(df["PitcherThrows_enc"] == 1, -1.0, 1.0)
-    df["transverse_pit"] = transverse * hand_sign
+    df["transverse"] = transverse
+    df["transverse_pit"] = df["transverse"].astype(float) * throw_sign
+    df["transverse_bat"] = df["transverse"].astype(float) * stand_sign
 
     fb_lift = df[df["TaggedPitchType"].isin(_FB_TYPES)].groupby("Pitcher", observed=False)["lift"].mean()
     fb_transverse = (
@@ -908,11 +991,15 @@ def _prepare_pitchsim_frame(data: pd.DataFrame, vaa_models: Optional[Dict[str, o
         .groupby("Pitcher", observed=False)["transverse_pit"]
         .mean()
     )
-    df["speed_diff"] = df["Pitcher"].map(fb_velo).astype(float) - df["RelSpeed"].astype(float)
-    df["lift_diff"] = df["Pitcher"].map(fb_lift).astype(float) - df["lift"].astype(float)
+    fb_speed = df[df["TaggedPitchType"].isin(_FB_TYPES)].groupby("Pitcher", observed=False)["speed"].mean()
+    df["speed_diff"] = df["speed"].astype(float) - df["Pitcher"].map(fb_speed).astype(float)
+    df.loc[df["TaggedPitchType"].isin(_FB_TYPES), "speed_diff"] = 0.0
+    df["lift_diff"] = df["lift"].astype(float) - df["Pitcher"].map(fb_lift).astype(float)
+    df.loc[df["TaggedPitchType"].isin(_FB_TYPES), "lift_diff"] = 0.0
     df["transverse_pit_diff"] = (
-        df["Pitcher"].map(fb_transverse).astype(float) - df["transverse_pit"].astype(float)
+        df["transverse_pit"].astype(float) - df["Pitcher"].map(fb_transverse).astype(float)
     )
+    df.loc[df["TaggedPitchType"].isin(_FB_TYPES), "transverse_pit_diff"] = 0.0
 
     df["is_swing"] = df["PitchCall"].isin(_SWING_CALLS).astype(int)
     df["is_take"] = 1 - df["is_swing"]
@@ -1178,7 +1265,7 @@ def _cluster_type_from_pitchsim_rules(
     if dominant_pitch_type == "Fastball":
         return "low-slot fastball" if mean_rel_height < 6.0 else "high-slot fastball"
     if dominant_pitch_type in {"Slider", "Sweeper"}:
-        return "slider" if mean_transverse_pit > -5.5 else "sweeper"
+        return "gyro slider" if mean_transverse_pit > -5.5 else "sweeper"
     return "offspeed"
 
 
@@ -1195,7 +1282,7 @@ def _derive_rule_bucket(frame: pd.DataFrame) -> pd.Series:
     bucket[fastball_mask & (rel_height < 6.0)] = "low-slot fastball"
     bucket[fastball_mask & (rel_height >= 6.0)] = "high-slot fastball"
     slider_mask = np.isin(pitch_type, ["Slider", "Sweeper"])
-    bucket[slider_mask & (transverse > -5.5)] = "slider"
+    bucket[slider_mask & (transverse > -5.5)] = "gyro slider"
     bucket[slider_mask & (transverse <= -5.5)] = "sweeper"
     return pd.Series(bucket, index=frame.index, dtype="object")
 
@@ -1956,11 +2043,57 @@ def _build_event_matrix(
         col: np.repeat(batch[col].astype(float).to_numpy(), _CONTEXT_LEN)
         for col in _EVENT_BASE_FEATURES
     }
-    data["PlateLocSide"] = np.tile(_CONTEXT_PLATE_X, rows)
-    data["PlateLocHeight"] = np.tile(_CONTEXT_PLATE_Z, rows)
-    data["BatterSide_enc"] = np.full(rows * _CONTEXT_LEN, 1.0 if stand == "L" else 0.0, dtype=float)
-    data["Balls"] = np.tile(_CONTEXT_BALLS, rows)
-    data["Strikes"] = np.tile(_CONTEXT_STRIKES, rows)
+    pitch_sign = np.where(batch["PitcherThrows"].astype(str).to_numpy() == "R", 1.0, -1.0)
+    pitch_sign_rep = np.repeat(pitch_sign, _CONTEXT_LEN)
+    stand_sign = 1.0 if stand == "R" else -1.0
+    plate_x = np.tile(_CONTEXT_PLATE_X, rows)
+    plate_z = np.tile(_CONTEXT_PLATE_Z, rows)
+
+    data["plate_x"] = plate_x
+    data["plate_z"] = plate_z
+    data["plate_x_pit"] = plate_x * pitch_sign_rep
+    data["plate_x_bat"] = plate_x * stand_sign
+    data["plate_x_abs"] = np.abs(plate_x)
+    data["plate_z_top"] = plate_z - _SZ_TOP_AVG
+    data["plate_z_bot"] = plate_z - _SZ_BOT_AVG
+    data["plate_dist"] = np.sqrt(np.square(plate_x) + np.square(plate_z - _SZ_MID_AVG))
+    data["balls"] = np.tile(_CONTEXT_BALLS, rows)
+    data["strikes"] = np.tile(_CONTEXT_STRIKES, rows)
+    data["transverse_bat"] = np.repeat(batch["transverse"].astype(float).to_numpy(), _CONTEXT_LEN) * stand_sign
+    data["release_pos_x_bat"] = (
+        np.repeat(batch["release_pos_x"].astype(float).to_numpy(), _CONTEXT_LEN) * stand_sign
+    )
+    data["vert_approach_angle"] = (
+        np.repeat(batch["vert_approach_angle_adj"].astype(float).to_numpy(), _CONTEXT_LEN)
+        - plate_z / np.repeat(batch["release_pos_y"].astype(float).to_numpy(), _CONTEXT_LEN)
+    )
+    return pd.DataFrame(data, columns=list(_EVENT_BASE_FEATURES) + list(_EVENT_CONTEXT_FEATURES)).astype(np.float32)
+
+
+def _build_actual_event_matrix(batch: pd.DataFrame, stand: str) -> pd.DataFrame:
+    """Build PitchSim event features at each pitch's actual location/count."""
+    data = {col: batch[col].astype(float).to_numpy() for col in _EVENT_BASE_FEATURES}
+    pitch_sign = np.where(batch["PitcherThrows"].astype(str).to_numpy() == "R", 1.0, -1.0)
+    stand_sign = 1.0 if stand == "R" else -1.0
+    plate_x = batch["plate_x"].astype(float).to_numpy()
+    plate_z = batch["plate_z"].astype(float).to_numpy()
+
+    data["plate_x"] = plate_x
+    data["plate_z"] = plate_z
+    data["plate_x_pit"] = plate_x * pitch_sign
+    data["plate_x_bat"] = plate_x * stand_sign
+    data["plate_x_abs"] = np.abs(plate_x)
+    data["plate_z_top"] = plate_z - _SZ_TOP_AVG
+    data["plate_z_bot"] = plate_z - _SZ_BOT_AVG
+    data["plate_dist"] = np.sqrt(np.square(plate_x) + np.square(plate_z - _SZ_MID_AVG))
+    data["balls"] = batch["balls"].astype(float).to_numpy()
+    data["strikes"] = batch["strikes"].astype(float).to_numpy()
+    data["transverse_bat"] = batch["transverse"].astype(float).to_numpy() * stand_sign
+    data["release_pos_x_bat"] = batch["release_pos_x"].astype(float).to_numpy() * stand_sign
+    data["vert_approach_angle"] = (
+        batch["vert_approach_angle_adj"].astype(float).to_numpy()
+        - plate_z / batch["release_pos_y"].astype(float).to_numpy()
+    )
     return pd.DataFrame(data, columns=list(_EVENT_BASE_FEATURES) + list(_EVENT_CONTEXT_FEATURES)).astype(np.float32)
 
 
@@ -2169,6 +2302,124 @@ def _population_stats_from_values(
 
 def _blend_display_stuff_rv(rv_r: np.ndarray, rv_l: np.ndarray) -> np.ndarray:
     return _blend_platoon_sides(rv_r, rv_l)
+
+
+def _shap_col(feature: str) -> str:
+    return f"Shap_{feature}_StuffPts"
+
+
+def _mean_feature_col(feature: str) -> str:
+    return f"Mean_{feature}"
+
+
+def _predict_pitchsim_stuff_shap_points(
+    models: Dict[str, object],
+    X: pd.DataFrame,
+    feature_cols: Sequence[str],
+) -> Tuple[pd.DataFrame, np.ndarray]:
+    """Return per-feature XGBoost SHAP contributions on the Stuff+ scale.
+
+    XGBoost returns contributions in the model target units (run value per
+    pitch). PitchSim display Stuff+ is ``100 - 1000 * RV`` here, so multiplying
+    by -1000 converts each feature contribution into Stuff+ points.
+    """
+    if X is None or len(X) == 0:
+        return pd.DataFrame(index=getattr(X, "index", None)), np.array([], dtype=float)
+    model_r = models.get("StuffRV_vsR")
+    model_l = models.get("StuffRV_vsL")
+    if model_r is None or model_l is None:
+        return pd.DataFrame(index=X.index), np.full(len(X), np.nan, dtype=float)
+
+    try:
+        import xgboost as xgb
+
+        x_mat = X[list(feature_cols)].astype(np.float32)
+        dmat = xgb.DMatrix(x_mat, feature_names=list(feature_cols))
+        contrib_r = model_r.get_booster().predict(dmat, pred_contribs=True)
+        contrib_l = model_l.get_booster().predict(dmat, pred_contribs=True)
+    except Exception:
+        return pd.DataFrame(index=X.index), np.full(len(X), np.nan, dtype=float)
+
+    if contrib_r is None or contrib_l is None or contrib_r.shape != contrib_l.shape:
+        return pd.DataFrame(index=X.index), np.full(len(X), np.nan, dtype=float)
+    if contrib_r.shape[1] != len(feature_cols) + 1:
+        return pd.DataFrame(index=X.index), np.full(len(X), np.nan, dtype=float)
+
+    contrib = _blend_platoon_sides(contrib_r, contrib_l)
+    points = pd.DataFrame(
+        contrib[:, :-1] * _SHAP_STUFF_SCALE,
+        columns=[_shap_col(feature) for feature in feature_cols],
+        index=X.index,
+    )
+    base_plus = _DISPLAY_STUFF_CENTER + (contrib[:, -1] * _SHAP_STUFF_SCALE)
+    return points, np.asarray(base_plus, dtype=float)
+
+
+def _format_shap_feature_value(feature: str, value: float) -> str:
+    if not np.isfinite(value):
+        return ""
+    if feature in {"speed", "speed_diff"}:
+        return f"{value * 0.681818:.1f} mph"
+    if feature in {"release_pos_x", "release_pos_x_pit", "release_pos_y", "release_pos_z"}:
+        return f"{value:.2f} ft"
+    if feature == "vert_approach_angle_adj":
+        return f"{np.degrees(value):.2f} deg"
+    return f"{value:.1f}"
+
+
+def _add_shap_summary_columns(pop: pd.DataFrame, feature_cols: Sequence[str]) -> pd.DataFrame:
+    if pop is None or pop.empty:
+        return pop
+    out = pop.copy()
+    shap_cols = [_shap_col(feature) for feature in feature_cols if _shap_col(feature) in out.columns]
+    if not shap_cols:
+        return out
+
+    if "ShapBasePlus" in out.columns:
+        out["ShapMeanPitchPlus"] = pd.to_numeric(out["ShapBasePlus"], errors="coerce").astype(float)
+    else:
+        out["ShapBasePlus"] = np.nan
+        out["ShapMeanPitchPlus"] = np.nan
+    for col in shap_cols:
+        out["ShapMeanPitchPlus"] = out["ShapMeanPitchPlus"] + pd.to_numeric(out[col], errors="coerce").fillna(0.0)
+
+    labels = {feature: _SHAP_FEATURE_LABELS.get(feature, feature) for feature in feature_cols}
+    records = []
+    for _, row in out.iterrows():
+        pairs = []
+        for feature in feature_cols:
+            shap_name = _shap_col(feature)
+            if shap_name not in out.columns:
+                continue
+            pts = pd.to_numeric(pd.Series([row.get(shap_name)]), errors="coerce").iloc[0]
+            if not np.isfinite(pts):
+                continue
+            val = pd.to_numeric(pd.Series([row.get(_mean_feature_col(feature))]), errors="coerce").iloc[0]
+            pairs.append((feature, float(pts), float(val) if np.isfinite(val) else np.nan))
+        pos = sorted([item for item in pairs if item[1] > 0], key=lambda item: item[1], reverse=True)
+        neg = sorted([item for item in pairs if item[1] < 0], key=lambda item: item[1])
+        rec = {}
+        for rank, items, prefix in ((4, pos, "TopPositive"), (4, neg, "TopNegative")):
+            for idx in range(rank):
+                num = idx + 1
+                if idx < len(items):
+                    feature, pts, val = items[idx]
+                    rec[f"{prefix}Feature{num}"] = feature
+                    rec[f"{prefix}Label{num}"] = labels.get(feature, feature)
+                    rec[f"{prefix}StuffPts{num}"] = pts
+                    rec[f"{prefix}Value{num}"] = val
+                    rec[f"{prefix}ValueText{num}"] = _format_shap_feature_value(feature, val)
+                else:
+                    rec[f"{prefix}Feature{num}"] = ""
+                    rec[f"{prefix}Label{num}"] = ""
+                    rec[f"{prefix}StuffPts{num}"] = np.nan
+                    rec[f"{prefix}Value{num}"] = np.nan
+                    rec[f"{prefix}ValueText{num}"] = ""
+        records.append(rec)
+    if records:
+        summary = pd.DataFrame(records, index=out.index)
+        out = pd.concat([out, summary], axis=1)
+    return out
 
 
 def _pitchsim_plus_from_rv100(rv100: np.ndarray | pd.Series) -> np.ndarray:
@@ -2424,25 +2675,42 @@ def build_pitchsim_display_population(
         X = df.loc[valid, list(feature_cols)].astype(np.float32)
         rv_r = models["StuffRV_vsR"].predict(X)
         rv_l = models["StuffRV_vsL"].predict(X)
+        shap_points, shap_base_plus = _predict_pitchsim_stuff_shap_points(models, X, feature_cols)
         display_rv100 = _blend_display_stuff_rv(rv_r, rv_l) * 100.0
         display_rv100_vs_r = np.asarray(rv_r, dtype=float) * 100.0
         display_rv100_vs_l = np.asarray(rv_l, dtype=float) * 100.0
         group_cols = _display_group_columns(df)
+        assign_cols = {
+            "PitchCount": 1,
+            "StuffRV100": np.asarray(display_rv100, dtype=float),
+            "StuffRV100_vsR": display_rv100_vs_r,
+            "StuffRV100_vsL": display_rv100_vs_l,
+            "ShapBasePlus": shap_base_plus,
+        }
+        for feature in feature_cols:
+            shap_name = _shap_col(feature)
+            mean_name = _mean_feature_col(feature)
+            assign_cols[shap_name] = (
+                shap_points[shap_name].to_numpy(dtype=float)
+                if shap_name in shap_points.columns
+                else np.full(len(X), np.nan, dtype=float)
+            )
+            assign_cols[mean_name] = X[feature].to_numpy(dtype=float)
+        agg_spec = {
+            "PitchCount": ("PitchCount", "sum"),
+            "StuffRV100Sum": ("StuffRV100", "sum"),
+            "StuffRV100_vsRSum": ("StuffRV100_vsR", "sum"),
+            "StuffRV100_vsLSum": ("StuffRV100_vsL", "sum"),
+            "ShapBasePlusSum": ("ShapBasePlus", "sum"),
+        }
+        for feature in feature_cols:
+            agg_spec[f"{_shap_col(feature)}Sum"] = (_shap_col(feature), "sum")
+            agg_spec[f"{_mean_feature_col(feature)}Sum"] = (_mean_feature_col(feature), "sum")
         part = (
             df.loc[valid, group_cols]
-            .assign(
-                PitchCount=1,
-                StuffRV100=np.asarray(display_rv100, dtype=float),
-                StuffRV100_vsR=display_rv100_vs_r,
-                StuffRV100_vsL=display_rv100_vs_l,
-            )
-            .groupby(group_cols, observed=False)
-            .agg(
-                PitchCount=("PitchCount", "sum"),
-                StuffRV100Sum=("StuffRV100", "sum"),
-                StuffRV100_vsRSum=("StuffRV100_vsR", "sum"),
-                StuffRV100_vsLSum=("StuffRV100_vsL", "sum"),
-            )
+            .assign(**assign_cols)
+            .groupby(group_cols, observed=True)
+            .agg(**agg_spec)
             .reset_index()
         )
         parts.append(part)
@@ -2452,12 +2720,25 @@ def build_pitchsim_display_population(
         return pd.DataFrame()
 
     pop = pd.concat(parts, ignore_index=True)
-    sum_cols = {"StuffRV100Sum", "StuffRV100_vsRSum", "StuffRV100_vsLSum"}
+    shap_sum_cols = {f"{_shap_col(feature)}Sum" for feature in feature_cols}
+    mean_feature_sum_cols = {f"{_mean_feature_col(feature)}Sum" for feature in feature_cols}
+    sum_cols = {
+        "StuffRV100Sum",
+        "StuffRV100_vsRSum",
+        "StuffRV100_vsLSum",
+        "ShapBasePlusSum",
+        *shap_sum_cols,
+        *mean_feature_sum_cols,
+    }
     group_cols = [c for c in pop.columns if c not in {"PitchCount", *sum_cols}]
-    pop = pop.groupby(group_cols, observed=False).sum().reset_index()
+    pop = pop.groupby(group_cols, observed=True).sum().reset_index()
     pop["StuffRV100"] = pop["StuffRV100Sum"] / pop["PitchCount"]
     pop["StuffRV100_vsR"] = pop["StuffRV100_vsRSum"] / pop["PitchCount"]
     pop["StuffRV100_vsL"] = pop["StuffRV100_vsLSum"] / pop["PitchCount"]
+    pop["ShapBasePlus"] = pop["ShapBasePlusSum"] / pop["PitchCount"]
+    for feature in feature_cols:
+        pop[_shap_col(feature)] = pop[f"{_shap_col(feature)}Sum"] / pop["PitchCount"]
+        pop[_mean_feature_col(feature)] = pop[f"{_mean_feature_col(feature)}Sum"] / pop["PitchCount"]
     pop = pop.drop(columns=list(sum_cols))
 
     pop = _add_population_display_score(pop, "StuffRV100", "StuffPlus")
@@ -2466,6 +2747,7 @@ def build_pitchsim_display_population(
     pop["DisplayStuffPlus"] = pop["StuffPlus"]
     pop["DisplayStuffPlus_vsR"] = pop["StuffPlus_vsR"]
     pop["DisplayStuffPlus_vsL"] = pop["StuffPlus_vsL"]
+    pop = _add_shap_summary_columns(pop, feature_cols)
     return pop
 
 
@@ -2486,8 +2768,7 @@ def _compute_location_rv_stats(
 
     # Need valid distill features for StuffRV + event features for FullRV
     required_cols = list(_DISTILL_FEATURES) + [
-        "PlateLocSide", "PlateLocHeight", "Balls", "Strikes",
-        "TaggedPitchType", "Pitcher",
+        "plate_x", "plate_z", "balls", "strikes", "TaggedPitchType", "Pitcher",
     ]
     # Also need all event base features
     for col in _EVENT_BASE_FEATURES:
@@ -2495,7 +2776,7 @@ def _compute_location_rv_stats(
             required_cols.append(col)
 
     valid = df[list(_DISTILL_FEATURES)].notna().all(axis=1) & df["TaggedPitchType"].notna()
-    for col in ["PlateLocSide", "PlateLocHeight", "Balls", "Strikes", "Pitcher"]:
+    for col in ["plate_x", "plate_z", "balls", "strikes", "Pitcher"]:
         valid = valid & df[col].notna()
     for col in _EVENT_BASE_FEATURES:
         if col in df.columns:
@@ -2512,15 +2793,12 @@ def _compute_location_rv_stats(
     sub["StuffRV"] = _blend_platoon_sides(stuff_rv_r, stuff_rv_l)
 
     # 2) Compute FullRV at actual location+count for each batter side
-    balls = sub["Balls"].astype(int).clip(0, 3).to_numpy()
-    strikes = sub["Strikes"].astype(int).clip(0, 2).to_numpy()
+    balls = sub["balls"].astype(int).clip(0, 3).to_numpy()
+    strikes = sub["strikes"].astype(int).clip(0, 2).to_numpy()
 
     full_rv_sides = []
-    for side_label, side_enc in [("R", 0.0), ("L", 1.0)]:
-        X_event = sub[list(_EVENT_BASE_FEATURES) + ["PlateLocSide", "PlateLocHeight"]].copy()
-        X_event["BatterSide_enc"] = side_enc
-        X_event["Balls"] = balls.astype(float)
-        X_event["Strikes"] = strikes.astype(float)
+    for side_label in ["R", "L"]:
+        X_event = _build_actual_event_matrix(sub, stand=side_label)
         X_event = X_event[event_features].astype(np.float32)
 
         terminal_probs = _predict_terminal_probabilities(X_event, event_models)
@@ -2838,6 +3116,9 @@ def compute_pitchsim_stuff_plus(data: pd.DataFrame, artifact: dict) -> pd.DataFr
     for col in feature_cols:
         if col not in df.columns:
             df[col] = np.nan
+    shap_extra_cols: List[str] = ["ShapBasePlus"]
+    for feature in feature_cols:
+        shap_extra_cols.extend([_shap_col(feature), _mean_feature_col(feature)])
 
     valid = df[feature_cols].notna().all(axis=1) & df["TaggedPitchType"].notna()
     if not valid.any():
@@ -2854,6 +3135,7 @@ def compute_pitchsim_stuff_plus(data: pd.DataFrame, artifact: dict) -> pd.DataFr
             "StuffPlus",
             "StuffPlus_vsR",
             "StuffPlus_vsL",
+            *shap_extra_cols,
         ):
             df[col] = np.nan
         df["StuffFIPPlus"] = np.nan
@@ -2874,6 +3156,7 @@ def compute_pitchsim_stuff_plus(data: pd.DataFrame, artifact: dict) -> pd.DataFr
                 "StuffPlus_vsR",
                 "StuffPlus_vsL",
                 "StuffFIPPlus",
+                *shap_extra_cols,
             ),
         )
 
@@ -2890,6 +3173,7 @@ def compute_pitchsim_stuff_plus(data: pd.DataFrame, artifact: dict) -> pd.DataFr
     hr_l = models["StuffHomeRun_vsL"].predict(X)
     damage_r = models["StuffDamage_vsR"].predict(X)
     damage_l = models["StuffDamage_vsL"].predict(X)
+    shap_points, shap_base_plus = _predict_pitchsim_stuff_shap_points(models, X, feature_cols)
 
     df["StuffRV_vsR"] = np.nan
     df["StuffRV_vsL"] = np.nan
@@ -2910,6 +3194,7 @@ def compute_pitchsim_stuff_plus(data: pd.DataFrame, artifact: dict) -> pd.DataFr
     df["StuffDamage_vsL"] = np.nan
     df["StuffDamage"] = np.nan
     df["StuffFIPRV"] = np.nan
+    df["ShapBasePlus"] = np.nan
     df.loc[valid, "StuffRV_vsR"] = rv_r
     df.loc[valid, "StuffRV_vsL"] = rv_l
     df.loc[valid, "StuffRV"] = _blend_platoon_sides(rv_r, rv_l)
@@ -2928,6 +3213,15 @@ def compute_pitchsim_stuff_plus(data: pd.DataFrame, artifact: dict) -> pd.DataFr
     df.loc[valid, "StuffDamage_vsR"] = damage_r
     df.loc[valid, "StuffDamage_vsL"] = damage_l
     df.loc[valid, "StuffDamage"] = _blend_platoon_sides(damage_r, damage_l)
+    df.loc[valid, "ShapBasePlus"] = shap_base_plus
+    for feature in feature_cols:
+        shap_name = _shap_col(feature)
+        mean_name = _mean_feature_col(feature)
+        df[shap_name] = np.nan
+        df[mean_name] = np.nan
+        if shap_name in shap_points.columns:
+            df.loc[valid, shap_name] = shap_points[shap_name].to_numpy(dtype=float)
+        df.loc[valid, mean_name] = X[feature].to_numpy(dtype=float)
     df.loc[valid, "StuffFIPRV"] = _compose_fip_raw(
         whiff=df.loc[valid, "StuffWhiff"].to_numpy(dtype=float),
         called_strike=df.loc[valid, "StuffCalledStrike"].to_numpy(dtype=float),
@@ -3052,6 +3346,7 @@ def compute_pitchsim_stuff_plus(data: pd.DataFrame, artifact: dict) -> pd.DataFr
             "StuffPlus_vsR",
             "StuffPlus_vsL",
             "StuffFIPPlus",
+            *shap_extra_cols,
         ),
     )
 
@@ -3095,7 +3390,7 @@ def compute_pitchsim_command_plus(data: pd.DataFrame, artifact: dict) -> pd.Data
 
     # Require distill features + event base features + location + count
     valid = df[feature_cols].notna().all(axis=1) & df["TaggedPitchType"].notna()
-    for col in ["PlateLocSide", "PlateLocHeight", "Balls", "Strikes"]:
+    for col in ["plate_x", "plate_z", "balls", "strikes"]:
         valid = valid & df[col].notna()
     for col in _EVENT_BASE_FEATURES:
         if col in df.columns:
@@ -3115,15 +3410,12 @@ def compute_pitchsim_command_plus(data: pd.DataFrame, artifact: dict) -> pd.Data
     )
 
     # 2) FullRV at actual location+count for each batter side
-    balls = sub["Balls"].astype(int).clip(0, 3).to_numpy()
-    strikes = sub["Strikes"].astype(int).clip(0, 2).to_numpy()
+    balls = sub["balls"].astype(int).clip(0, 3).to_numpy()
+    strikes = sub["strikes"].astype(int).clip(0, 2).to_numpy()
 
     full_rv_sides = []
-    for side_enc in [0.0, 1.0]:  # R, L
-        X_event = sub[list(_EVENT_BASE_FEATURES) + ["PlateLocSide", "PlateLocHeight"]].copy()
-        X_event["BatterSide_enc"] = side_enc
-        X_event["Balls"] = balls.astype(float)
-        X_event["Strikes"] = strikes.astype(float)
+    for side_label in ["R", "L"]:
+        X_event = _build_actual_event_matrix(sub, stand=side_label)
         X_event = X_event[event_features].astype(np.float32)
 
         terminal_probs = _predict_terminal_probabilities(X_event, event_models)
