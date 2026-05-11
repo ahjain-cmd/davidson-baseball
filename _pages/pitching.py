@@ -822,8 +822,10 @@ def _format_pitchsim_shap_value(feature, value):
         return ""
     if feature in {"speed", "speed_diff"}:
         return f"{value * 0.681818:.1f} mph"
-    if feature in {"release_pos_x", "release_pos_x_pit", "release_pos_y", "release_pos_z"}:
+    if feature in {"release_pos_x", "release_pos_x_pit", "release_pos_z"}:
         return f"{value:.2f} ft"
+    if feature == "release_pos_y":
+        return f"{60.5 - value:.2f} ft"
     if feature == "vert_approach_angle_adj":
         return f"{np.degrees(value):.2f} deg"
     if feature in {"lift", "lift_diff", "transverse", "transverse_pit", "transverse_pit_diff"}:
@@ -844,6 +846,148 @@ def _pitchsim_shap_label(feature, pitch_type):
     if feature == "lift" and str(pitch_type) not in _PITCHSIM_FASTBALL_TYPES:
         return "vertical break"
     return _PITCHSIM_SHAP_FEATURE_LABELS.get(feature, feature)
+
+
+@st.cache_data(show_spinner=False)
+def _pitchsim_feature_reference_stats():
+    pop = _load_pitchsim_display_population()
+    if pop is None or pop.empty or "TaggedPitchType" not in pop.columns:
+        return {}
+
+    weight_col = "PitchCount" if "PitchCount" in pop.columns else None
+    stats = {}
+    for pitch_type, sub in pop.dropna(subset=["TaggedPitchType"]).groupby("TaggedPitchType", observed=False):
+        ref = {}
+        weights = (
+            pd.to_numeric(sub[weight_col], errors="coerce").fillna(0.0).clip(lower=0.0)
+            if weight_col
+            else pd.Series(1.0, index=sub.index)
+        )
+        for feature in _PITCHSIM_SHAP_FEATURES:
+            col = _pitchsim_mean_feature_col(feature)
+            if col not in sub.columns:
+                continue
+            vals = pd.to_numeric(sub[col], errors="coerce").astype(float)
+            mask = vals.notna() & weights.notna() & (weights > 0)
+            if not mask.any():
+                continue
+            if feature in {
+                "speed_diff",
+                "lift_diff",
+                "transverse",
+                "transverse_pit",
+                "transverse_pit_diff",
+                "release_pos_x",
+                "release_pos_x_pit",
+            }:
+                vals = vals.abs()
+            ref[feature] = float(np.average(vals[mask], weights=weights[mask]))
+        if ref:
+            stats[str(pitch_type)] = ref
+    return stats
+
+
+def _pitchsim_ref_value(feature, pitch_type):
+    stats = _pitchsim_feature_reference_stats()
+    ref = stats.get(str(pitch_type), {}).get(feature)
+    return float(ref) if ref is not None and np.isfinite(ref) else np.nan
+
+
+def _is_lower_than_ref(value, ref, feature):
+    if not np.isfinite(value) or not np.isfinite(ref):
+        return None
+    return value < ref
+
+
+def _abs_less_than_ref(value, ref):
+    if not np.isfinite(value) or not np.isfinite(ref):
+        return None
+    return abs(value) < abs(ref)
+
+
+def _pitchsim_directional_driver(feature, pitch_type, pts, value):
+    positive = pts > 0
+    ref = _pitchsim_ref_value(feature, pitch_type)
+    lower = _is_lower_than_ref(value, ref, feature)
+    abs_light = _abs_less_than_ref(value, ref)
+    pt = str(pitch_type)
+
+    if feature == "vert_approach_angle_adj":
+        if positive:
+            return "flatter approach angle helps" if lower is not False else "approach angle is in a good window"
+        return "approach angle is too steep"
+
+    if feature == "speed":
+        if lower is None:
+            return "velocity helps" if positive else "velocity hurts"
+        if positive:
+            return "velocity is firm" if not lower else "softer velocity plays"
+        return "velocity is too soft" if lower else "velocity is too firm"
+
+    if feature == "speed_diff":
+        if abs_light is None:
+            return "velo gap off fastball helps" if positive else "velo gap off fastball hurts"
+        if positive:
+            return "good velo gap off fastball" if not abs_light else "smaller velo gap plays"
+        return "not enough velo gap off fastball" if abs_light else "too much velo gap off fastball"
+
+    if feature == "lift":
+        if pt in _PITCHSIM_FASTBALL_TYPES:
+            if lower is None:
+                return "ride/carry helps" if positive else "ride/carry hurts"
+            if positive:
+                return "good ride/carry" if not lower else "lower ride plays"
+            return "not enough ride/carry" if lower else "too much ride/carry"
+        if lower is None:
+            return "vertical break helps" if positive else "vertical break hurts"
+        if positive:
+            return "good depth/downward break" if lower else "vertical break shape helps"
+        return "not enough depth/downward break" if not lower else "too much depth/downward break"
+
+    if feature == "lift_diff":
+        if abs_light is None:
+            return "vertical separation off fastball helps" if positive else "vertical separation off fastball hurts"
+        if positive:
+            return "good vertical separation off fastball" if not abs_light else "smaller vertical gap plays"
+        return "not enough vertical separation off fastball" if abs_light else "too much vertical separation off fastball"
+
+    if feature in {"transverse", "transverse_pit"}:
+        if abs_light is None:
+            return "horizontal break helps" if positive else "horizontal break hurts"
+        if positive:
+            return "good horizontal break/sweep" if not abs_light else "shorter horizontal break plays"
+        return "not enough horizontal break/sweep" if abs_light else "too much horizontal break/sweep"
+
+    if feature == "transverse_pit_diff":
+        if abs_light is None:
+            return "horizontal separation off fastball helps" if positive else "horizontal separation off fastball hurts"
+        if positive:
+            return "good horizontal separation off fastball" if not abs_light else "smaller horizontal gap plays"
+        return "not enough horizontal separation off fastball" if abs_light else "too much horizontal separation off fastball"
+
+    if feature == "release_pos_y":
+        if lower is None:
+            return "extension helps" if positive else "extension hurts"
+        more_extension = lower
+        if positive:
+            return "more extension helps" if more_extension else "shorter extension plays"
+        return "not enough extension" if not more_extension else "too much extension"
+
+    if feature in {"release_pos_x", "release_pos_x_pit"}:
+        if abs_light is None:
+            return "release side helps" if positive else "release side hurts"
+        if positive:
+            return "wider release side helps" if not abs_light else "more centered release side helps"
+        return "release side is too centered" if abs_light else "release side is too wide"
+
+    if feature == "release_pos_z":
+        if lower is None:
+            return "release height helps" if positive else "release height hurts"
+        if positive:
+            return "higher release height helps" if not lower else "lower release height helps"
+        return "release height is too low" if lower else "release height is too high"
+
+    return _pitchsim_shap_label(feature, pitch_type)
 
 
 def _format_shap_driver(items):
@@ -927,7 +1071,7 @@ def _build_pitchsim_shap_rows(stuff_df, min_pitches=5, include_pitcher=False):
             value = _weighted_mean_safe(group[value_col], weights) if value_col in group.columns else np.nan
             if not np.isfinite(pts):
                 continue
-            label = _pitchsim_shap_label(feature, pitch_type)
+            label = _pitchsim_directional_driver(feature, pitch_type, float(pts), value)
             driver_pairs.append((feature, label, float(pts), _format_pitchsim_shap_value(feature, value)))
 
         positives = sorted(

@@ -2362,8 +2362,10 @@ def _format_shap_feature_value(feature: str, value: float) -> str:
         return ""
     if feature in {"speed", "speed_diff"}:
         return f"{value * 0.681818:.1f} mph"
-    if feature in {"release_pos_x", "release_pos_x_pit", "release_pos_y", "release_pos_z"}:
+    if feature in {"release_pos_x", "release_pos_x_pit", "release_pos_z"}:
         return f"{value:.2f} ft"
+    if feature == "release_pos_y":
+        return f"{60.5 - value:.2f} ft"
     if feature == "vert_approach_angle_adj":
         return f"{np.degrees(value):.2f} deg"
     if feature in {"lift", "lift_diff", "transverse", "transverse_pit", "transverse_pit_diff"}:
