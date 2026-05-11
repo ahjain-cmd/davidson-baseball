@@ -791,19 +791,21 @@ _PITCHSIM_SHAP_FEATURES = (
 )
 
 _PITCHSIM_SHAP_FEATURE_LABELS = {
-    "speed": "physics velocity",
-    "speed_diff": "velocity vs own FB",
-    "lift": "vertical lift/carry force",
-    "lift_diff": "lift separation vs FB",
-    "transverse": "horizontal/transverse movement",
-    "transverse_pit": "handed horizontal movement",
-    "transverse_pit_diff": "horizontal separation vs FB",
+    "speed": "velocity",
+    "speed_diff": "velo gap off fastball",
+    "lift": "ride/carry",
+    "lift_diff": "vertical separation off fastball",
+    "transverse": "horizontal break",
+    "transverse_pit": "arm-side/glove-side break",
+    "transverse_pit_diff": "horizontal separation off fastball",
     "release_pos_x": "release side",
-    "release_pos_x_pit": "handed release side",
-    "release_pos_y": "release distance from plate",
+    "release_pos_x_pit": "arm-slot side",
+    "release_pos_y": "extension",
     "release_pos_z": "release height",
-    "vert_approach_angle_adj": "adjusted VAA",
+    "vert_approach_angle_adj": "approach angle",
 }
+_PITCHSIM_FASTBALL_TYPES = {"Fastball", "Sinker"}
+_PITCHSIM_FASTBALL_HIDDEN_SHAP_FEATURES = {"speed_diff", "lift_diff", "transverse_pit_diff"}
 
 
 def _pitchsim_shap_col(feature):
@@ -824,6 +826,8 @@ def _format_pitchsim_shap_value(feature, value):
         return f"{value:.2f} ft"
     if feature == "vert_approach_angle_adj":
         return f"{np.degrees(value):.2f} deg"
+    if feature in {"lift", "lift_diff", "transverse", "transverse_pit", "transverse_pit_diff"}:
+        return ""
     return f"{value:.1f}"
 
 
@@ -834,6 +838,12 @@ def _weighted_mean_safe(values, weights):
     if not mask.any():
         return np.nan
     return float(np.average(vals[mask], weights=w[mask]))
+
+
+def _pitchsim_shap_label(feature, pitch_type):
+    if feature == "lift" and str(pitch_type) not in _PITCHSIM_FASTBALL_TYPES:
+        return "vertical break"
+    return _PITCHSIM_SHAP_FEATURE_LABELS.get(feature, feature)
 
 
 def _format_shap_driver(items):
@@ -896,8 +906,17 @@ def _build_pitchsim_shap_rows(stuff_df, min_pitches=5, include_pitcher=False):
         stuff_plus_vs_r = _weighted_mean_safe(group[vsr_col], weights) if vsr_col else np.nan
         stuff_plus_vs_l = _weighted_mean_safe(group[vsl_col], weights) if vsl_col else np.nan
 
+        pitch_type = str(keys[-1])
+        visible_features = [
+            feature for feature in features
+            if not (
+                pitch_type in _PITCHSIM_FASTBALL_TYPES
+                and feature in _PITCHSIM_FASTBALL_HIDDEN_SHAP_FEATURES
+            )
+        ]
+
         driver_pairs = []
-        for feature in features:
+        for feature in visible_features:
             shap_name = _pitchsim_shap_col(feature)
             value_col = (
                 _pitchsim_mean_feature_col(feature)
@@ -908,7 +927,7 @@ def _build_pitchsim_shap_rows(stuff_df, min_pitches=5, include_pitcher=False):
             value = _weighted_mean_safe(group[value_col], weights) if value_col in group.columns else np.nan
             if not np.isfinite(pts):
                 continue
-            label = _PITCHSIM_SHAP_FEATURE_LABELS.get(feature, feature)
+            label = _pitchsim_shap_label(feature, pitch_type)
             driver_pairs.append((feature, label, float(pts), _format_pitchsim_shap_value(feature, value)))
 
         positives = sorted(
@@ -922,13 +941,13 @@ def _build_pitchsim_shap_rows(stuff_df, min_pitches=5, include_pitcher=False):
         )[:3]
 
         row = {
-            "Pitch": str(keys[-1]),
+            "Pitch": pitch_type,
             "Pitches": pitches,
             "Stuff+": round(stuff_plus, 1) if np.isfinite(stuff_plus) else np.nan,
             "vs R": round(stuff_plus_vs_r, 1) if np.isfinite(stuff_plus_vs_r) else np.nan,
             "vs L": round(stuff_plus_vs_l, 1) if np.isfinite(stuff_plus_vs_l) else np.nan,
-            "Good Drivers": _format_shap_driver(positives),
-            "Bad Drivers": _format_shap_driver(negatives),
+            "Helps Stuff+": _format_shap_driver(positives),
+            "Hurts Stuff+": _format_shap_driver(negatives),
             "_SortStuff": stuff_plus,
         }
         if include_pitcher and len(keys) >= 2:
@@ -942,24 +961,27 @@ def _build_pitchsim_shap_rows(stuff_df, min_pitches=5, include_pitcher=False):
     return out.reset_index(drop=True)
 
 
-def _render_pitchsim_shap_breakdown(stuff_df, title="PitchSim SHAP Breakdown"):
+def _render_pitchsim_shap_breakdown(stuff_df, title="Why The Model Likes/Hurts Each Pitch"):
     rows = _build_pitchsim_shap_rows(stuff_df, min_pitches=5, include_pitcher=False)
     if rows.empty:
         return
     section_header(title)
-    st.caption(
-        "True XGBoost SHAP from the fitted PitchSim Stuff+ model. Positive points add to Stuff+; negative points pull it down."
-    )
+    st.caption("Plain-English Stuff+ drivers. Positive points help the pitch grade; negative points hurt it.")
     st.dataframe(rows, hide_index=True, use_container_width=True)
 
 
 def _render_population_pitchsim_shap_search():
-    pop = _fixed_stuff_percentile_population()
-    if pop is None or pop.empty:
-        return
-    if not any(_pitchsim_shap_col(feature) in pop.columns for feature in _PITCHSIM_SHAP_FEATURES):
-        return
     with st.expander("2025 D1 Pitcher-Pitch SHAP Search", expanded=False):
+        if not st.button("Load D1 pitcher-pitch search", key="pitchsim_shap_load_population"):
+            st.caption("Loads only on demand to keep pitcher pages fast.")
+            return
+        pop = _fixed_stuff_percentile_population()
+        if pop is None or pop.empty:
+            st.info("D1 pitcher-pitch SHAP population is unavailable.")
+            return
+        if not any(_pitchsim_shap_col(feature) in pop.columns for feature in _PITCHSIM_SHAP_FEATURES):
+            st.info("D1 SHAP columns are not available in the population file.")
+            return
         filtered = pop.copy()
         cols = st.columns([2, 2, 1])
         with cols[0]:
@@ -3316,7 +3338,7 @@ def _stuff_lab_page(data, pitcher, season_filter, pdf, stuff_df):
     st.markdown("---")
     _render_csv_upload(data)
     st.markdown("---")
-    _render_pitchsim_shap_breakdown(stuff_df, title="PitchSim SHAP Breakdown")
+    _render_pitchsim_shap_breakdown(stuff_df)
     st.markdown("---")
     _render_stuff_trend(stuff_df, pitcher)
 
@@ -4002,15 +4024,17 @@ def page_pitching(data):
                   f"{total_pitches} pitches  |  {pa_faced} PA faced  |  "
                   f"Seasons: {', '.join(str(int(s)) for s in sorted(season_filter))}")
 
-    # Compute Stuff+ and Command+ once for both tabs
-    stuff_df = _compute_stuff_plus(pdf)
-    cmd_df = _compute_command_plus(pdf, data)
-    pitch_lab_pdf = _recalculate_pitchlab_vaa(pdf)
-    pitch_lab_stuff_df = _compute_stuff_plus(pitch_lab_pdf)
+    view = st.radio(
+        "Pitching view",
+        ["Pitcher Card", "Pitch Lab"],
+        horizontal=True,
+        label_visibility="collapsed",
+        key=f"pitching_view_{pitcher}_{'_'.join(str(int(s)) for s in sorted(season_filter))}",
+    )
 
-    tab_card, tab_lab = st.tabs(["Pitcher Card", "Pitch Lab"])
-    # tab_card, tab_lab, tab_stuff_lab = st.tabs(["Pitcher Card", "Pitch Lab", "Stuff+ Lab"])
-    with tab_card:
+    if view == "Pitcher Card":
+        stuff_df = _compute_stuff_plus(pdf)
+        cmd_df = _compute_command_plus(pdf, data)
         _pitcher_card_content(
             data,
             pitcher,
@@ -4023,7 +4047,9 @@ def page_pitching(data):
             all_pitcher_stats,
             cmd_df=cmd_df,
         )
-    with tab_lab:
+    else:
+        pitch_lab_pdf = _recalculate_pitchlab_vaa(pdf)
+        pitch_lab_stuff_df = _compute_stuff_plus(pitch_lab_pdf)
         _pitch_lab_page(
             data,
             pitcher,
@@ -4032,7 +4058,7 @@ def page_pitching(data):
             pitch_lab_stuff_df,
             pr,
             all_pitcher_stats,
-            cmd_df=cmd_df,
+            cmd_df=None,
         )
     # with tab_stuff_lab:
     #     _stuff_lab_page(data, pitcher, season_filter, pdf, stuff_df)

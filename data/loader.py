@@ -49,6 +49,10 @@ def get_duckdb_con():
             {_bname} AS Batter,
             CASE
                 WHEN TaggedPitchType IN ('Undefined','Other','Knuckleball') THEN NULL
+                WHEN {_pname} = 'Perkins, Wilson'
+                     AND EXTRACT(year FROM Date) = 2026
+                     AND TaggedPitchType = 'Slider'
+                     AND RelSpeed >= 82.0 THEN 'Cutter'
                 WHEN TaggedPitchType = 'FourSeamFastBall' THEN 'Fastball'
                 WHEN TaggedPitchType IN ('OneSeamFastBall','TwoSeamFastBall') THEN 'Sinker'
                 WHEN TaggedPitchType = 'ChangeUp' THEN 'Changeup'
@@ -180,6 +184,8 @@ def load_davidson_data():
                 data[col] = _normalize_hand(data[col])
         data = normalize_pitch_types(data)
 
+    if not data.empty:
+        data = normalize_pitch_types(data)
     if "Date" in data.columns:
         data["Date"] = pd.to_datetime(data["Date"], errors="coerce")
     if "Season" in data.columns:

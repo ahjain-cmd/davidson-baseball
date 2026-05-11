@@ -956,7 +956,35 @@ def normalize_pitch_types(df):
     df = df.copy()
     df["TaggedPitchType"] = df["TaggedPitchType"].replace(PITCH_TYPE_MAP)
     df.loc[df["TaggedPitchType"].isin(PITCH_TYPES_TO_DROP), "TaggedPitchType"] = np.nan
+    df = apply_pitch_type_overrides(df)
     return df
+
+
+def apply_pitch_type_overrides(df):
+    """Apply manual pitch-tag corrections that TrackMan/source files missed."""
+    if df is None or df.empty or "TaggedPitchType" not in df.columns:
+        return df
+    required = {"Pitcher", "RelSpeed"}
+    if not required.issubset(df.columns):
+        return df
+    out = df.copy()
+    pitcher = out["Pitcher"].astype(str).str.strip()
+    if "Season" in out.columns:
+        season = pd.to_numeric(out["Season"], errors="coerce")
+    elif "Date" in out.columns:
+        season = pd.to_datetime(out["Date"], errors="coerce").dt.year
+    else:
+        season = pd.Series(np.nan, index=out.index, dtype="float64")
+    velo = pd.to_numeric(out["RelSpeed"], errors="coerce")
+    perkins_cutter = (
+        pitcher.eq("Perkins, Wilson")
+        & season.eq(2026)
+        & out["TaggedPitchType"].astype(str).eq("Slider")
+        & (velo >= 82.0)
+    )
+    if perkins_cutter.any():
+        out.loc[perkins_cutter, "TaggedPitchType"] = "Cutter"
+    return out
 
 
 def filter_minor_pitches(df, min_pct=5.0):

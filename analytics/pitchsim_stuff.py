@@ -235,19 +235,21 @@ _DISTILL_FEATURES = [
 
 _SHAP_STUFF_SCALE = -1000.0
 _SHAP_FEATURE_LABELS = {
-    "speed": "physics velocity",
-    "speed_diff": "velocity vs own FB",
-    "lift": "vertical lift/carry force",
-    "lift_diff": "lift separation vs FB",
-    "transverse": "horizontal/transverse movement",
-    "transverse_pit": "handed horizontal movement",
-    "transverse_pit_diff": "horizontal separation vs FB",
+    "speed": "velocity",
+    "speed_diff": "velo gap off fastball",
+    "lift": "ride/carry",
+    "lift_diff": "vertical separation off fastball",
+    "transverse": "horizontal break",
+    "transverse_pit": "arm-side/glove-side break",
+    "transverse_pit_diff": "horizontal separation off fastball",
     "release_pos_x": "release side",
-    "release_pos_x_pit": "handed release side",
-    "release_pos_y": "release distance from plate",
+    "release_pos_x_pit": "arm-slot side",
+    "release_pos_y": "extension",
     "release_pos_z": "release height",
-    "vert_approach_angle_adj": "adjusted VAA",
+    "vert_approach_angle_adj": "approach angle",
 }
+_SHAP_FASTBALL_TYPES = {"Fastball", "Sinker"}
+_SHAP_FASTBALL_HIDDEN_FEATURES = {"speed_diff", "lift_diff", "transverse_pit_diff"}
 
 _BASIC_ARTIFACT_KEYS = (
     "features",
@@ -2364,7 +2366,15 @@ def _format_shap_feature_value(feature: str, value: float) -> str:
         return f"{value:.2f} ft"
     if feature == "vert_approach_angle_adj":
         return f"{np.degrees(value):.2f} deg"
+    if feature in {"lift", "lift_diff", "transverse", "transverse_pit", "transverse_pit_diff"}:
+        return ""
     return f"{value:.1f}"
+
+
+def _shap_feature_label(feature: str, pitch_type: object = None) -> str:
+    if feature == "lift" and str(pitch_type) not in _SHAP_FASTBALL_TYPES:
+        return "vertical break"
+    return _SHAP_FEATURE_LABELS.get(feature, feature)
 
 
 def _add_shap_summary_columns(pop: pd.DataFrame, feature_cols: Sequence[str]) -> pd.DataFrame:
@@ -2383,11 +2393,16 @@ def _add_shap_summary_columns(pop: pd.DataFrame, feature_cols: Sequence[str]) ->
     for col in shap_cols:
         out["ShapMeanPitchPlus"] = out["ShapMeanPitchPlus"] + pd.to_numeric(out[col], errors="coerce").fillna(0.0)
 
-    labels = {feature: _SHAP_FEATURE_LABELS.get(feature, feature) for feature in feature_cols}
     records = []
     for _, row in out.iterrows():
+        pitch_type = row.get("TaggedPitchType", "")
         pairs = []
         for feature in feature_cols:
+            if (
+                str(pitch_type) in _SHAP_FASTBALL_TYPES
+                and feature in _SHAP_FASTBALL_HIDDEN_FEATURES
+            ):
+                continue
             shap_name = _shap_col(feature)
             if shap_name not in out.columns:
                 continue
@@ -2405,7 +2420,7 @@ def _add_shap_summary_columns(pop: pd.DataFrame, feature_cols: Sequence[str]) ->
                 if idx < len(items):
                     feature, pts, val = items[idx]
                     rec[f"{prefix}Feature{num}"] = feature
-                    rec[f"{prefix}Label{num}"] = labels.get(feature, feature)
+                    rec[f"{prefix}Label{num}"] = _shap_feature_label(feature, pitch_type)
                     rec[f"{prefix}StuffPts{num}"] = pts
                     rec[f"{prefix}Value{num}"] = val
                     rec[f"{prefix}ValueText{num}"] = _format_shap_feature_value(feature, val)
